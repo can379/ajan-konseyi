@@ -86,8 +86,14 @@ export class AntigravityAgent extends BaseAgent {
 
     const result = await this.spawnCollect(this.bin, args, cwd, timeoutMs, onLine, opts.sessionKey);
     if (result.timedOut) throw new Error("Antigravity çağrısı zaman aşımına uğradı");
-    if (result.code !== 0 || resultEvent?.status === "ERROR") {
-      throw new Error(`Antigravity hata ile çıktı (exit ${result.code}): ${(result.stderr || result.stdout).slice(0, 600)}`);
+    // agy bazı araç turlarında kullanılabilir agent_response ürettikten sonra
+    // sonuç olayını ERROR olarak işaretleyebiliyor ve yine de exit 0 dönüyor.
+    // Kullanıcıya ulaşabilecek gerçek bir yanıt varsa bunu kaybetme; yalnız
+    // yanıtsız/işletim sistemi hatalarını başarısız say.
+    if (result.code !== 0 || (resultEvent?.status === "ERROR" && !finalText.trim())) {
+      const detail = resultEvent?.error || resultEvent?.message || resultEvent?.status_message ||
+        result.stderr || result.stdout.slice(-1200);
+      throw new Error(`Antigravity hata ile çıktı (exit ${result.code}): ${String(detail).slice(0, 900)}`);
     }
     if (!finalText.trim()) throw new Error("Antigravity yanıtı boş döndü");
     this._cliReady = true;
@@ -99,7 +105,14 @@ export class AntigravityAgent extends BaseAgent {
       costUsd: 0,
     } : null;
     if (usage) (opts.onUsage || this.onUsage)?.(usage);
-    return { ok: true, text: finalText.trim(), raw: { conversation_id: this.getSession(opts), usage } };
+    return {
+      ok: true,
+      text: finalText.trim(),
+      raw: {
+        conversation_id: this.getSession(opts), usage,
+        warning: resultEvent?.status === "ERROR" ? "Araç turu uyarıyla tamamlandı" : null,
+      },
+    };
   }
 
   spawnCollect(bin, args, cwd, timeoutMs, onLine, sessionKey) {

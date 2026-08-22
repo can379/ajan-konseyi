@@ -188,18 +188,22 @@ function renderLive() {
   const busyAgents = Object.keys(liveStreams).filter((a) => state.agents[a]?.status === "busy");
   const ws = $("workspace");
   const stick = ws.scrollTop + ws.clientHeight >= ws.scrollHeight - 150;
-  const lastUser=[...(run.messages||[])].reverse().find((m)=>m.from==="kullanici")?.content || run.request || "";
+  const recentUserMessages=(run.messages||[]).filter((m)=>m.from==="kullanici").slice(-4);
+  const lastUser=recentUserMessages.at(-1)?.content || run.request || "";
+  const recentUserText=recentUserMessages.map((m)=>m.content||"").join("\n");
   const previousGeneratedImage=(run.messages||[]).some((m)=>(m.attachments||[]).some((a)=>a.kind==="image"&&a.generated));
-  const imageGeneration=/(?:görsel|fotoğraf|resim|image|illustration|poster|logo|ikon).{0,80}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,80}(?:görsel|fotoğraf|resim|image)/i.test(lastUser) ||
-    (previousGeneratedImage&&/(?:gerçekçi|fotogerçekçi|fotoğraf gibi|daha doğal|yeniden|tekrar|düzelt|değiştir|benzer|bunun neresi)/i.test(lastUser));
+  const imageGeneration=Object.values(liveStreams).some((s)=>/görsel (?:üretiyor|hazırlanıyor)/i.test(s.label||"")) ||
+    /(?:görsel|fotoğraf|resim|image|illustration|poster|logo|ikon).{0,100}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,100}(?:görsel|fotoğraf|resim|image)/i.test(recentUserText) ||
+    (previousGeneratedImage&&/(?:gerçekçi|fotogerçekçi|fotoğraf gibi|daha doğal|yeniden|tekrar|düzelt|değiştir|benzer|bunun neresi|antigravit)/i.test(lastUser));
+  const referenceImage=[...(run.messages||[])].reverse().flatMap((m)=>m.attachments||[]).find((a)=>a.kind==="image")?.url || "";
   $("live").innerHTML = busyAgents.map((a) => {
     const s = liveStreams[a];
     const meta = metaFor(a);
     if(imageGeneration) return `<div class="msg live-msg image-live from-${esc(meta.cls)}">
       <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>
       <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span></div>
-      <div class="generation-preview" aria-label="Görsel oluşturuluyor"><div class="generation-clouds"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
-      <div class="generation-status"><span>Kompozisyon hazırlanıyor</span><div><i></i></div><small>Görsel hazır olduğunda burada netleşecek</small></div></div>
+      <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
+      <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
     </div>`;
     return `<div class="msg live-msg from-${esc(meta.cls)}">
       <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>

@@ -67,14 +67,34 @@ export class Orchestrator {
 
   // Antigravity ajanı şu anda fiilen izleme yapıyor mu? (taze kalp atışı)
   antigravitySleeping() {
-    return !this.providers.antigravity.isFresh?.(2 * 60 * 1000);
+    // Native agy CLI kalıcı bir GUI/daemon kalp atışına ihtiyaç duymaz; ilk
+    // görevde başlatılır. Henüz çağrılmamış olması "uyuyor" anlamına gelmez.
+    return false;
   }
 
   memberListText(list) {
     return list.map((m) =>
-      `- ${m.id} | ${m.name} | ${m.provider} | rol=${m.role}${m.model ? ` | model=${m.model}` : ""}` +
-      (m.provider === "antigravity" && this.antigravitySleeping() ? " | (şu an uyuyor, yanıtı gecikebilir — zorunlu değilse seçme)" : "")
+      `- ${m.id} | ${m.name} | ${m.provider} | rol=${m.role}${m.model ? ` | model=${m.model}` : ""}`
     ).join("\n");
+  }
+
+  explicitlyRequestedMember(text, list = this.availableMembers()) {
+    const value = String(text || "");
+    for (const member of list) {
+      if (member.provider === "antigravity") {
+        const direct = /@?antigravit(?:y|iy)\b|\bantigravit(?:y|iy)\b.{0,32}\b(?:yapsın|yanıtlasın|devam etsin|çalışsın|üretsin|incelesin)\b/i;
+        const denied = /\bantigravit(?:y|iy)\s+(?:değil|olmasın)\b/i;
+        if (direct.test(value) && !denied.test(value)) return member;
+      }
+      const labels = [member.name, member.provider].filter(Boolean)
+        .map((label) => String(label).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+      for (const label of labels) {
+        const direct = new RegExp(`@${label}\\b|\\b${label}\\b.{0,32}\\b(?:yapsın|yanıtlasın|devam etsin|çalışsın|üretsin|incelesin)\\b|\\b(?:bunu|işi|görevi)\\s+${label}\\b`, "i");
+        const denied = new RegExp(`\\b${label}\\s+(?:değil|olmasın)\\b`, "i");
+        if (direct.test(value) && !denied.test(value)) return member;
+      }
+    }
+    return null;
   }
 
   sessionKeyFor(run, member) {
@@ -402,8 +422,11 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       const avail = this.availableMembers();
       if (!avail.length) throw new Error("Ulaşılabilir üye yok (kenar çubuğundan üyeleri kontrol edin)");
 
+      const requestedMember = this.explicitlyRequestedMember(text, avail);
       let route;
-      if (mode !== "auto") {
+      if (requestedMember) {
+        route = { approach: "quick", member_id: requestedMember.id, explicit: true };
+      } else if (mode !== "auto") {
         route = { approach: "council", mode };
       } else {
         route = normalizeRoute(await this.coordinator.routeTurn(run, this.memberListText(avail), ctx), avail.map((m) => m.id));
@@ -417,18 +440,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       }
       if (route.approach === "quick") {
         let member = avail.find((m) => m.id === route.member_id) || avail[0];
-        // Antigravity uyuyorsa sohbet bekletilmez: yanıt başka üyeden gelir
-        if (member.provider === "antigravity" && this.antigravitySleeping()) {
-          const alt = avail.find((m) => m.provider !== "antigravity");
-          if (alt) {
-            S.addMessage(run, {
-              from: "sistem", kind: "info",
-              content: `${member.name} (Antigravity) şu an uyuyor; yanıtı ${alt.name} veriyor. Antigravity'yi uyandırmak için uygulamasında ajana "inbox'u kontrol et" deyin.`,
-            });
-            member = alt;
-          }
-        }
-        await this.quickReply(run, member, text, attachments);
+        await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit });
       } else {
         run.mode = ["discussion", "split", "code"].includes(route.mode) ? route.mode : "discussion";
         run.tasks = [];
@@ -447,7 +459,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     }
   }
 
-  async quickReply(run, member, text, attachments) {
+  async quickReply(run, member, text, attachments, { allowFallback = true } = {}) {
     const S = this.store;
     S.setPhase(run, "answering");
     const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
@@ -461,8 +473,9 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
         (run.projectDir ? ` Bağlı proje: ${run.projectDir}` : "") +
         (history ? `\n\nSohbet geçmişi:\n${history}` : "") + "\n\n--- KULLANICININ MESAJI ---\n";
     };
+    const generatingImage = this.isImageGenerationRequest(text) || this.isImageRevisionRequest(run, text);
     let res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
-      label: "yanıtlıyor",
+      label: generatingImage ? "görsel üretiyor" : "yanıtlıyor",
       images,
       media: attachments,
       cwd: run.projectDir || undefined,
@@ -471,7 +484,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       shouldStop: () => run.stopRequested,
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
-    if (!res.ok && !run.stopRequested) {
+    if (!res.ok && !run.stopRequested && allowFallback) {
       const alt = this.availableMembers().find((m) => m.id !== member.id && m.provider !== "antigravity");
       if (alt) {
         S.addMessage(run, { from: "sistem", kind: "info", content: `${member.name} yanıt veremedi (${truncate(res.error, 100)}); ${alt.name} devralıyor.` });
