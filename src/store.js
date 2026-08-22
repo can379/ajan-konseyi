@@ -106,7 +106,9 @@ export class Store extends EventEmitter {
 
   saveRun(run) {
     const file = path.join(this.runsDir, run.id, "state.json");
-    fs.writeFileSync(file, JSON.stringify(run, null, 2));
+    const temp = file + ".tmp";
+    fs.writeFileSync(temp, JSON.stringify(run, null, 2));
+    fs.renameSync(temp, file);
   }
 
   updateRun(run, patch = {}) {
@@ -122,7 +124,7 @@ export class Store extends EventEmitter {
   }
 
   // ---- Mesajlar (ortak konuşma alanı) ----
-  addMessage(run, { from, fromLabel = null, provider = null, kind = "message", taskId = null, content }) {
+  addMessage(run, { from, fromLabel = null, provider = null, kind = "message", taskId = null, content, attachments = [] }) {
     const msg = {
       id: uid("msg-"),
       ts: now(),
@@ -132,6 +134,8 @@ export class Store extends EventEmitter {
       kind,               // message | task | result | review | debate | vote | decision | error | info
       taskId,
       content: truncate(String(content ?? ""), 16000),
+      attachments: Array.isArray(attachments) ? attachments.map((a) => ({ name:a.name, url:a.url, path:a.path, mime:a.mime, kind:a.kind, size:a.size })) : [],
+      feedback: null,
     };
     run.messages.push(msg);
     const line = JSON.stringify({ runId: run.id, ...msg }) + "\n";
@@ -195,14 +199,18 @@ export class Store extends EventEmitter {
   }
 
   // ---- UI'ya giden tam durum ----
-  snapshot() {
+  snapshot(focusRunId = null) {
+    const effectiveFocus = focusRunId || Object.values(this.runs)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id || null;
     return {
       health: this.health || {},
       agents: this.agentStatus,
       approvals: Object.values(this.approvals).map((a) => this.publicApproval(a)),
-      runs: Object.fromEntries(
-        Object.entries(this.runs).map(([id, r]) => [id, r])
-      ),
+      runs: Object.fromEntries(Object.entries(this.runs).map(([id, r]) => {
+        if (id === effectiveFocus) return [id, r];
+        const { messages, diffs, report, ...summary } = r;
+        return [id, { ...summary, messages: [], diffs: [], report: report ? "" : null, hasReport: !!report }];
+      })),
     };
   }
 }

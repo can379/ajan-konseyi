@@ -109,10 +109,14 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
 Kullanılabilir üyeler (id | ad | sağlayıcı | rol | model):
 ${memberList}
 
-Sağlayıcı güçlü yönleri: claude=mimari/derin muhakeme/kod inceleme, codex=uygulama/kod yazma/test, antigravity=alternatif çözüm/araştırma.
+Sağlayıcı güçlü yönleri ve DEĞİŞMEZ görev sınırları:
+- claude=mimari, derin muhakeme, kod yazma, kod inceleme ve güvenlik.
+- codex=kod yazma, uygulama, test, hata ayıklama ve bütünleştirme.
+- antigravity=web araştırması, kaynak doğrulama, görsel üretme/düzenleme, medya analizi, tarayıcı/UX testi, içerik ve alternatif görüş. Antigravity'ye kaynak kodu yazma, kodu değiştirme, refactor veya test kodu yazma görevi VERME.
 Üyenin rolü "auto" değilse dağıtımda rolüne uy. AYNI role sahip birden çok üye varsa
 işi aralarında paylaştır — paralel çalışırlar ve birbirlerinin çıktısını çapraz incelerler.
 Farklı üyelere verilen görevler AYNI ANDA yürür; bir üyeye verilen görevler sırayla yürür.
+Planı tek seferlik bağımsız cevaplar gibi kurma: araştırma/tasarım bulgularını kullanacak kod görevlerine depends_on ekle. Böylece ajanlar önceki ajanın çıktısını okuyup onun üzerine çalışsın.
 
 Kullanıcının isteği:
 """
@@ -133,6 +137,7 @@ Alt görev istemi o üyeye doğrudan gönderilecek şekilde eksiksiz yazılmalı
   iddia üretmeden önce dosyanın GÜNCEL halini oku; her iddiaya dosya:satır kanıtı ekle."
 - Bir görev başka görevin çıktısına ihtiyaç duyuyorsa "depends_on" ile belirt.
 - Her görev için zorluk kademesi "model_tier" ver: fast|balanced|strong.
+- En az iki uygun üye varsa çözüm üreten görevlere çapraz inceleme yapılacağını varsay; review_rounds değerini risk ve kapsam büyüdükçe 1 veya 2 seç.
 
 YALNIZCA şu şemada tek bir JSON nesnesi döndür:
 {
@@ -163,7 +168,12 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
   "summary": "durumun kısa özeti (Türkçe)",
   "debate_prompt": "çelişki varsa üyelere gönderilecek tartışma sorusu; yoksa boş dize"
 }`;
-    return this.askJson(prompt, "çelişki değerlendirme", ctx);
+    const result = await this.askJson(prompt, "çelişki değerlendirme", ctx);
+    return {
+      conflict: result?.conflict === true,
+      summary: String(result?.summary || "Görüş ayrılığı bulunamadı"),
+      debate_prompt: String(result?.debate_prompt || ""),
+    };
   }
 
   // ---- Nihai sentez ----
@@ -185,7 +195,13 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
   "rationale": "bu kararın neden seçildiği (Türkçe)",
   "report_markdown": "tam rapor (markdown, Türkçe)"
 }`;
-    return this.askJson(prompt, "sentez", ctx);
+    const result = await this.askJson(prompt, "sentez", ctx);
+    const decision = String(result?.decision || "Çalışma tamamlandı");
+    return {
+      decision,
+      rationale: String(result?.rationale || "Konsey çıktıları birlikte değerlendirildi."),
+      report_markdown: String(result?.report_markdown || decision),
+    };
   }
 
   // ---- Birleştirme planı ----
@@ -210,7 +226,13 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
   "conflicts": ["çakışma açıklaması"],
   "risks": ["risk"]
 }`;
-    return this.askJson(prompt, "birleştirme planı", ctx);
+    const result = await this.askJson(prompt, "birleştirme planı", ctx);
+    return {
+      summary: String(result?.summary || "Değişiklikler integration dalında birleştirilecek."),
+      merge_order: Array.isArray(result?.merge_order) ? result.merge_order.map(String) : [],
+      conflicts: Array.isArray(result?.conflicts) ? result.conflicts.map(String) : [],
+      risks: Array.isArray(result?.risks) ? result.risks.map(String) : [],
+    };
   }
 
   // Ortak kaydın sınırlı özeti

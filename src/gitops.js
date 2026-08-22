@@ -109,3 +109,36 @@ export async function currentCommit(projectDir) {
     return "";
   }
 }
+
+export async function currentBranch(projectDir) {
+  const { stdout } = await run("git", ["-C", projectDir, "branch", "--show-current"]);
+  const branch = stdout.trim();
+  if (!branch) throw new Error("Proje detached HEAD durumunda; hedef dal belirlenemedi");
+  return branch;
+}
+
+export async function ensureClean(projectDir) {
+  const { stdout } = await run("git", ["-C", projectDir, "status", "--porcelain"]);
+  if (stdout.trim()) {
+    throw new Error("Ana çalışma ağacında commit edilmemiş değişiklikler var; güvenli yayınlama için önce bunları commit edin veya kaldırın");
+  }
+}
+
+// Test edilmiş integration dalını, kullanıcının koşu başındaki dalına uygular.
+// Bu adım ayrı kullanıcı onayından sonra çağrılır ve kirli çalışma ağacında çalışmaz.
+export async function publishIntegration(projectDir, runId, targetBranch) {
+  const integrationBranch = `ajan/${runId}/integration`;
+  await ensureClean(projectDir);
+  const current = await currentBranch(projectDir);
+  if (current !== targetBranch) {
+    throw new Error(`Proje dalı değişti (beklenen: ${targetBranch}, mevcut: ${current}); otomatik yayınlama durduruldu`);
+  }
+  try {
+    await run("git", ["-C", projectDir, "merge", "--ff-only", integrationBranch], {
+      env: { ...process.env, GIT_AUTHOR_NAME: "ajan-konseyi", GIT_AUTHOR_EMAIL: "ajan@local", GIT_COMMITTER_NAME: "ajan-konseyi", GIT_COMMITTER_EMAIL: "ajan@local" },
+    });
+    return { ok: true, branch: targetBranch };
+  } catch (err) {
+    return { ok: false, branch: targetBranch, error: String(err.message || err).slice(0, 800) };
+  }
+}

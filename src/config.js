@@ -12,7 +12,7 @@ const DEFAULTS = {
   members: [
     { id: "m-claude", name: "Claude", provider: "claude", role: "auto", model: "", effort: "", enabled: true },
     { id: "m-codex", name: "Codex", provider: "codex", role: "auto", model: "", effort: "", enabled: true },
-    { id: "m-antigravity", name: "Antigravity", provider: "antigravity", role: "auto", model: "", effort: "", enabled: true },
+    { id: "m-antigravity", name: "Antigravity", provider: "antigravity", role: "arastirmaci", model: "", effort: "", enabled: true },
   ],
   // Koordinatörün hangi yapay zekâ olacağına kullanıcı karar verir
   coordinator: { provider: "claude", model: "", effort: "" },
@@ -86,7 +86,9 @@ export class Config {
   }
 
   save() {
-    fs.writeFileSync(this.file, JSON.stringify(this.data, null, 2));
+    const temp = this.file + ".tmp";
+    fs.writeFileSync(temp, JSON.stringify(this.data, null, 2));
+    fs.renameSync(temp, this.file);
   }
 
   update(patch) {

@@ -36,8 +36,9 @@ export class CodexAgent extends BaseAgent {
 
   async _invoke(prompt, opts = {}) {
     const lastMsgFile = path.join(this.rootDir, "runs", `codex-last-${uid()}.txt`);
-    const sandbox = opts.codeMode ? "workspace-write" : "read-only";
     const model = opts.model ?? this.getModel?.();
+    // Yerleşik web araması ve otomatik güvenlik incelemesi; kullanıcının mevcut
+    // Codex MCP, eklenti ve skill yapılandırması aynen yüklenmeye devam eder.
     const common = ["--json", "--skip-git-repo-check", "-o", lastMsgFile];
     if (model) common.push("-m", model);
     const effort = opts.effort ?? this.getEffort?.();
@@ -50,13 +51,16 @@ export class CodexAgent extends BaseAgent {
 
     // Dikkat: "exec resume" alt komutu --sandbox ve -C bayraklarını KABUL ETMEZ;
     // resume'da sandbox -c config anahtarıyla verilir, çalışma dizini oturumda kalır.
-    const freshArgs = ["exec", ...common, "--sandbox", sandbox];
+    // --approve-for-me kendi workspace-write sandbox'ını kurar ve --sandbox ile
+    // birlikte kullanılamaz.
+    const freshArgs = ["--search", "exec", "--approve-for-me", ...common];
     if (opts.cwd) freshArgs.push("-C", opts.cwd);
 
     const sess = opts.fresh ? null : this.getSession(opts);
     const useResume = !!sess;
     let args = useResume
-      ? ["exec", "resume", sess, ...common, "-c", `sandbox_mode="${sandbox}"`]
+      ? ["--search", "exec", "resume", ...common,
+          "-c", 'approval_policy="never"', "-c", 'sandbox_mode="workspace-write"', sess]
       : freshArgs;
 
     // Canlı akış: olaylar geldikçe kısmi çıktıyı yayınla

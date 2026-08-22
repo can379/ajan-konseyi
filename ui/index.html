@@ -18,9 +18,13 @@
       <button id="btn-side-close" class="icon-btn" title="Kenar çubuğunu gizle">«</button>
     </div>
 
-    <button id="btn-new" class="btn-gradient">＋ Yeni Sohbet</button>
+    <nav class="side-nav" aria-label="Ana gezinme">
+      <button id="btn-new" class="side-nav-item"><span>✎</span> Yeni sohbet</button>
+      <button id="btn-open-browser" class="side-nav-item"><span>◎</span> Tarayıcı</button>
+      <button id="btn-open-terminal" class="side-nav-item"><span>›_</span> Terminal</button>
+    </nav>
 
-    <div class="side-section">
+    <div class="side-section grow project-history-section">
       <div class="side-title">Projeler</div>
       <div id="project-list"></div>
       <div class="row-btns">
@@ -29,18 +33,18 @@
       </div>
     </div>
 
-    <div class="side-section grow">
-      <div class="side-title">Geçmiş</div>
-      <div id="run-list"></div>
-    </div>
-
-    <div class="side-section">
-      <div class="side-title">Ajanlar</div>
+    <details class="side-section side-disclosure">
+      <summary class="side-title">Ajanlar ve modeller</summary>
       <div id="agent-config"></div>
-    </div>
+    </details>
+
+    <details class="side-section side-disclosure">
+      <summary class="side-title">Yetenekler ve bağlantılar</summary>
+      <div id="capability-summary" class="capability-summary">Yetenekler taranıyor…</div>
+    </details>
 
     <div class="side-foot">
-      <a href="/api/bridge/instructions" target="_blank" id="bridge-link">Antigravity köprü talimatı ↗</a>
+      <a href="/api/bridge/instructions" target="_blank" id="bridge-link">⚙ Ayarlar ve bağlantılar</a>
     </div>
   </aside>
 
@@ -54,6 +58,15 @@
       <div class="spacer"></div>
       <div id="tb-agents"></div>
       <button id="btn-stop" class="icon-btn danger" title="Aktif koşuyu durdur">⏹</button>
+      <div class="tool-menu-wrap">
+        <button id="btn-tools" class="icon-btn" title="Çalışma araçları">☷</button>
+        <div id="tool-menu" hidden>
+          <button data-open-tool="terminal"><span>›_</span><b>Terminal</b><kbd>⌃`</kbd></button>
+          <button data-open-tool="browser"><span>◎</span><b>Tarayıcı</b><kbd>⌘T</kbd></button>
+          <button data-open-details="files"><span>□</span><b>Dosyalar</b><kbd>⌘P</kbd></button>
+          <button data-open-details="tasks"><span>◉</span><b>İncele</b><kbd>⌘G</kbd></button>
+        </div>
+      </div>
       <button id="btn-details" class="icon-btn" title="Detay paneli">▤</button>
     </div>
 
@@ -66,7 +79,7 @@
       <div id="empty-state">
         <div class="hero-badge">Claude Code · Codex · Antigravity</div>
         <h1>Konsey hazır.</h1>
-        <p>Görevi verin; koordinatör böler, ajanlar paralel çalışır, birbirini denetler ve ortak sonuca varır.</p>
+        <p>Görevi verin; koordinatör böler, üyeler paralel çalışır, birbirini denetler ve ortak sonuca varır.</p>
         <div class="suggestions">
           <button class="suggestion" data-fill="Bu projedeki kod tabanını incele ve iyileştirme önerileri çıkarın.">
             <span class="s-ico">🔍</span><b>Kodu incele</b><span>Kod tabanını analiz et, iyileştirme önerileri çıkar</span>
@@ -106,17 +119,16 @@
           <label class="adv-check" title="Onay ve bitişte macOS bildirimi"><input type="checkbox" id="f-notify"> 🔔</label>
         </div>
         <div id="attach-chips" hidden></div>
+        <div id="attachment-warning" hidden></div>
+        <div id="message-queue" hidden></div>
         <div id="input-row">
           <select id="f-target" title="Hedef">
             <option value="konsey">Konsey</option>
-            <option value="claude">@ Claude</option>
-            <option value="codex">@ Codex</option>
-            <option value="antigravity">@ Antigravity</option>
           </select>
-          <button id="btn-attach" class="icon-btn" title="Görsel ekle (veya panodan yapıştır / sürükleyip bırak)">📎</button>
-          <input id="f-file" type="file" accept="image/*" multiple hidden>
+          <button id="btn-attach" class="icon-btn" title="Görsel, belge, tablo, ses, video, arşiv veya kod dosyası ekle">📎</button>
+          <input id="f-file" type="file" multiple hidden>
           <textarea id="f-request" rows="1" placeholder="Mesajınızı yazın — konsey yönlendirir… (görsel yapıştırabilirsiniz)"></textarea>
-          <button id="btn-send" class="btn-gradient send">➤</button>
+          <button id="btn-send" class="send" type="button" aria-label="Gönder" title="Gönder">↑</button>
         </div>
       </div>
     </div>
@@ -142,9 +154,45 @@
     <div id="tab-report" class="tab-body" hidden></div>
   </aside>
 
+  <!-- seçili projeye bağlı gömülü tarayıcı ve terminal -->
+  <section id="tool-panel" class="closed" aria-label="Çalışma alanı araçları">
+    <header class="tool-head">
+      <div class="tool-tabs">
+        <button data-tool-tab="terminal" class="active">›_ Terminal</button>
+        <button data-tool-tab="browser">◎ Tarayıcı</button>
+      </div>
+      <span id="tool-project">Proje seçilmedi</span>
+      <button id="btn-tool-close" class="icon-btn" title="Kapat">×</button>
+    </header>
+    <div id="tool-terminal" class="tool-body">
+      <pre id="terminal-output"><span class="terminal-muted">Seçili proje klasöründe bir komut çalıştırın.</span></pre>
+      <form id="terminal-form">
+        <span class="terminal-prompt">❯</span>
+        <input id="terminal-command" autocomplete="off" spellcheck="false" placeholder="npm test, git status, ls…">
+        <button type="submit">Çalıştır</button>
+      </form>
+    </div>
+    <div id="tool-browser" class="tool-body" hidden>
+      <form id="browser-bar">
+        <button type="button" id="browser-home" title="Uygulamayı aç">⌂</button>
+        <input id="browser-url" value="http://localhost:4780" aria-label="Adres">
+        <button type="submit">Git</button>
+        <button type="button" id="browser-external" title="Sistem tarayıcısında aç">↗</button>
+      </form>
+      <div id="browser-surface">
+        <iframe id="browser-frame" title="Gömülü tarayıcı" src="about:blank" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts allow-downloads"></iframe>
+      </div>
+      <div id="browser-notice" hidden></div>
+    </div>
+  </section>
+
   <!-- modal katmanı -->
   <div id="modal-overlay" hidden>
     <div id="modal-card"></div>
+  </div>
+  <div id="media-viewer" hidden>
+    <div class="viewer-toolbar"><span id="viewer-title"></span><button id="viewer-minus">−</button><span id="viewer-zoom">100%</span><button id="viewer-plus">＋</button><a id="viewer-download" download>İndir</a><a id="viewer-open" target="_blank">↗ Aç</a><button id="viewer-close">×</button></div>
+    <div id="viewer-stage"><img id="viewer-image" alt="Medya önizleme"><video id="viewer-video" controls hidden></video><audio id="viewer-audio" controls hidden></audio><iframe id="viewer-document" title="Dosya önizleme" sandbox hidden></iframe></div>
   </div>
 
   <!-- onay bildirimleri -->

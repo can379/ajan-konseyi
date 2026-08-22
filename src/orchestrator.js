@@ -8,8 +8,13 @@ import { AntigravityAgent } from "./agents/antigravityAgent.js";
 import { Coordinator } from "./coordinator.js";
 import { ProjectContext } from "./projectContext.js";
 import { TIER_MAP } from "./models.js";
-import { extractJson, truncate } from "./util.js";
+import { extractJson, truncate, uid } from "./util.js";
 import * as gitops from "./gitops.js";
+import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
+import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
+import { analyzeImagesLocally } from "./localVision.js";
+import { bridgePrompt, connectorRoute, CONNECTORS } from "./connectorBridge.js";
+import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
 
 const exec = promisify(execFile);
 
@@ -30,9 +35,10 @@ export class Orchestrator {
     this.agents = this.providers; // geriye dönük uyumluluk
     this.coordinator = new Coordinator(store, this.providers, () => this.config.data.coordinator);
     this.providers.antigravity.onNeedsAttention = () => {
-      this.notify("Ajan Konseyi 🔔", "Antigravity görev bekliyor — Antigravity'de ajana 'inbox'u kontrol et' deyin");
+      this.notify("Ajan Konseyi 🔔", "Antigravity görev bekliyor — köprü çalışma alanındaki ajana inbox'u kontrol ettirin");
     };
-    setInterval(() => this.providers.antigravity.updateBridgeStatus(), 30_000);
+    this._bridgeTimer = setInterval(() => this.refreshBridgeHealth(), 30_000);
+    this._bridgeTimer.unref?.();
   }
 
   // ---- Üyeler ----
@@ -55,6 +61,10 @@ export class Orchestrator {
     return this.members().filter((m) => m.enabled && this.providerAvailable(m.provider));
   }
 
+  mediaCapableMembers(attachments, list = this.availableMembers()) {
+    return list.filter((m) => unsupportedAttachments(m.provider, attachments).length === 0);
+  }
+
   // Antigravity ajanı şu anda fiilen izleme yapıyor mu? (taze kalp atışı)
   antigravitySleeping() {
     return !this.providers.antigravity.isFresh?.(2 * 60 * 1000);
@@ -71,13 +81,64 @@ export class Orchestrator {
     return `${run.id}#${member.id}`;
   }
 
+  sharedConversationContext(run, maxChars = 24_000) {
+    const messages = run.messages || [];
+    const lines = messages.map((m) => {
+      const who = m.from === "kullanici" ? "Kullanıcı" : (m.fromLabel || this.memberById(m.from)?.name || "Sistem");
+      const attachments = (m.attachments || []).map((a) => ` [Ek: ${a.name}, ${a.kind || a.mime}]`).join("");
+      return `${who}: ${String(m.content || "").trim()}${attachments}`;
+    });
+    let text = lines.join("\n\n");
+    if (text.length > maxChars) text = "…(önceki bölüm kısaltıldı)…\n" + text.slice(-maxChars);
+    return text;
+  }
+
+  referencedImages(run, prompt, currentImages = []) {
+    if (currentImages.length) return currentImages;
+    if (!/(?:\bbu(?:na|nu|nun)?\b|önceki|yukarıdaki|az önce|aynı|benzer|referans|görsel|fotoğraf|resim)/i.test(prompt)) return [];
+    for (const message of [...(run.messages || [])].reverse()) {
+      const images = (message.attachments || []).filter((a) => a.kind === "image" && a.path && fs.existsSync(a.path)).map((a) => a.path);
+      if (images.length) return images;
+    }
+    return [];
+  }
+
   // Üye çağrısı: durum rozetini yönetir, kullanım verisini üyeye yazar
   async callMember(run, member, prompt, opts = {}) {
-    const provider = this.providers[member.provider];
+    const route = connectorRoute(member.provider, prompt);
+    const provider = this.providers[route?.mode === "shared" ? route.provider : member.provider];
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
-    const res = await provider.send(prompt, {
-      ...opts,
-      sessionKey: this.sessionKeyFor(run, member),
+    const history = this.sharedConversationContext(run);
+    const images = this.referencedImages(run, prompt, opts.images || []);
+    const effectiveOpts = { ...opts, images };
+    const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
+Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları bağlı proje ya da ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
+--- SÖZLEŞME SONU ---`;
+    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    if (route?.mode === "shared") {
+      const label = CONNECTORS[route.connector]?.label || route.connector;
+      this.store.setAgentStatus(member.id, "busy", `${label} · ortak Codex köprüsü`);
+      this.store.streamProgress(member.id, `${label} bağlayıcısı kullanılıyor`, "");
+      effectivePrompt = bridgePrompt(route, effectivePrompt);
+    }
+    // Antigravity'nin headless language_server sürümü ImageData alanını RPC'de
+    // kabul etse de bazı hesap/model kombinasyonlarında modele aktarmıyor.
+    // macOS Vision OCR/sınıflandırması tamamen cihazda çalışır; görsel başka bir
+    // modele veya servise gönderilmeden güvenilir bağlam olarak aktarılır.
+    if (member.provider === "antigravity" && images.length) {
+      let vision;
+      try { vision = await analyzeImagesLocally(images, this.rootDir); }
+      catch (err) {
+        this.store.setAgentStatus(member.id, "error", "görsel çözümlenemedi");
+        return { ok: false, error: `Yerel görsel okuma köprüsü başarısız: ${String(err.message || err)}` };
+      }
+      effectivePrompt += `\n\n--- CİHAZDA ÇÖZÜMLENEN GÖRSEL İÇERİĞİ ---\n${vision}\n--- GÖRSEL İÇERİĞİ SONU ---\nBu içeriği ekli görsel bağlamı olarak kullan; erişemediğini söyleme.`;
+    }
+    const res = await provider.send(effectivePrompt, {
+      ...effectiveOpts,
+      sessionKey: route?.mode === "shared"
+        ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
+        : this.sessionKeyFor(run, member),
       memberId: member.id,
       model: member.model || opts.tierModel || undefined,
       effort: member.effort || undefined,
@@ -86,14 +147,75 @@ export class Orchestrator {
     const stopped = run.stopRequested;
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
+    if (route && res?.raw) res.raw.connectorRoute = route;
     return res;
   }
 
+  isImageGenerationRequest(text) {
+    const value=String(text||"");
+    // "Görsel üretme yeteneğini denetle" bir görsel siparişi değil, meta
+    // incelemedir. Bu ayrım yapılmazsa rapor sonunda gereksiz ImageGen açılır.
+    if(/(?:yetenek denetimi|yeteneklerini (?:öğren|incele|değerlendir|karşılaştır)|ayrı ayrı değerlendir|eksik yetenek|durumunu raporla)/i.test(value)) return false;
+    return /(?:görsel|fotoğraf|resim|image|illustration|poster|logo|ikon).{0,80}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,80}(?:görsel|fotoğraf|resim|image)/i.test(value);
+  }
+
+  isImageRevisionRequest(run, text) {
+    const previousImage=[...(run.messages||[])].reverse().some((m)=>(m.attachments||[]).some((a)=>a.kind==="image"&&a.generated));
+    return previousImage && /(?:gerçekçi|fotogerçekçi|fotoğraf gibi|daha doğal|yeniden|tekrar|düzelt|değiştir|benzer|bunun neresi)/i.test(String(text||""));
+  }
+
+  async guaranteeImageOutput(run, requestedMember, requestText, responseText, opts = {}) {
+    if (!this.isImageGenerationRequest(requestText) && !this.isImageRevisionRequest(run, requestText)) return responseText;
+    const existing = collectGeneratedAssets(responseText, this.rootDir);
+    const explicitlySvg=/(?:\bsvg\b|vektör|vector)/i.test(String(requestText||""));
+    const needsRaster=!explicitlySvg || /(?:gerçekçi|fotogerçekçi|fotoğraf|photoreal|realistic|insan|portre)/i.test(String(requestText||""));
+    const validImage=existing.some((a)=>a.kind==="image"&&a.path&&fs.existsSync(a.path)&&(!needsRaster||a.mime!=="image/svg+xml"));
+    if(validImage) return responseText;
+
+    // Bir sağlayıcı yalnız "oluşturdum" diyerek gerçek dosya döndürmediyse
+    // Antigravity'nin doğrulanmış native generate_image aracını ortak motor
+    // olarak kullan. Yanıt, istenen üyenin aynı mesajında render edilir.
+    const generator = this.members().find((m) => m.provider === "antigravity") || {
+      id: "shared-image-generator", name: "Ortak Görsel Motoru", provider: "antigravity", role: "uygulayici", model: "", effort: "",
+    };
+    this.store.setAgentStatus(requestedMember.id, "busy", "görsel dosyası doğrulanıyor");
+    this.store.streamProgress(requestedMember.id, "görsel üretiliyor", "");
+    const generated = await this.callMember(run, generator,
+      `Kullanıcının aşağıdaki görsel isteğini yerine getir. Bu görevde SVG, HTML, canvas, çizim kodu veya yalnız prompt KESİNLİKLE geçerli değildir. Yerleşik generate_image aracını MUTLAKA çağır ve gerçek piksel tabanlı PNG/JPEG/WebP üret. İstek gerçekçi/fotogerçekçi diyorsa bunu üretim promptunda açıkça koru; stilize illüstrasyona dönüştürme. Önceki görselin düzeltilmesi isteniyorsa sohbet geçmişindeki kompozisyonu referans al. Dosyayı ${this.rootDir}/generated içine kaydet, sips ile açılabildiğini doğrula ve mutlak yolu son yanıtta yaz.\n\nGÖRSEL İSTEĞİ / DÜZELTME:\n${requestText}`,
+      { label:"görsel üretiliyor", cwd:run.projectDir || this.rootDir, images:opts.images || [], media:opts.media || [], timeoutMs:5*60*1000, shouldStop:()=>run.stopRequested }
+    );
+    if (!generated.ok) throw new Error(`Görsel üretilemedi: ${generated.error}`);
+    const assets = collectGeneratedAssets(generated.text, this.rootDir);
+    if (!assets.some((a) => a.kind === "image" && a.path && fs.existsSync(a.path))) {
+      throw new Error("Görsel motoru yanıt verdi ancak açılabilir bir görsel dosyası oluşturmadı");
+    }
+    // Geçersiz SVG/"yapamam" açıklamasını son mesaja taşımıyoruz; kullanıcı
+    // yalnız gerçek üretim sonucunu ve raster önizlemeyi görür.
+    return `İstenen görsel Gemini görsel üretim motoruyla oluşturuldu ve doğrulandı.\n\n${generated.text}`;
+  }
+
   memberMsg(run, member, kind, content, taskId = null) {
+    const attachments = collectGeneratedAssets(content, this.rootDir);
+    let displayContent = attachments.some((a) => a.inlineSource === "svg")
+      ? String(content).replace(/```(?:svg|xml)\s*\n[\s\S]*?<svg\b[\s\S]*?<\/svg>\s*```/gi, "_SVG tasarımı oluşturuldu; aşağıdaki önizlemeden açabilir veya indirebilirsiniz._")
+      : content;
+    // Üretilen dosya sohbet kartında zaten görsel olarak sunulur. Ham file://
+    // bağlantılarını, mutlak yolları ve terminal benzeri doğrulama metnini
+    // kullanıcıya gösterme; bunlar yalnız iç doğrulama için tutulur.
+    if (attachments.some((a) => a.generated)) {
+      displayContent = String(displayContent)
+        .replace(/\[[^\]]+\]\(file:\/\/\/[^)]+\)/gi, "")
+        .replace(/`\/(?:Users|private|tmp)\/[^`\n]+\.(?:png|jpe?g|webp|gif|avif|svg|pdf|docx?|xlsx?|csv|mp4|mov|webm)`/gi, "")
+        .replace(/^\s*(?:\*\*)?(?:Mutlak )?Dosya yolu:(?:\*\*)?\s*$/gmi, "")
+        .replace(/^\s*\/(?:Users|private|tmp)\/[^\n]+\.(?:png|jpe?g|webp|gif|avif|svg|pdf|docx?|xlsx?|csv|mp4|mov|webm)\s*$/gmi, "")
+        .replace(/\n{3,}/g, "\n\n").trim();
+      if (!displayContent) displayContent = "Görsel hazır.";
+    }
     this.store.addMessage(run, {
       from: member.id, fromLabel: member.name, provider: member.provider,
-      kind, taskId, content,
+      kind, taskId, content: displayContent, attachments,
     });
+    return attachments;
   }
 
   // ---- macOS bildirimi ----
@@ -123,12 +245,28 @@ export class Orchestrator {
       const out = ((e.stdout || "") + (e.stderr || "")).trim();
       health.codex = { ok: false, detail: out ? out.split("\n")[0] : "codex CLI çalışmıyor: " + String(e.message).slice(0, 120) };
     }
-    health.antigravity = {
-      ok: this.providers.antigravity.isConnected(),
-      detail: this.providers.antigravity.isConnected() ? "köprü bağlı" : "köprü bekleniyor (isteğe bağlı)",
-    };
+    health.antigravity = this.bridgeHealth();
     this.store.setHealth(health);
     return health;
+  }
+
+  bridgeHealth() {
+    const agent = this.providers.antigravity;
+    const fresh = agent.isFresh();
+    const installed = agent.isConnected();
+    return {
+      ok: installed,
+      detail: fresh
+        ? "native CLI aktif — tüm araçlarla arka planda bağlı"
+        : installed
+          ? "native CLI hazır — ilk görevde arka planda başlatılır"
+          : "Antigravity CLI kurulu değil",
+    };
+  }
+
+  refreshBridgeHealth() {
+    this.providers.antigravity.updateBridgeStatus();
+    this.store.setHealth({ ...(this.store.health || {}), antigravity: this.bridgeHealth() });
   }
 
   // ---- Kullanım (token) takibi ----
@@ -166,7 +304,7 @@ export class Orchestrator {
   }
 
   startRun(run) {
-    this.runPipeline(run, false)
+    enrichAttachments(run.attachments || []).then((items) => { run.attachments = items; this.store.updateRun(run); return this.runPipeline(run, false); })
       .catch((err) => this.failRun(run, err))
       .finally(() => this.persistSessions(run));
   }
@@ -211,12 +349,42 @@ export class Orchestrator {
   }
 
   // ================= SOHBET TURU =================
+  enqueueMessage(run, item) {
+    run.queuedMessages ||= [];
+    const queued = {
+      id: uid("queue-"),
+      ts: new Date().toISOString(),
+      target: item.target || "konsey",
+      text: item.text,
+      attachments: item.attachments || [],
+      mode: item.mode || "auto",
+    };
+    run.queuedMessages.push(queued);
+    this.store.updateRun(run);
+    return queued;
+  }
+
+  drainMessageQueue(run) {
+    if (run.turnActive || run.directActive || !run.queuedMessages?.length) return;
+    const next = run.queuedMessages.shift();
+    this.store.updateRun(run);
+    queueMicrotask(() => {
+      const job = next.target === "konsey"
+        ? this.continueChat(run, next.text, next.attachments, next.mode)
+        : this.directMessage(run, next.target, next.text, next.attachments);
+      job.catch((err) => this.store.addMessage(run, {
+        from: "sistem", kind: "error", content: "Sıradaki mesaj işlenemedi: " + String(err.message || err),
+      }));
+    });
+  }
+
   async continueChat(run, text, attachments = [], mode = "auto") {
     const S = this.store;
     if (run.turnActive) throw new Error("Bu sohbette bir tur zaten çalışıyor; önce durdurun");
     run.turnActive = true;
     run.stopRequested = false;
     run.request = text;
+    attachments = await enrichAttachments(attachments);
     run.attachments = attachments;
     run.reviews = [];
     run.votes = [];
@@ -228,7 +396,7 @@ export class Orchestrator {
     const attachNote = attachments.length
       ? "\n\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n")
       : "";
-    S.addMessage(run, { from: "kullanici", kind: "message", content: text + attachNote });
+    S.addMessage(run, { from: "kullanici", kind: "message", content: text || "Ek dosyaları incele.", attachments });
 
     try {
       const avail = this.availableMembers();
@@ -238,10 +406,15 @@ export class Orchestrator {
       if (mode !== "auto") {
         route = { approach: "council", mode };
       } else {
-        route = await this.coordinator.routeTurn(run, this.memberListText(avail), ctx);
+        route = normalizeRoute(await this.coordinator.routeTurn(run, this.memberListText(avail), ctx), avail.map((m) => m.id));
         this.checkStop(run);
       }
 
+      if (attachments.length) {
+        const capable = this.mediaCapableMembers(attachments, avail);
+        if (!capable.length) throw new Error("Seçili medya türlerini okuyabilen etkin bir ajan yok");
+        if (route.approach === "quick" && !capable.some((m) => m.id === route.member_id)) route.member_id = capable[0].id;
+      }
       if (route.approach === "quick") {
         let member = avail.find((m) => m.id === route.member_id) || avail[0];
         // Antigravity uyuyorsa sohbet bekletilmez: yanıt başka üyeden gelir
@@ -270,16 +443,15 @@ export class Orchestrator {
       this.persistSessions(run);
       S.updateRun(run, { status: "idle", phase: "idle" });
       if (!run.stopRequested) this.notify("Ajan Konseyi ✓", "Yanıt hazır");
+      this.drainMessageQueue(run);
     }
   }
 
   async quickReply(run, member, text, attachments) {
     const S = this.store;
     S.setPhase(run, "answering");
-    const images = attachments.map((a) => a.path).filter((p) => fs.existsSync(p));
-    const imageNote = images.length
-      ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}`
-      : "";
+    const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
+    const imageNote = attachmentPrompt(attachments);
     const prefixFor = (mem) => {
       if (this.providers[mem.provider].sessions.get(this.sessionKeyFor(run, mem))) return "";
       const history = run.messages.slice(-10, -1)
@@ -292,9 +464,10 @@ export class Orchestrator {
     let res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
       label: "yanıtlıyor",
       images,
+      media: attachments,
       cwd: run.projectDir || undefined,
       // Sohbette Antigravity'ye uzun süre takılı kalınmaz
-      timeoutMs: member.provider === "antigravity" ? 4 * 60 * 1000 : undefined,
+      timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
       shouldStop: () => run.stopRequested,
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
@@ -304,12 +477,13 @@ export class Orchestrator {
         S.addMessage(run, { from: "sistem", kind: "info", content: `${member.name} yanıt veremedi (${truncate(res.error, 100)}); ${alt.name} devralıyor.` });
         member = alt;
         res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
-          label: "yanıtlıyor", images, cwd: run.projectDir || undefined,
+          label: "yanıtlıyor", images, media: attachments, cwd: run.projectDir || undefined,
           shouldStop: () => run.stopRequested,
         });
       }
     }
     if (res.ok) {
+      res.text = await this.guaranteeImageOutput(run, member, text, res.text, { images, media:attachments });
       this.memberMsg(run, member, "message", res.text);
     } else if (!run.stopRequested) {
       throw new Error(`${member.name} yanıt veremedi: ${res.error}`);
@@ -334,7 +508,7 @@ export class Orchestrator {
       const attachNote = run.attachments?.length
         ? "\n\n" + run.attachments.map((a) => `📎 ${a.url || a.path}`).join("\n")
         : "";
-      S.addMessage(run, { from: "kullanici", kind: "message", content: run.request + attachNote });
+      S.addMessage(run, { from: "kullanici", kind: "message", content: run.request, attachments: run.attachments || [] });
     }
 
     const avail = this.availableMembers();
@@ -352,19 +526,17 @@ export class Orchestrator {
     // ---- 1. PLANLAMA ----
     if (!resume || run.tasks.length === 0) {
       S.setPhase(run, "planning");
-      const plan = await this.coordinator.plan(run, this.memberListText(avail), {
+      const plan = normalizePlan(await this.coordinator.plan(run, this.memberListText(avail), {
         historyText: this.projectHistory(run),
         memoryText: this.projectContext.readMemory(run.projectId),
         repoMap: run.projectDir ? await this.projectContext.repoMap(run.projectDir) : "",
         testFirst: run.testFirst,
-        attachmentsText: run.attachments?.length
-          ? "Kullanıcı şu görselleri ekledi (görevlerde bu dosya yollarını ilgili üyelere ilet):\n" +
-            run.attachments.map((a) => `- ${a.path}`).join("\n")
-          : "",
-      }, ctx);
+        attachmentsText: attachmentPrompt(run.attachments || []),
+      }, ctx), avail.map((m) => m.id));
       this.checkStop(run);
       if (run.mode === "auto") run.mode = plan.mode || "discussion";
-      run.tasks = (plan.subtasks || []).map((t) => {
+      const assignedTasks = enforceTaskAssignments(plan.subtasks || [], avail, plan.mode || run.mode);
+      run.tasks = assignedTasks.map((t) => {
         const m = this.memberById(t.member_id) || avail[0];
         return {
           id: t.id, title: t.title, assignee: m.id, assigneeName: m.name,
@@ -398,6 +570,7 @@ export class Orchestrator {
         await gitops.initRepo(run.projectDir);
         S.addMessage(run, { from: "sistem", kind: "info", content: `✓ ${run.projectDir} içinde git deposu başlatıldı.` });
       }
+      if (!run.targetBranch) run.targetBranch = await gitops.currentBranch(run.projectDir);
       const involved = [...new Set(run.tasks.map((t) => t.assignee))]
         .map((id) => this.memberById(id)).filter((m) => m && m.provider !== "antigravity");
       for (const m of involved) {
@@ -441,6 +614,7 @@ export class Orchestrator {
     if (reviewPromises.length) {
       S.setPhase(run, "review");
       await Promise.all(reviewPromises);
+      await this.reconcilePeerFeedback(run, worktrees);
     }
 
     // ---- 3. ÇELİŞKİ / TARTIŞMA / OYLAMA ----
@@ -498,6 +672,12 @@ export class Orchestrator {
     const S = this.store;
     let member = this.memberById(task.assignee);
     const avail = this.availableMembers();
+    if (requiresCodeAuthoring(task, run.mode) && !canAuthorCode(member)) {
+      const coder = preferredCoder(avail, Object.fromEntries(avail.map((m) => [m.id, run.tasks.filter((t) => t.assignee === m.id).length])));
+      if (!coder) { task.status="failed"; task.result="Kod yazabilecek etkin Claude veya Codex üyesi yok."; S.updateRun(run); return; }
+      S.addMessage(run, { from:"koordinator", kind:"info", taskId:task.id, content:`Kod yazma görevi ${member?.name || task.assigneeName} yerine ${coder.name} üyesine atandı. Antigravity araştırma, görsel ve doğrulama görevlerinde tutulur.` });
+      member=coder; task.assignee=coder.id; task.assigneeName=coder.name;
+    }
     if (!member || !avail.some((m) => m.id === member.id)) {
       const fb = avail.find((m) => m.id !== task.assignee);
       if (!fb) { task.status = "failed"; return; }
@@ -506,12 +686,18 @@ export class Orchestrator {
       task.assignee = fb.id;
       task.assigneeName = fb.name;
     }
+    if (unsupportedAttachments(member.provider, run.attachments || []).length) {
+      const compatible = this.mediaCapableMembers(run.attachments || [], avail).find((m) => m.id !== member.id);
+      if (!compatible) { task.status="failed"; task.result="Bu ek türlerini okuyabilen ajan yok."; this.store.updateRun(run); return; }
+      this.store.addMessage(run, { from:"sistem", kind:"info", taskId:task.id, content:`${member.name} ek türünü okuyamadığı için görev ${compatible.name} üyesine yönlendirildi.` });
+      member=compatible; task.assignee=compatible.id; task.assigneeName=compatible.name;
+    }
     task.status = "active";
     task.startedAt = new Date().toISOString();
     S.updateRun(run);
     S.addMessage(run, { from: "koordinator", kind: "task", taskId: task.id, content: `[${member.name}] için görev: ${task.title}\n\n${task.prompt}` });
 
-    const images = (run.attachments || []).map((a) => a.path).filter((p) => fs.existsSync(p));
+    const images = (run.attachments || []).filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
     const agSleeping = member.provider === "antigravity" && this.antigravitySleeping();
     if (agSleeping) {
       this.notify("Ajan Konseyi 🔔", `${member.name} görev bekliyor — Antigravity'de ajana 'inbox'u kontrol et' deyin`);
@@ -522,12 +708,10 @@ export class Orchestrator {
       codeMode: run.mode === "code",
       cwd: worktrees[member.id]?.wtDir || (run.mode !== "code" ? run.projectDir || undefined : undefined),
       tierModel: this.pickTierModel(member.provider, task.tier),
-      images,
+      images, media: run.attachments || [],
       shouldStop: () => run.stopRequested,
     };
-    const imageNote = images.length
-      ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}\n`
-      : "";
+    const imageNote = attachmentPrompt(run.attachments || []);
     let depContext = "";
     for (const depId of task.dependsOn || []) {
       const dep = run.tasks.find((t) => t.id === depId);
@@ -546,7 +730,9 @@ export class Orchestrator {
           content: `⚠ ${member.name} (Antigravity) görüşü alınamadı — sentez bu görüş EKSİK olarak yapılacak. Köprüyü uyandırmak için Antigravity'de ajana "inbox'u kontrol et" deyin.`,
         });
       }
-      const fb = this.availableMembers().find((m) => m.id !== member.id);
+      const fb = requiresCodeAuthoring(task, run.mode)
+        ? this.availableMembers().find((m) => m.id !== member.id && canAuthorCode(m))
+        : this.availableMembers().find((m) => m.id !== member.id);
       if (fb) {
         S.addMessage(run, { from: "koordinator", kind: "info", taskId: task.id, content: `Görev ${fb.name} üyesine yeniden atandı.` });
         member = fb; task.assignee = fb.id; task.assigneeName = fb.name;
@@ -558,6 +744,7 @@ export class Orchestrator {
 
     task.endedAt = new Date().toISOString();
     if (res.ok) {
+      res.text = await this.guaranteeImageOutput(run, member, task.prompt, res.text, opts);
       task.status = "done";
       task.result = res.text;
       this.memberMsg(run, member, "result", res.text, task.id);
@@ -576,7 +763,10 @@ export class Orchestrator {
     const commitPart = run.commitHash
       ? ` Kod tabanı sürümü: commit ${run.commitHash} — kod hakkında iddia üretmeden önce dosyanın GÜNCEL halini oku ve iddialarına dosya:satır kanıtı ekle.`
       : "";
-    return `Sen "${member.name}" adlı konsey üyesisin (sağlayıcı: ${member.provider}). Konseyde başka üyeler de var; koordinatör görevleri dağıtır.${rolePart}${commitPart} Yanıtlarını Türkçe ve düzgün Markdown biçiminde yaz (başlıklar, listeler, kod için \`\`\` blokları); gereksiz uzatma.\n\nKullanıcının ana isteği: "${truncate(run.request, 1200)}"\n\n--- SANA VERİLEN GÖREV ---\n`;
+    const providerBoundary = member.provider === "antigravity"
+      ? " Antigravity olarak kaynak kodu yazma veya değiştirme; araştırma, görsel/medya, tarayıcı-UX doğrulaması, içerik ve alternatif görüş üret. Kod değişikliği gerektiğini görürsen bunu Claude/Codex için somut öneri ve kanıt olarak yaz."
+      : " Claude/Codex olarak gerektiğinde kaynak kodu yazabilir, değiştirebilir ve test edebilirsin.";
+    return `Sen "${member.name}" adlı konsey üyesisin (sağlayıcı: ${member.provider}). Konseyde başka üyeler de var; koordinatör görevleri dağıtır.${rolePart}${providerBoundary}${commitPart} Diğer üyelerin bulgularına atıf yap, katılmadığın noktayı gerekçelendir ve sonraki üyeye uygulanabilir bir devir notu bırak. Yanıtlarını Türkçe ve düzgün Markdown biçiminde yaz (başlıklar, listeler, kod için \`\`\` blokları); gereksiz uzatma.\n\nKullanıcının ana isteği: "${truncate(run.request, 1200)}"\n\n--- SANA VERİLEN GÖREV ---\n`;
   }
 
   // ---- Puanlı çapraz inceleme ----
@@ -586,6 +776,9 @@ export class Orchestrator {
     await Promise.all(reviewers.map(async (reviewer) => {
       const prompt = this.roleHeader(reviewer, run) +
         `"${task.assigneeName}" üyesinin şu çıktısını eleştirel incele:\n\n### ${task.title}\n${truncate(task.result, 6000)}\n\n` +
+        (reviewer.provider === "antigravity" && requiresCodeAuthoring(task, run.mode)
+          ? `Bu bir kod görevidir. Kodu değiştirme; kullanıcı deneyimi, araştırma bulguları, görünür davranış, tarayıcı testi ve eksik gereksinimler açısından incele. Düzeltmeyi Claude/Codex'e tarif et.\n\n`
+          : "") +
         `Değerlendirmeni YALNIZCA şu şemada tek bir JSON nesnesi olarak ver:\n` +
         `{"agreement": 1-5 arası tam sayı (5=tamamen katılıyorum), "severity": "dusuk|orta|yuksek", ` +
         `"points": ["somut eleştiri/iyileştirme maddeleri"], "evidence": ["varsa dosya:satır"], "suggestion": "tek cümlelik öneri"}`;
@@ -612,6 +805,35 @@ export class Orchestrator {
         (j.suggestion ? `\nÖneri: ${j.suggestion}` : ""), task.id);
       S.updateRun(run);
     }));
+  }
+
+  // İnceleme yalnız raporda kalmaz: ciddi/somut itirazlar görev sahibine geri
+  // döner. Yazar diğer ajanların görüşlerine tek tek cevap verir, gerekiyorsa
+  // kendi çalışma kopyasında düzeltir ve görev çıktısını günceller.
+  async reconcilePeerFeedback(run, worktrees) {
+    const S=this.store;
+    for (const task of run.tasks.filter((t)=>t.status==="done")) {
+      const feedback=run.reviews.filter((r)=>r.taskId===task.id && (r.agreement<=3 || r.severity==="yuksek"));
+      if(!feedback.length) continue;
+      let author=this.memberById(task.assignee);
+      if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers());
+      if(!author) continue;
+      const peerText=feedback.map((r)=>`### ${r.reviewerName} (${r.agreement}/5, ${r.severity})\n${r.points.map((p)=>`- ${p}`).join("\n")}`).join("\n\n");
+      const prompt=this.roleHeader(author,run)+
+        `İSTİŞARE / REVİZYON TURU. Diğer konsey üyeleri [${task.id}] ${task.title} çıktına aşağıdaki itirazları verdi:\n\n${peerText}\n\n`+
+        `Her itirazı değerlendir. Katılıyorsan çözümü uygula; katılmıyorsan teknik kanıtla açıkla. Sonunda "Devir özeti" başlığıyla hangi görüşlerin kabul edildiğini ve nihai durumunu yaz.`+
+        (requiresCodeAuthoring(task,run.mode)?" Gerekli kod değişikliklerini kendi çalışma kopyanda uygula ve ilgili testleri çalıştır.":"");
+      const res=await this.callMember(run,author,prompt,{
+        label:`istişare: ${task.id}`, codeMode:requiresCodeAuthoring(task,run.mode),
+        cwd:worktrees?.[author.id]?.wtDir || run.projectDir || undefined,
+        shouldStop:()=>run.stopRequested,
+      });
+      if(res.ok) {
+        task.result += `\n\n--- İSTİŞARE SONRASI REVİZYON ---\n${truncate(res.text,6000)}`;
+        this.memberMsg(run,author,"debate",`İstişare sonrası revizyon [${task.id}]:\n${res.text}`,task.id);
+        S.updateRun(run);
+      }
+    }
   }
 
   async assessConflict(run, round, ctx) {
@@ -780,11 +1002,11 @@ export class Orchestrator {
     });
     this.checkStop(run);
     let merged = false;
+    let allMerged = true;
     if (!approved) {
       S.addMessage(run, { from: "sistem", kind: "info", content: "Birleştirme reddedildi. Değişiklikler kendi dallarında duruyor; diff'ler Dosyalar sekmesinde." });
     } else {
-      const order = (plan.merge_order || []).filter((id) => diffs.some((d) => d.memberId === id));
-      const finalOrder = order.length ? order : diffs.map((d) => d.memberId);
+      const finalOrder = completeMergeOrder(plan.merge_order, diffs.map((d) => d.memberId));
       for (const memberId of finalOrder) {
         const d = diffs.find((x) => x.memberId === memberId);
         const result = await gitops.mergeBranch(run.projectDir, S.runsDir, run.id, d.branch);
@@ -792,6 +1014,7 @@ export class Orchestrator {
           merged = true;
           S.addMessage(run, { from: "sistem", kind: "info", content: `✓ ${d.branch} birleştirildi.` });
         } else {
+          allMerged = false;
           S.addMessage(run, {
             from: "sistem", kind: "error",
             content: `✗ ${d.branch} birleştirilemedi (çakışma): ${result.conflicts.join(", ") || result.error}. Elle inceleme gerekli.`,
@@ -800,10 +1023,9 @@ export class Orchestrator {
       }
     }
 
-    if (run.testCommand) {
-      const testDir = merged
-        ? path.join(S.runsDir, run.id, "worktrees", "_integration")
-        : Object.values(worktrees)[0]?.wtDir || run.projectDir;
+    let testsPassed = !run.testCommand;
+    if (run.testCommand && merged) {
+      const testDir = path.join(S.runsDir, run.id, "worktrees", "_integration");
       this.notify("Ajan Konseyi ⚠", "Test onayı bekleniyor");
       const ok = await S.requestApproval(run, {
         kind: "test",
@@ -815,24 +1037,58 @@ export class Orchestrator {
         S.setPhase(run, "testing");
         let testResult = await this.runTests(run, testDir);
         if (!testResult.ok && merged && !run.stopRequested) {
-          S.addMessage(run, { from: "koordinator", kind: "info", content: "Testler kırıldı; otomatik düzeltme turu (kırmızı-yeşil)." });
-          const fixerId = diffs.sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
-          const fixer = this.availableMembers().find((m) => m.id === fixerId);
-          if (fixer) {
-            const fixPrompt = this.roleHeader(fixer, run) +
-              `Birleştirme sonrası testler KIRILDI. Test çıktısı:\n\n${truncate(testResult.output, 6000)}\n\n` +
-              `Bu dizinde çalışıyorsun: ${testDir}\nTestleri geçirecek asgari düzeltmeyi uygula ve ne değiştirdiğini özetle.`;
-            const fix = await this.callMember(run, fixer, fixPrompt, {
-              label: "test düzeltme", codeMode: true, cwd: testDir, shouldStop: () => run.stopRequested,
-            });
-            if (fix.ok) {
-              this.memberMsg(run, fixer, "result", `Test düzeltmesi:\n${fix.text}`);
-              await gitops.commitAll(testDir, `ajan(${fixer.name}): test düzeltmesi`).catch(() => {});
-              await this.runTests(run, testDir);
+          const fixApproved = await S.requestApproval(run, {
+            kind: "testfix",
+            title: "Test düzeltmesi için kod değişikliği onayı",
+            detail: "Testler başarısız oldu. Bir ajanın integration dalında asgari düzeltmeyi yapmasına ve commit atmasına izin verilsin mi?",
+          });
+          this.checkStop(run);
+          if (!fixApproved) {
+            S.addMessage(run, { from: "sistem", kind: "info", content: "Otomatik test düzeltmesi reddedildi." });
+          } else {
+            S.addMessage(run, { from: "koordinator", kind: "info", content: "Testler kırıldı; onaylanan düzeltme turu başlıyor." });
+            const fixerId = [...diffs].sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
+            const fixer = this.availableMembers().find((m) => m.id === fixerId);
+            if (fixer) {
+              const fixPrompt = this.roleHeader(fixer, run) +
+                `Birleştirme sonrası testler KIRILDI. Test çıktısı:\n\n${truncate(testResult.output, 6000)}\n\n` +
+                `Bu dizinde çalışıyorsun: ${testDir}\nTestleri geçirecek asgari düzeltmeyi uygula ve ne değiştirdiğini özetle.`;
+              const fix = await this.callMember(run, fixer, fixPrompt, {
+                label: "test düzeltme", codeMode: true, cwd: testDir, shouldStop: () => run.stopRequested,
+              });
+              if (fix.ok) {
+                this.memberMsg(run, fixer, "result", `Test düzeltmesi:\n${fix.text}`);
+                await gitops.commitAll(testDir, `ajan(${fixer.name}): test düzeltmesi`).catch(() => {});
+                testResult = await this.runTests(run, testDir);
+              }
             }
           }
         }
+        testsPassed = testResult.ok;
       }
+    } else if (run.testCommand && !merged) {
+      S.addMessage(run, { from: "sistem", kind: "info", content: "Birleşik integration dalı oluşmadığı için test çalıştırılmadı." });
+      testsPassed = false;
+    }
+
+    if (merged && allMerged && testsPassed) {
+      const publish = await S.requestApproval(run, {
+        kind: "publish",
+        title: `Test edilmiş kodu ${run.targetBranch} dalına uygula`,
+        detail: `Integration dalı testlerden geçti. ajan/${run.id}/integration dalı, projenin ${run.targetBranch} dalına fast-forward ile uygulansın mı? Ana çalışma ağacı kirliyse işlem güvenli biçimde durur.`,
+      });
+      this.checkStop(run);
+      if (publish) {
+        const result = await gitops.publishIntegration(run.projectDir, run.id, run.targetBranch);
+        S.addMessage(run, {
+          from: "sistem", kind: result.ok ? "info" : "error",
+          content: result.ok ? `✓ Test edilmiş değişiklikler ${result.branch} dalına uygulandı.` : `✗ Hedef dala uygulama durduruldu: ${result.error}`,
+        });
+      } else {
+        S.addMessage(run, { from: "sistem", kind: "info", content: `Yayınlama reddedildi; test edilmiş kod ajan/${run.id}/integration dalında tutuluyor.` });
+      }
+    } else if (merged && !allMerged) {
+      S.addMessage(run, { from: "sistem", kind: "error", content: "Bazı dallar birleştirilemediği için eksik integration dalı hedef dala uygulanmadı." });
     }
   }
 
@@ -870,23 +1126,51 @@ export class Orchestrator {
 
   async directMessage(run, memberId, content, attachments = []) {
     const S = this.store;
-    const member = this.memberById(memberId);
-    if (!member) throw new Error("Bilinmeyen üye: " + memberId);
-    this.restoreSessions(run);
-    const images = attachments.map((a) => a.path).filter((p) => fs.existsSync(p));
-    const attachNote = attachments.length ? "\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n") : "";
-    S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${content}${attachNote}` });
-    const imageNote = images.length ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}` : "";
-    const res = await this.callMember(run, member,
-      `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla):\n\n${content}${imageNote}`,
-      { label: "doğrudan mesaj", images });
-    if (res.ok) {
-      this.memberMsg(run, member, "message", res.text);
-    } else {
-      S.addMessage(run, { from: "sistem", kind: "error", content: `${member.name} yanıt veremedi: ${res.error}` });
+    if (run.turnActive || run.directActive) {
+      return { ok: true, queued: true, item: this.enqueueMessage(run, { target: memberId, text: content, attachments }) };
     }
-    this.persistSessions(run);
-    return res;
+    run.directActive = true;
+    run.stopRequested = false;
+    S.updateRun(run, { status: "running", phase: "answering" });
+    const member = this.memberById(memberId);
+    try {
+      if (!member) throw new Error("Bilinmeyen üye: " + memberId);
+      const unsupported = unsupportedAttachments(member.provider, attachments);
+      if (unsupported.length) throw new Error(`${member.name} şu ekleri okuyamaz: ${unsupported.map((a)=>a.name).join(", ")}`);
+      this.restoreSessions(run);
+      attachments = await enrichAttachments(attachments);
+      const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
+      const attachNote = attachments.length ? "\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n") : "";
+      S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${content || "Ek dosyaları incele."}`, attachments });
+      const imageNote = attachmentPrompt(attachments);
+      const res = await this.callMember(run, member,
+        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla):\n\n${content}${imageNote}`,
+        { label: "doğrudan mesaj", images, media: attachments, timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
+          shouldStop: () => run.stopRequested });
+      if (res.ok) {
+        res.text = await this.guaranteeImageOutput(run, member, content, res.text, { images, media:attachments });
+        this.memberMsg(run, member, "message", res.text);
+      }
+      else if (!run.stopRequested) S.addMessage(run, { from: "sistem", kind: "error", content: `${member.name} yanıt veremedi: ${res.error}` });
+      return res;
+    } finally {
+      run.directActive = false;
+      this.persistSessions(run);
+      S.updateRun(run, { status: "idle", phase: "idle" });
+      this.drainMessageQueue(run);
+    }
+  }
+
+  async testAntigravityBridge() {
+    const agent = this.providers.antigravity;
+    const result = await agent.send(
+      "KÖPRÜ BAĞLANTI TESTİ: Yalnızca 'ANTIGRAVITY_KOPRU_OK' yaz. Bu bir kullanıcı görevi değildir.",
+      { label: "köprü testi", sessionKey: "bridge-test", timeoutMs: 90_000 }
+    );
+    agent.updateBridgeStatus();
+    if (!result.ok) throw new Error(result.error || "Antigravity köprüsü yanıt vermedi");
+    this.refreshBridgeHealth();
+    return { ok: true, reply: result.text };
   }
 
   async rollback(run) {

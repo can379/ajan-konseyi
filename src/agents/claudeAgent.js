@@ -49,13 +49,10 @@ export class ClaudeAgent extends BaseAgent {
     }
     const model = opts.model ?? this.getModel?.();
     if (model) args.push("--model", model);
-    if (opts.codeMode) {
-      // Kod görevi: dosya düzenlemelerine izin ver, ama tehlikeli izinleri açma.
-      args.push("--permission-mode", "acceptEdits");
-    } else {
-      // Tartışma/inceleme görevi: salt okunur çalışma.
-      args.push("--disallowedTools", "Bash,Edit,Write,NotebookEdit");
-    }
+    // Etkileşimli izin penceresi göstermeden Claude'un terminal, dosya, web,
+    // skill, MCP ve alt ajan araçlarını kullanmasına izin ver. `auto` modu
+    // riskli eylemleri Claude'un kendi güvenlik değerlendirmesinden geçirir.
+    args.push("--permission-mode", opts.codeMode ? "acceptEdits" : "auto");
 
     let live = "";
     let result = null;

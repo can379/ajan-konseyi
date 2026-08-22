@@ -1,4 +1,10 @@
 node_modules/
+dist/
+release/
+generated/
+.agent/
+.claude/
+assets/*.iconset/
 runs/
 memory/
 uploads/
