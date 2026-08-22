@@ -129,10 +129,10 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       let vision;
       try { vision = await analyzeImagesLocally(images, this.rootDir); }
       catch (err) {
-        this.store.setAgentStatus(member.id, "error", "görsel çözümlenemedi");
-        return { ok: false, error: `Yerel görsel okuma köprüsü başarısız: ${String(err.message || err)}` };
+        this.log(`yerel görsel çözümleme atlandı: ${String(err.message || err)}`);
+        vision = "";
       }
-      effectivePrompt += `\n\n--- CİHAZDA ÇÖZÜMLENEN GÖRSEL İÇERİĞİ ---\n${vision}\n--- GÖRSEL İÇERİĞİ SONU ---\nBu içeriği ekli görsel bağlamı olarak kullan; erişemediğini söyleme.`;
+      if (vision) effectivePrompt += `\n\n--- CİHAZDA ÇÖZÜMLENEN GÖRSEL İÇERİĞİ ---\n${vision}\n--- GÖRSEL İÇERİĞİ SONU ---\nBu içeriği ekli görsel bağlamı olarak kullan; erişemediğini söyleme.`;
     }
     const res = await provider.send(effectivePrompt, {
       ...effectiveOpts,

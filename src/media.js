@@ -9,9 +9,9 @@ export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 export const PROVIDER_CAPABILITIES = {
   // Girdi türleri ortak ön-işleme katmanından geçirilir; üretim ve araç
   // yetenekleri sağlayıcının native CLI/MCP/skill motorunda çalışır.
-  codex: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
-  claude: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
-  antigravity: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
+  codex: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
+  claude: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
+  antigravity: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
 };
 export function unsupportedAttachments(provider, list) {
   const caps = PROVIDER_CAPABILITIES[provider] || {};
@@ -20,10 +20,13 @@ export function unsupportedAttachments(provider, list) {
 
 const MIME_BY_EXT = {
   ".png":"image/png", ".jpg":"image/jpeg", ".jpeg":"image/jpeg", ".gif":"image/gif", ".webp":"image/webp", ".avif":"image/avif", ".heic":"image/heic", ".svg":"image/svg+xml",
-  ".pdf":"application/pdf", ".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pdf":"application/pdf", ".docx":"application/vnd.openxmlformats-officedocument.wordprocessingml.document", ".doc":"application/msword", ".rtf":"application/rtf", ".odt":"application/vnd.oasis.opendocument.text",
+  ".xlsx":"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ".xls":"application/vnd.ms-excel", ".ods":"application/vnd.oasis.opendocument.spreadsheet",
+  ".pptx":"application/vnd.openxmlformats-officedocument.presentationml.presentation", ".ppt":"application/vnd.ms-powerpoint", ".odp":"application/vnd.oasis.opendocument.presentation",
   ".csv":"text/csv", ".tsv":"text/tab-separated-values", ".txt":"text/plain", ".md":"text/markdown", ".json":"application/json", ".xml":"application/xml", ".yaml":"text/yaml", ".yml":"text/yaml",
   ".js":"text/javascript", ".ts":"text/typescript", ".jsx":"text/jsx", ".tsx":"text/tsx", ".html":"text/html", ".css":"text/css", ".py":"text/x-python", ".sh":"text/x-shellscript",
-  ".zip":"application/zip", ".mp3":"audio/mpeg", ".wav":"audio/wav", ".m4a":"audio/mp4", ".aac":"audio/aac", ".ogg":"audio/ogg",
+  ".zip":"application/zip", ".tar":"application/x-tar", ".gz":"application/gzip", ".7z":"application/x-7z-compressed", ".rar":"application/vnd.rar", ".epub":"application/epub+zip",
+  ".mp3":"audio/mpeg", ".wav":"audio/wav", ".m4a":"audio/mp4", ".aac":"audio/aac", ".ogg":"audio/ogg", ".flac":"audio/flac",
   ".mp4":"video/mp4", ".mov":"video/quicktime", ".webm":"video/webm",
 };
 
@@ -37,8 +40,8 @@ export function detectMedia(buffer, name = "", declared = "") {
   else if (buffer.subarray(0,6).toString().startsWith("GIF8")) mime = "image/gif";
   else if (buffer.subarray(0,4).toString() === "RIFF" && buffer.subarray(8,12).toString() === "WEBP") mime = "image/webp";
   const kind = mime.startsWith("image/") ? "image" : mime.startsWith("audio/") ? "audio" : mime.startsWith("video/") ? "video" :
-    mime === "application/pdf" ? "pdf" : /wordprocessingml/.test(mime) ? "document" : /spreadsheetml|csv|tab-separated/.test(mime) ? "spreadsheet" :
-    mime === "application/zip" ? "archive" : /^(text\/|application\/(json|xml))/.test(mime) ? "text" : "file";
+    mime === "application/pdf" ? "pdf" : /wordprocessingml|msword|opendocument\.text|rtf/.test(mime) ? "document" : /spreadsheetml|ms-excel|opendocument\.spreadsheet|csv|tab-separated/.test(mime) ? "spreadsheet" :
+    /presentationml|ms-powerpoint|opendocument\.presentation/.test(mime) ? "document" : /zip|x-tar|gzip|7z|rar|epub/.test(mime) ? "archive" : /^(text\/|application\/(json|xml))/.test(mime) ? "text" : "file";
   return { mime, kind, ext, size: buffer.length, sha256: createHash("sha256").update(buffer).digest("hex") };
 }
 
@@ -51,6 +54,11 @@ export async function extractMediaText(att) {
   const file = att.path;
   const max = 30000;
   try {
+    if (att.kind === "file") {
+      const sample = fs.readFileSync(file).subarray(0, max);
+      const printable = [...sample].filter((b) => b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127) || b >= 0xc2).length / Math.max(1, sample.length);
+      return printable > 0.85 ? sample.toString("utf8") : `İkili dosya; içerik doğrudan dosya yolundan incelenmelidir. MIME: ${att.mime}`;
+    }
     if (["text", "spreadsheet"].includes(att.kind) && !/xlsx/.test(att.mime)) return fs.readFileSync(file, "utf8").slice(0, max);
     if (att.kind === "document") {
       const { stdout } = await exec("unzip", ["-p", file, "word/document.xml"], { maxBuffer: 8e6 });

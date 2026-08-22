@@ -223,18 +223,22 @@ const server = http.createServer(async (req, res) => {
       const fname = Date.now().toString(36) + "-" + name;
       const fpath = path.join(upDir, fname);
       fs.writeFileSync(fpath, buf);
-      return json(res, 200, { path: fpath, url: "/uploads/" + fname, name, ...media });
+      return json(res, 200, { path: fpath, url: "/uploads/" + encodeURIComponent(fname), name, ...media });
     }
 
     // ---- Yüklenen görselleri servis et ----
-    const upMatch = p.match(/^\/uploads\/([\w.\-]+)$/);
-    if (req.method === "GET" && upMatch) {
-      const file = path.join(DATA_ROOT, "uploads", upMatch[1]);
+    if (req.method === "GET" && p.startsWith("/uploads/")) {
+      let uploadName = "";
+      try { uploadName = decodeURIComponent(p.slice("/uploads/".length)); } catch {}
+      const uploadDir = path.join(DATA_ROOT, "uploads");
+      const file = path.join(uploadDir, uploadName);
+      if (!uploadName || path.basename(uploadName) !== uploadName || !isWithin(uploadDir, file)) {
+        res.writeHead(404); return res.end();
+      }
       try {
         const data = fs.readFileSync(file);
-        const ext = path.extname(file).toLowerCase();
         const mime = detectMedia(data, file).mime;
-        const headers = { "Content-Type": mime, "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(upMatch[1])}`, "Cache-Control": "max-age=86400", "X-Content-Type-Options":"nosniff" };
+        const headers = { "Content-Type": mime, "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(uploadName)}`, "Cache-Control": "max-age=86400", "X-Content-Type-Options":"nosniff" };
         if (mime === "image/svg+xml" || mime === "text/html") headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:";
         res.writeHead(200, headers);
         return res.end(data);

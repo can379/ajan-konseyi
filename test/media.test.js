@@ -18,3 +18,16 @@ test("ortak medya katmanı tüm sağlayıcılara ekleri ulaştırır", () => {
   assert.equal(unsupportedAttachments("claude", [{kind:"video",name:"x.mp4"}]).length, 0);
   assert.equal(unsupportedAttachments("antigravity", [{kind:"audio",name:"x.wav"}]).length, 0);
 });
+
+test("bilinmeyen dosya türleri de hiçbir sağlayıcıda reddedilmez", () => {
+  const unknown = detectMedia(Buffer.from([0,1,2,3]), "ornek.blob");
+  assert.equal(unknown.kind, "file");
+  for (const provider of ["codex", "claude", "antigravity"]) {
+    assert.equal(unsupportedAttachments(provider, [unknown]).length, 0);
+  }
+});
+
+test("sunum ve yaygın arşiv türleri doğru sınıflandırılır", () => {
+  assert.equal(detectMedia(Buffer.from("x"), "sunum.pptx").kind, "document");
+  assert.equal(detectMedia(Buffer.from("x"), "paket.7z").kind, "archive");
+});
