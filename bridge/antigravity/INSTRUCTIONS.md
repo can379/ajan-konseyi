@@ -39,3 +39,11 @@ Kurallar:
   Claude Code veya Codex'e yeniden atar.
 - Bu köprü hiçbir oturum bilgisi okumaz veya iletmez; yalnızca görev
   metinleri ve yanıtlar dosya olarak taşınır.
+
+## Kalıcı bağlantı ipucu (önerilir)
+
+Sohbet ajanının izleme döngüsü, sohbet turu bitince durur. Bağlantının
+kalıcı olması için Antigravity'nin **Scheduled Tasks** özelliğini kullanın:
+"Her 5 dakikada bir /Users/selim/Desktop/ajan/bridge/antigravity/inbox klasörünü kontrol et; yeni .md görevlerini
+işle, yanıtları outbox'a yaz ve outbox/heartbeat.txt'yi güncelle" şeklinde
+zamanlanmış bir görev oluşturun. Böylece köprü sürekli canlı kalır.

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { BaseAgent } from "./base.js";
 import { uid, sleep, now } from "../util.js";
 
@@ -23,11 +24,33 @@ export class AntigravityAgent extends BaseAgent {
     this.updateBridgeStatus();
   }
 
+  // Antigravity uygulaması açık mı? (20 sn önbellekli süreç kontrolü)
+  appRunning() {
+    const t = Date.now();
+    if (t - (this._appChkAt || 0) < 20_000) return this._appChk;
+    this._appChkAt = t;
+    try {
+      const r = spawnSync("pgrep", ["-f", "Antigravity.app/Contents/MacOS/Antigravity"], { timeout: 3000 });
+      this._appChk = r.status === 0;
+    } catch {
+      this._appChk = false;
+    }
+    return this._appChk;
+  }
+
   isConnected() {
-    // Köprü, son 5 dakika içinde kalp atışı dosyası güncellendiyse bağlı sayılır.
+    // Antigravity'nin sohbet ajanı sürekli çalışamaz; tur bitince izleme durur.
+    // Bu yüzden: kalp atışı taze İSE "köprü aktif", değilse ama UYGULAMA AÇIKSA
+    // yine kullanılabilir sayılır — görev geldiğinde ajan uyuyorsa kullanıcıya
+    // uyandırma bildirimi gider, yanıt gelmezse görev başka üyeye devredilir.
+    return this.isFresh(30 * 60 * 1000) || this.appRunning();
+  }
+
+  // Kalp atışı gerçekten taze mi (ajan şu anda aktif mi)?
+  isFresh(ms = 2 * 60 * 1000) {
     try {
       const st = fs.statSync(path.join(this.outbox, "heartbeat.txt"));
-      return Date.now() - st.mtimeMs < 5 * 60 * 1000;
+      return Date.now() - st.mtimeMs < ms;
     } catch {
       return false;
     }
@@ -35,10 +58,12 @@ export class AntigravityAgent extends BaseAgent {
 
   updateBridgeStatus() {
     if (this.store.agentStatus["antigravity"]?.status === "busy") return;
-    if (this.isConnected()) {
-      this.store.setAgentStatus("antigravity", "idle", "köprü bağlı");
+    if (this.isFresh(5 * 60 * 1000)) {
+      this.store.setAgentStatus("antigravity", "idle", "köprü aktif");
+    } else if (this.appRunning()) {
+      this.store.setAgentStatus("antigravity", "idle", "uygulama açık — görevde bildirimle uyandırılır");
     } else {
-      this.store.setAgentStatus("antigravity", "offline", "köprü bekleniyor — bkz. bridge/antigravity/INSTRUCTIONS.md");
+      this.store.setAgentStatus("antigravity", "offline", "Antigravity kapalı — uygulamayı açın (bkz. köprü talimatı)");
     }
   }
 
@@ -64,8 +89,14 @@ export class AntigravityAgent extends BaseAgent {
     this.log(`görev yazıldı: ${taskFile}`);
 
     const deadline = Date.now() + timeoutMs;
+    let nudged = false;
     while (Date.now() < deadline) {
       if (opts.shouldStop?.()) throw new Error("Koşu durduruldu");
+      // Ajan uyumuş görünüyorsa kullanıcıyı bir kez dürt (10 sn sonra)
+      if (!nudged && Date.now() - (deadline - timeoutMs) > 10_000 && !this.isFresh()) {
+        nudged = true;
+        this.onNeedsAttention?.(taskId);
+      }
       if (fs.existsSync(replyFile)) {
         // Dosya yazımı bitene kadar kısa bekle (yarım dosya okumamak için)
         await sleep(1000);
@@ -131,6 +162,14 @@ Kurallar:
   Claude Code veya Codex'e yeniden atar.
 - Bu köprü hiçbir oturum bilgisi okumaz veya iletmez; yalnızca görev
   metinleri ve yanıtlar dosya olarak taşınır.
+
+## Kalıcı bağlantı ipucu (önerilir)
+
+Sohbet ajanının izleme döngüsü, sohbet turu bitince durur. Bağlantının
+kalıcı olması için Antigravity'nin **Scheduled Tasks** özelliğini kullanın:
+"Her 5 dakikada bir ${abs}/inbox klasörünü kontrol et; yeni .md görevlerini
+işle, yanıtları outbox'a yaz ve outbox/heartbeat.txt'yi güncelle" şeklinde
+zamanlanmış bir görev oluşturun. Böylece köprü sürekli canlı kalır.
 `;
     fs.writeFileSync(path.join(this.bridgeDir, "INSTRUCTIONS.md"), text);
   }

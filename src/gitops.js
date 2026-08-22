@@ -16,6 +16,15 @@ export async function isGitRepo(dir) {
   }
 }
 
+// Git olmayan projeyi (kullanıcı onayından sonra) depoya çevirir
+export async function initRepo(projectDir) {
+  await run("git", ["-C", projectDir, "init", "-b", "main"]);
+  await run("git", ["-C", projectDir, "add", "-A"]);
+  await run("git", ["-C", projectDir, "commit", "-m", "ajan: başlangıç anlık görüntüsü", "--no-verify", "--allow-empty"], {
+    env: { ...process.env, GIT_AUTHOR_NAME: "ajan-konseyi", GIT_AUTHOR_EMAIL: "ajan@local", GIT_COMMITTER_NAME: "ajan-konseyi", GIT_COMMITTER_EMAIL: "ajan@local" },
+  });
+}
+
 export async function createWorktree(projectDir, runsDir, runId, agentName) {
   const branch = `ajan/${runId}/${agentName}`;
   const wtDir = path.join(runsDir, runId, "worktrees", agentName);
@@ -88,5 +97,15 @@ export async function removeWorktrees(projectDir, runsDir, runId) {
       const wt = line.slice("worktree ".length);
       await run("git", ["-C", projectDir, "worktree", "remove", "--force", wt]).catch(() => {});
     }
+  }
+}
+
+// Projenin güncel commit kısaltması (üyeleri aynı sürüme sabitlemek için)
+export async function currentCommit(projectDir) {
+  try {
+    const { stdout } = await run("git", ["-C", projectDir, "rev-parse", "--short", "HEAD"]);
+    return stdout.trim();
+  } catch {
+    return "";
   }
 }

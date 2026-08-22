@@ -128,6 +128,15 @@ body::before {
 .a-dot.error { background: var(--err); }
 .a-dot.offline { background: var(--dim2); }
 .a-name { font-weight: 700; font-size: 13px; flex: 1; }
+.a-name-input {
+  flex: 1; font-weight: 700; font-size: 13px;
+  background: transparent; border: 1px solid transparent; border-radius: 7px;
+  padding: 2px 6px; min-width: 0;
+}
+.a-name-input:hover, .a-name-input:focus { border-color: var(--border); background: var(--surface2); }
+.agent-card .p-del { opacity: .4; }
+.agent-card:hover .p-del { opacity: 1; }
+.coord-card { border-color: rgba(238,195,95,.4); background: rgba(238,195,95,.05); }
 .a-status { font-size: 10.5px; color: var(--dim2); }
 .a-field { display: flex; flex-direction: column; gap: 3px; }
 .a-field label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--dim2); }
@@ -300,18 +309,58 @@ button { font: inherit; cursor: pointer; }
 .msg .m-time { font-size: 10.5px; color: var(--dim2); }
 .msg .m-content {
   background: var(--surface); border: 1px solid var(--border-soft);
-  border-radius: 4px 14px 14px 14px; padding: 11px 14px;
-  white-space: pre-wrap; word-break: break-word; font-size: 13.5px;
-  max-height: 420px; overflow-y: auto; backdrop-filter: blur(8px);
+  border-radius: 4px 14px 14px 14px; padding: 12px 15px;
+  word-break: break-word; font-size: 13.5px; line-height: 1.6;
+  max-height: 480px; overflow-y: auto; backdrop-filter: blur(8px);
 }
-.msg .m-content code {
-  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
-  background: var(--surface2); padding: 1px 5px; border-radius: 5px;
+/* ---- Zengin markdown görünümü (Claude/ChatGPT tarzı) ---- */
+.m-content p { margin: 0 0 10px; }
+.m-content p:last-child, .m-content ul:last-child, .m-content ol:last-child { margin-bottom: 0; }
+.m-content h3, .m-content h4, .m-content h5 {
+  margin: 14px 0 6px; font-weight: 700; letter-spacing: -.2px;
 }
-.msg .m-content pre.code {
+.m-content h3:first-child, .m-content h4:first-child { margin-top: 2px; }
+.m-content h3 { font-size: 16px; }
+.m-content h4 { font-size: 14.5px; }
+.m-content h5 { font-size: 13.5px; color: var(--dim); }
+.m-content ul, .m-content ol { margin: 0 0 10px; padding-left: 22px; }
+.m-content li { margin: 3px 0; }
+.m-content blockquote {
+  border-left: 3px solid var(--acc1); background: rgba(99,102,241,.07);
+  padding: 7px 12px; border-radius: 0 8px 8px 0; margin: 0 0 10px; color: var(--dim);
+}
+.m-content hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.m-content a { color: #93b4fd; }
+.m-content code {
   font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
+  background: var(--surface2); padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--border-soft);
+}
+.m-content .tbl-wrap { overflow-x: auto; margin: 0 0 10px; }
+.m-content table { border-collapse: collapse; font-size: 12.5px; min-width: 60%; }
+.m-content th, .m-content td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.m-content th { background: var(--surface2); font-weight: 700; }
+.m-content .chat-img {
+  max-width: 320px; max-height: 240px; border-radius: 10px;
+  border: 1px solid var(--border); display: block; margin: 6px 0;
+}
+.codeblock {
   background: #0a0e1a; border: 1px solid var(--border-soft);
-  border-radius: 8px; padding: 10px 12px; margin: 6px 0; overflow-x: auto;
+  border-radius: 10px; margin: 8px 0; overflow: hidden;
+}
+.codeblock .cb-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 12px; background: rgba(28,36,57,.6);
+  font-size: 11px; color: var(--dim2); font-weight: 600;
+}
+.codeblock .cb-copy {
+  background: none; border: none; color: var(--dim2); font-size: 11px; cursor: pointer;
+}
+.codeblock .cb-copy:hover { color: var(--text); }
+.codeblock pre {
+  font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px;
+  padding: 10px 13px; margin: 0; overflow-x: auto; line-height: 1.5;
+  white-space: pre; color: #dbe6f5;
 }
 .msg.from-kullanici { flex-direction: row-reverse; }
 .msg.from-kullanici .m-body { display: flex; flex-direction: column; align-items: flex-end; }
@@ -373,6 +422,17 @@ details.task-msg .task-prompt { margin-top: 8px; white-space: pre-wrap; }
 }
 #f-request:focus { box-shadow: none; }
 .send { width: 42px; height: 40px; padding: 0; border-radius: 13px; font-size: 15px; flex: none; }
+.send.stop-mode {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 4px 18px rgba(239,68,68,.4);
+}
+/* canlı yazım balonu */
+.live-msg .m-content { border-style: dashed; }
+.live-msg .caret { color: var(--acc2); animation: pulse .8s infinite; font-weight: 700; }
+.live-msg .lb-live {
+  font-size: 10px; color: var(--warn); border: 1px solid rgba(251,191,36,.4);
+  padding: 0 7px; border-radius: 8px;
+}
 
 /* ================= DETAY PANELİ ================= */
 #details {
@@ -495,6 +555,17 @@ details.task-msg .task-prompt { margin-top: 8px; white-space: pre-wrap; }
   font-size: 9px; color: var(--warn); border: 1px solid rgba(251,191,36,.4);
   padding: 0 6px; border-radius: 8px; animation: pulse 1.2s infinite;
 }
+
+/* ek (görsel) çipleri */
+#attach-chips { display: flex; gap: 8px; flex-wrap: wrap; padding: 2px 4px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 4px 9px; font-size: 12px; color: var(--dim);
+}
+.attach-chip img { width: 26px; height: 26px; object-fit: cover; border-radius: 6px; }
+.attach-chip button { background: none; border: none; color: var(--dim2); cursor: pointer; font-size: 12px; }
+.attach-chip button:hover { color: var(--err); }
 
 /* gelişmiş satırı ek onay kutuları */
 .adv-check {

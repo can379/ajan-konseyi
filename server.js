@@ -35,7 +35,7 @@ function json(res, code, body) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let data = "";
-    req.on("data", (c) => { data += c; if (data.length > 5e6) req.destroy(); });
+    req.on("data", (c) => { data += c; if (data.length > 30e6) req.destroy(); });
     req.on("end", () => {
       try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(e); }
     });
@@ -81,6 +81,37 @@ const server = http.createServer(async (req, res) => {
         efforts: EFFORT_LEVELS,
         home: HOME,
       });
+    }
+
+    // ---- Görsel yükleme: kompozerden eklenen dosyalar uploads/ altına yazılır ----
+    if (req.method === "POST" && p === "/api/upload") {
+      const body = await readBody(req);
+      const name = String(body.name || "gorsel.png").replace(/[^\w.\-]/g, "_").slice(0, 80);
+      const m = String(body.data || "").match(/^data:(image\/\w+);base64,(.+)$/s);
+      if (!m) return json(res, 400, { error: "Yalnızca görsel dosyaları (data URL) kabul edilir" });
+      const buf = Buffer.from(m[2], "base64");
+      if (buf.length > 20e6) return json(res, 400, { error: "Görsel 20MB'dan büyük olamaz" });
+      const upDir = path.join(ROOT, "uploads");
+      fs.mkdirSync(upDir, { recursive: true });
+      const fname = Date.now().toString(36) + "-" + name;
+      const fpath = path.join(upDir, fname);
+      fs.writeFileSync(fpath, buf);
+      return json(res, 200, { path: fpath, url: "/uploads/" + fname, name });
+    }
+
+    // ---- Yüklenen görselleri servis et ----
+    const upMatch = p.match(/^\/uploads\/([\w.\-]+)$/);
+    if (req.method === "GET" && upMatch) {
+      const file = path.join(ROOT, "uploads", upMatch[1]);
+      try {
+        const data = fs.readFileSync(file);
+        const ext = path.extname(file).toLowerCase();
+        const mime = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp" }[ext] || "application/octet-stream";
+        res.writeHead(200, { "Content-Type": mime, "Cache-Control": "max-age=86400" });
+        return res.end(data);
+      } catch {
+        res.writeHead(404); return res.end();
+      }
     }
 
     // ---- Klasör gezgini (yalnızca ev dizini altı, yalnızca dizinler) ----
@@ -154,11 +185,9 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       if (!body.request?.trim()) return json(res, 400, { error: "Görev metni boş olamaz" });
       // Etkin ajanlar ayarlardan gelir; istek gövdesi isterse daraltabilir
-      const enabled = Object.entries(config.data.agents)
-        .filter(([, a]) => a.enabled).map(([n]) => n);
-      const agents = (body.agents?.length ? body.agents : enabled)
-        .filter((a) => enabled.includes(a));
-      if (!agents.length) return json(res, 400, { error: "Etkin ajan yok; kenar çubuğundan en az bir ajanı açın" });
+      const enabled = config.data.members.filter((m) => m.enabled).map((m) => m.id);
+      const agents = enabled;
+      if (!agents.length) return json(res, 400, { error: "Etkin üye yok — kenar çubuğundan üye ekleyin" });
       const project = body.projectId ? config.getProject(body.projectId) : null;
       const run = store.createRun({
         request: body.request.trim(),
@@ -168,18 +197,55 @@ const server = http.createServer(async (req, res) => {
         projectDir: project?.path || body.projectDir?.trim() || null,
         testCommand: body.testCommand?.trim() || null,
         maxDebateRounds: Math.min(Number(body.maxDebateRounds) || 2, 4),
+        attachments: sanitizeAttachments(body.attachments),
       });
       run.testFirst = !!body.testFirst;
       orch.startRun(run);
       return json(res, 200, { runId: run.id });
     }
 
-    // ---- Koşu durdurma ----
+    // ---- Sohbet: yeni sohbet veya mevcut sohbete mesaj ----
+    if (req.method === "POST" && p === "/api/chat") {
+      const body = await readBody(req);
+      const text = String(body.text || "").trim();
+      if (!text) return json(res, 400, { error: "Mesaj boş olamaz" });
+      const enabled = config.data.members.filter((m) => m.enabled).map((m) => m.id);
+      if (!enabled.length) return json(res, 400, { error: "Etkin üye yok — kenar çubuğundan üye ekleyin" });
+
+      let run = body.conversationId ? store.getRun(body.conversationId) : null;
+      if (run && run.kind !== "chat") run = null;
+      if (run?.turnActive) return json(res, 409, { error: "Bu sohbette bir tur zaten çalışıyor; önce durdurun" });
+
+      if (!run) {
+        const project = body.projectId ? config.getProject(body.projectId) : null;
+        run = store.createRun({
+          kind: "chat",
+          request: text,
+          mode: "auto",
+          agents: enabled,
+          projectId: project?.id || null,
+          projectDir: project?.path || null,
+          testCommand: body.testCommand?.trim() || null,
+          maxDebateRounds: Math.min(Number(body.maxDebateRounds) || 2, 4),
+          attachments: [],
+        });
+        run.status = "idle";
+        run.title = text.slice(0, 80);
+      }
+      if (body.testCommand?.trim()) run.testCommand = body.testCommand.trim();
+      run.testFirst = !!body.testFirst;
+      orch.continueChat(run, text, sanitizeAttachments(body.attachments), body.mode || "auto")
+        .catch(() => {});
+      return json(res, 200, { runId: run.id });
+    }
+
+    // ---- Koşu/tur durdurma ----
     const stopMatch = p.match(/^\/api\/runs\/([\w-]+)\/stop$/);
     if (req.method === "POST" && stopMatch) {
       const run = store.getRun(stopMatch[1]);
       if (!run) return json(res, 404, { error: "Koşu bulunamadı" });
-      orch.stopRun(run);
+      if (run.kind === "chat") orch.stopTurn(run);
+      else orch.stopRun(run);
       return json(res, 200, { ok: true });
     }
 
@@ -222,7 +288,7 @@ const server = http.createServer(async (req, res) => {
       if (!run) return json(res, 404, { error: "Koşu bulunamadı" });
       const body = await readBody(req);
       if (!body.to || !body.content?.trim()) return json(res, 400, { error: "to ve content gerekli" });
-      orch.directMessage(run, body.to, body.content.trim()).catch(() => {});
+      orch.directMessage(run, body.to, body.content.trim(), sanitizeAttachments(body.attachments)).catch(() => {});
       return json(res, 200, { ok: true });
     }
 
@@ -235,7 +301,7 @@ const server = http.createServer(async (req, res) => {
       if (!task) return json(res, 404, { error: "Görev bulunamadı" });
       if (task.status !== "pending") return json(res, 409, { error: "Görev zaten başladı; yeniden atanamaz" });
       const body = await readBody(req);
-      if (!["claude", "codex", "antigravity"].includes(body.assignee)) return json(res, 400, { error: "Geçersiz ajan" });
+      if (!config.data.members.some((m) => m.id === body.assignee)) return json(res, 400, { error: "Geçersiz üye" });
       task.assignee = body.assignee;
       store.updateRun(run);
       store.addMessage(run, { from: "kullanici", kind: "info", taskId: task.id, content: `Görev kullanıcı tarafından ${body.assignee} üyesine atandı.` });
@@ -271,6 +337,16 @@ const server = http.createServer(async (req, res) => {
     json(res, 500, { error: String(err.message || err) });
   }
 });
+
+// Yalnızca bizim uploads/ klasörümüzdeki dosyalar ek olarak kabul edilir
+function sanitizeAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  const upDir = path.join(ROOT, "uploads") + path.sep;
+  return list
+    .filter((a) => a && typeof a.path === "string" && path.resolve(a.path).startsWith(upDir) && fs.existsSync(a.path))
+    .map((a) => ({ path: path.resolve(a.path), url: String(a.url || ""), name: String(a.name || "") }))
+    .slice(0, 8);
+}
 
 function serveFile(res, file) {
   try {

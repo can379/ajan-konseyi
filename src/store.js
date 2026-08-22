@@ -24,10 +24,17 @@ export class Store extends EventEmitter {
       try {
         const run = JSON.parse(fs.readFileSync(file, "utf8"));
         if (run.status === "running") {
-          // Sunucu yeniden başladı; koşu kesildi ama kaldığı yerden devam ettirilebilir
-          run.status = "interrupted";
-          run.phase = "interrupted";
+          if (run.kind === "chat") {
+            // Sohbetler kesintiden etkilenmez; yarım kalan tur düşer, sohbet sürer
+            run.status = "idle";
+            run.phase = "idle";
+          } else {
+            // Sunucu yeniden başladı; koşu kesildi ama kaldığı yerden devam ettirilebilir
+            run.status = "interrupted";
+            run.phase = "interrupted";
+          }
           run.stopRequested = false;
+          run.turnActive = false;
         }
         // Eski kayıtlarda olmayan alanları tamamla
         run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null;
@@ -56,10 +63,11 @@ export class Store extends EventEmitter {
   }
 
   // ---- Koşular ----
-  createRun({ request, mode, agents, projectId, projectDir, testCommand, maxDebateRounds }) {
+  createRun({ request, mode, agents, projectId, projectDir, testCommand, maxDebateRounds, attachments, kind }) {
     const id = uid("run-");
     const run = {
       id,
+      kind: kind || "task",   // "chat": kalıcı sohbet, "task": tek seferlik koşu
       request,
       mode: mode || "auto",
       agents,
@@ -67,6 +75,7 @@ export class Store extends EventEmitter {
       projectDir: projectDir || null,
       testCommand: testCommand || null,
       maxDebateRounds: maxDebateRounds ?? 2,
+      attachments: attachments || [],   // {path, url, name} — kullanıcının eklediği görseller
       status: "running",       // running | done | stopped | failed
       phase: "planning",
       tasks: [],               // {id,title,assignee,prompt,status,result,dependsOn,startedAt,endedAt}
@@ -113,11 +122,13 @@ export class Store extends EventEmitter {
   }
 
   // ---- Mesajlar (ortak konuşma alanı) ----
-  addMessage(run, { from, kind = "message", taskId = null, content }) {
+  addMessage(run, { from, fromLabel = null, provider = null, kind = "message", taskId = null, content }) {
     const msg = {
-      id: uid("m-"),
+      id: uid("msg-"),
       ts: now(),
-      from,               // kullanici | koordinator | claude | codex | antigravity | sistem
+      from,               // üye id'si | kullanici | koordinator | sistem
+      fromLabel,          // üyenin görünen adı (örn. "Codex Mimar 2")
+      provider,           // üyenin sağlayıcısı (renk için): claude | codex | antigravity
       kind,               // message | task | result | review | debate | vote | decision | error | info
       taskId,
       content: truncate(String(content ?? ""), 16000),

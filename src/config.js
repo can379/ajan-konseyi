@@ -4,14 +4,18 @@ import { uid, now } from "./util.js";
 
 // Kalıcı kullanıcı ayarları: ajan başına model/rol/etkinlik ve proje listesi.
 // config.json proje kökünde tutulur; oturum bilgisi veya anahtar İÇERMEZ.
+export const PROVIDERS = ["claude", "codex", "antigravity"];
+
 const DEFAULTS = {
-  agents: {
-    // parallel: aynı anda kaç kopya (worker) çalışabilir (1-4)
-    // effort: çaba seviyesi ("" = varsayılan, sinirli/orta/yuksek/cokyuksek/ultra)
-    claude:      { enabled: true, model: "", role: "auto", parallel: 1, effort: "" },
-    codex:       { enabled: true, model: "", role: "auto", parallel: 1, effort: "" },
-    antigravity: { enabled: true, model: "", role: "auto", parallel: 1, effort: "" },
-  },
+  // Konsey üyeleri: her üye bir sağlayıcı (CLI) üzerinde ayrı bir kişiliktir.
+  // İstenildiği kadar üye eklenebilir: örn. 3 Codex mimar + 1 Claude denetçi.
+  members: [
+    { id: "m-claude", name: "Claude", provider: "claude", role: "auto", model: "", effort: "", enabled: true },
+    { id: "m-codex", name: "Codex", provider: "codex", role: "auto", model: "", effort: "", enabled: true },
+    { id: "m-antigravity", name: "Antigravity", provider: "antigravity", role: "auto", model: "", effort: "", enabled: true },
+  ],
+  // Koordinatörün hangi yapay zekâ olacağına kullanıcı karar verir
+  coordinator: { provider: "claude", model: "", effort: "" },
   projects: [],      // {id, name, path, createdAt}
   activeProject: null,
   smartModels: true,   // koordinatör alt görev zorluğuna göre model kademesi seçer
@@ -36,18 +40,49 @@ export class Config {
   load() {
     try {
       const saved = JSON.parse(fs.readFileSync(this.file, "utf8"));
-      this.data = {
-        ...structuredClone(DEFAULTS),
-        ...saved,
-        agents: {
-          claude: { ...DEFAULTS.agents.claude, ...saved.agents?.claude },
-          codex: { ...DEFAULTS.agents.codex, ...saved.agents?.codex },
-          antigravity: { ...DEFAULTS.agents.antigravity, ...saved.agents?.antigravity },
-        },
-      };
+      this.data = { ...structuredClone(DEFAULTS), ...saved };
+      // Eski sürümden geçiş: agents nesnesi vardı, members listesi yoktu
+      if (!Array.isArray(saved.members) && saved.agents) {
+        this.data.members = PROVIDERS.map((prov) => {
+          const old = saved.agents[prov] || {};
+          return {
+            id: "m-" + prov,
+            name: prov === "claude" ? "Claude" : prov === "codex" ? "Codex" : "Antigravity",
+            provider: prov,
+            role: old.role || "auto",
+            model: old.model || "",
+            effort: old.effort || "",
+            enabled: old.enabled !== false,
+          };
+        });
+      }
+      this.data.members = this.sanitizeMembers(this.data.members);
+      this.data.coordinator = this.sanitizeCoordinator(this.data.coordinator);
+      delete this.data.agents; // eski alan artık kullanılmıyor
     } catch {
       // dosya yoksa varsayılanlar geçerli
     }
+  }
+
+  sanitizeMembers(list) {
+    if (!Array.isArray(list) || !list.length) return structuredClone(DEFAULTS.members);
+    return list.slice(0, 12).map((m, i) => ({
+      id: String(m.id || uid("m-")).slice(0, 24),
+      name: String(m.name || "Üye " + (i + 1)).slice(0, 40),
+      provider: PROVIDERS.includes(m.provider) ? m.provider : "claude",
+      role: ROLES[m.role] ? m.role : "auto",
+      model: String(m.model || "").slice(0, 80),
+      effort: ["", "sinirli", "orta", "yuksek", "cokyuksek", "ultra"].includes(m.effort) ? m.effort : "",
+      enabled: m.enabled !== false,
+    }));
+  }
+
+  sanitizeCoordinator(c) {
+    return {
+      provider: PROVIDERS.includes(c?.provider) ? c.provider : "claude",
+      model: String(c?.model || "").slice(0, 80),
+      effort: ["", "sinirli", "orta", "yuksek", "cokyuksek", "ultra"].includes(c?.effort) ? c.effort : "",
+    };
   }
 
   save() {
@@ -55,18 +90,11 @@ export class Config {
   }
 
   update(patch) {
-    if (patch.agents) {
-      for (const [name, a] of Object.entries(patch.agents)) {
-        if (this.data.agents[name]) {
-          Object.assign(this.data.agents[name], {
-            enabled: !!a.enabled,
-            model: String(a.model || "").slice(0, 80),
-            role: ROLES[a.role] ? a.role : "auto",
-            parallel: Math.min(4, Math.max(1, Number(a.parallel) || 1)),
-            effort: ["", "sinirli", "orta", "yuksek", "cokyuksek", "ultra"].includes(a.effort) ? a.effort : "",
-          });
-        }
-      }
+    if (Array.isArray(patch.members)) {
+      this.data.members = this.sanitizeMembers(patch.members);
+    }
+    if (patch.coordinator) {
+      this.data.coordinator = this.sanitizeCoordinator(patch.coordinator);
     }
     if ("activeProject" in patch) this.data.activeProject = patch.activeProject;
     if ("smartModels" in patch) this.data.smartModels = !!patch.smartModels;

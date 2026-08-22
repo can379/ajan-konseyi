@@ -2,20 +2,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { now } from "../util.js";
 
-// Tüm ajan adaptörlerinin ortak temeli.
-// İki çalışma biçimi vardır:
-//  - send():        kalıcı ana oturum; çağrılar sıraya girer (inceleme,
-//                   tartışma, oylama, doğrudan mesaj bu kanaldan gider).
-//  - sendParallel(): görev dağıtımı için "işçi kopyalar"; her kopya TAZE bir
-//                   CLI oturumu açar, aynı anda en çok `parallel` kopya çalışır.
+// Sağlayıcı adaptörlerinin ortak temeli (claude / codex / antigravity).
+// Konsey ÜYELERİ bu sağlayıcılar üzerinde ayrı oturumlarla yaşar:
+// sessionKey = "<runId>#<memberId>" — her üyenin bağlamı ayrıdır.
+// Aynı üyeye çağrılar sıraya girer; FARKLI üyeler aynı sağlayıcıda
+// paralel çalışır (sağlayıcı başına eşzamanlılık sınırıyla).
+const PROVIDER_CONCURRENCY = 4;
+
 export class BaseAgent {
   constructor(name, store, rootDir) {
     this.name = name;
     this.store = store;
     this.rootDir = rootDir;
-    this.sessionId = null;       // ana oturum; koşu başına sıfırlanır
-    this.queue = Promise.resolve();
-    this.children = new Set();   // canlı alt süreçler (durdurma için)
+    this.sessions = new Map();   // sessionKey -> CLI oturum kimliği
+    this.queues = new Map();     // sessionKey -> sıra zinciri
+    this.children = new Set();   // canlı alt süreçler (sessionKey etiketli)
     this.busyCount = 0;
     this._sem = { active: 0, waiters: [] };
     this.cooldownUntil = 0;      // kota/limit hatasında geçici dinlenme
@@ -25,7 +26,31 @@ export class BaseAgent {
     store.setAgentStatus(name, "idle");
   }
 
-  // Kota/hız limiti hatası mı? Öyleyse ajanı 10 dk soğutmaya al.
+  log(text) {
+    fs.appendFileSync(this.logFile, `[${now()}] ${text}\n`);
+  }
+
+  // ---- Oturum yönetimi ----
+  getSession(opts) {
+    return this.sessions.get(opts?.sessionKey || "global") || null;
+  }
+
+  setSession(opts, id) {
+    if (id) this.sessions.set(opts?.sessionKey || "global", id);
+  }
+
+  clearSession(opts) {
+    this.sessions.delete(opts?.sessionKey || "global");
+  }
+
+  resetSession(keyPrefix) {
+    if (!keyPrefix) { this.sessions.clear(); return; }
+    for (const k of [...this.sessions.keys()]) {
+      if (k === keyPrefix || k.startsWith(keyPrefix + "#")) this.sessions.delete(k);
+    }
+  }
+
+  // ---- Kota / durum ----
   _checkQuota(errMsg) {
     if (/rate.?limit|quota|kota|429|too many|limit (reached|exceeded)|usage limit/i.test(errMsg)) {
       this.cooldownUntil = Date.now() + 10 * 60 * 1000;
@@ -41,33 +66,26 @@ export class BaseAgent {
   }
 
   // Canlı akış: kısmi çıktıyı en fazla ~600ms'de bir SSE'ye gönder
-  progress(label, text) {
-    this._streamBuf = text;
+  progress(label, text, memberId = null) {
+    this._streamBuf = { label, text, memberId };
     if (this._streamTimer) return;
     this._streamTimer = setTimeout(() => {
       this._streamTimer = null;
-      this.store.streamProgress(this.name, label, this._streamBuf);
+      const b = this._streamBuf;
+      this.store.streamProgress(b.memberId || this.name, b.label, b.text);
     }, 600);
-  }
-
-  log(text) {
-    fs.appendFileSync(this.logFile, `[${now()}] ${text}\n`);
-  }
-
-  resetSession() {
-    this.sessionId = null;
   }
 
   _setBusy() {
     this.busyCount++;
-    const detail = this.busyCount > 1 ? `${this.busyCount} kopya çalışıyor` : "";
+    const detail = this.busyCount > 1 ? `${this.busyCount} çağrı çalışıyor` : "";
     this.store.setAgentStatus(this.name, "busy", detail);
   }
 
   _setFree(errored, errMsg) {
     this.busyCount = Math.max(0, this.busyCount - 1);
     if (this.busyCount > 0) {
-      this.store.setAgentStatus(this.name, "busy", `${this.busyCount} kopya çalışıyor`);
+      this.store.setAgentStatus(this.name, "busy", `${this.busyCount} çağrı çalışıyor`);
     } else if (errored) {
       this.store.setAgentStatus(this.name, "error", errMsg || "");
     } else {
@@ -75,31 +93,18 @@ export class BaseAgent {
     }
   }
 
-  // Ana oturum: çağrılar sıraya girer, bağlam korunur
+  // ---- Çağrı: üye başına sıra, sağlayıcı başına sınırlı paralellik ----
   send(prompt, opts = {}) {
-    const job = this.queue.then(() => this._run(prompt, opts));
-    this.queue = job.then(() => {}, () => {});
+    const key = opts.sessionKey || "global";
+    const prev = this.queues.get(key) || Promise.resolve();
+    const job = prev.then(() => this._run(prompt, opts));
+    this.queues.set(key, job.then(() => {}, () => {}));
     return job;
   }
 
-  // İşçi kopya: taze oturum, semafor ile sınırlı paralellik
-  async sendParallel(prompt, opts = {}) {
-    const max = Math.max(1, this.getParallel?.() || 1);
-    if (max <= 1) return this.send(prompt, opts);
-    await this._acquire(max);
-    this._setBusy();
-    try {
-      const result = await this.invoke(prompt, { ...opts, fresh: true });
-      this._setFree(false);
-      return result;
-    } catch (err) {
-      const msg = String(err.message || err);
-      this._checkQuota(msg);
-      this._setFree(true, msg);
-      return { ok: false, text: "", error: msg };
-    } finally {
-      this._release();
-    }
+  // Geriye dönük uyumluluk: artık send ile aynı (üyeler doğal paralellik sağlar)
+  sendParallel(prompt, opts = {}) {
+    return this.send(prompt, opts);
   }
 
   async _acquire(max) {
@@ -116,6 +121,7 @@ export class BaseAgent {
   }
 
   async _run(prompt, opts) {
+    await this._acquire(PROVIDER_CONCURRENCY);
     this._setBusy();
     try {
       const result = await this.invoke(prompt, opts);
@@ -123,22 +129,27 @@ export class BaseAgent {
       return result;
     } catch (err) {
       const msg = String(err.message || err);
-      this._checkQuota(msg);
-      this._setFree(true, msg);
+      // Kullanıcının durdurması hata değildir; çip kırmızıya düşmesin
+      const stopped = opts.shouldStop?.() === true;
+      if (!stopped) this._checkQuota(msg);
+      this._setFree(!stopped, stopped ? "" : msg);
       return { ok: false, text: "", error: msg };
+    } finally {
+      this._release();
     }
   }
 
   // Alt sınıflar uygular: { ok, text, error? } döndürür.
-  // opts.fresh doğruysa ana oturuma DOKUNMADAN taze oturum kullanmalıdır.
   async invoke(_prompt, _opts) {
     throw new Error("invoke() alt sınıfta uygulanmalı");
   }
 
-  stop() {
+  // key verilirse yalnız o sohbetin/üyenin süreçleri öldürülür
+  stop(key) {
     for (const child of this.children) {
+      if (key && child._sessionKey && !child._sessionKey.startsWith(key)) continue;
       try { child.kill("SIGTERM"); } catch {}
+      this.children.delete(child);
     }
-    this.children.clear();
   }
 }

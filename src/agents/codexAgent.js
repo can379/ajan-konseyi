@@ -21,6 +21,8 @@ export class CodexAgent extends BaseAgent {
     try {
       return await this._invoke(prompt, opts);
     } catch (err) {
+      // Kullanıcı durdurduysa ASLA yeniden deneme
+      if (opts.shouldStop?.()) throw err;
       // Seçili model/çaba tanınmıyorsa varsayılan ayarlarla bir kez dene
       const model = opts.model ?? this.getModel?.();
       const effort = opts.effort ?? this.getEffort?.();
@@ -42,15 +44,19 @@ export class CodexAgent extends BaseAgent {
     if (effort && CODEX_EFFORT[effort]) {
       common.push("-c", `model_reasoning_effort="${CODEX_EFFORT[effort]}"`);
     }
+    for (const img of opts.images || []) {
+      common.push("-i", img);
+    }
 
     // Dikkat: "exec resume" alt komutu --sandbox ve -C bayraklarını KABUL ETMEZ;
     // resume'da sandbox -c config anahtarıyla verilir, çalışma dizini oturumda kalır.
     const freshArgs = ["exec", ...common, "--sandbox", sandbox];
     if (opts.cwd) freshArgs.push("-C", opts.cwd);
 
-    const useResume = this.sessionId && !opts.fresh;
+    const sess = opts.fresh ? null : this.getSession(opts);
+    const useResume = !!sess;
     let args = useResume
-      ? ["exec", "resume", this.sessionId, ...common, "-c", `sandbox_mode="${sandbox}"`]
+      ? ["exec", "resume", sess, ...common, "-c", `sandbox_mode="${sandbox}"`]
       : freshArgs;
 
     // Canlı akış: olaylar geldikçe kısmi çıktıyı yayınla
@@ -60,7 +66,7 @@ export class CodexAgent extends BaseAgent {
       let ev;
       try { ev = JSON.parse(line); } catch { return; }
       if (ev.type === "thread.started" && ev.thread_id && !opts.fresh) {
-        this.sessionId = ev.thread_id;
+        this.setSession(opts, ev.thread_id);
       } else if (ev.type === "item.completed" && ev.item) {
         if (ev.item.type === "agent_message") {
           text = ev.item.text || text;
@@ -70,21 +76,22 @@ export class CodexAgent extends BaseAgent {
         } else if (ev.item.type === "reasoning" && ev.item.text) {
           live += `\n💭 ${String(ev.item.text).slice(0, 200)}`;
         }
-        this.progress(opts.label || "", live);
+        this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.type === "turn.completed" && ev.usage) {
         usage = ev.usage;
       }
     };
 
-    let result = await this.spawnCollect(this.bin, args, prompt, opts.timeoutMs, onLine);
+    let result = await this.spawnCollect(this.bin, args, prompt, opts.timeoutMs, onLine, opts.sessionKey);
     if (result.timedOut) throw new Error("Codex çağrısı zaman aşımına uğradı");
 
     // Resume başarısız olursa (oturum bulunamadı vb.) taze oturumla tekrar dene
     if (result.code !== 0 && useResume) {
+      if (opts.shouldStop?.()) throw new Error("Durduruldu");
       this.log("codex resume başarısız, yeni oturum deneniyor");
-      this.sessionId = null;
+      this.clearSession(opts);
       live = ""; text = "";
-      result = await this.spawnCollect(this.bin, freshArgs, prompt, opts.timeoutMs, onLine);
+      result = await this.spawnCollect(this.bin, freshArgs, prompt, opts.timeoutMs, onLine, opts.sessionKey);
       if (result.timedOut) throw new Error("Codex çağrısı zaman aşımına uğradı");
     }
     if (result.code !== 0) {
@@ -104,17 +111,18 @@ export class CodexAgent extends BaseAgent {
       output: usage.output_tokens || 0,
       costUsd: 0,
     } : null;
-    if (normUsage) this.onUsage?.(normUsage);
-    return { ok: true, text, raw: { thread_id: this.sessionId, usage: normUsage } };
+    if (normUsage) (opts.onUsage || this.onUsage)?.(normUsage);
+    return { ok: true, text, raw: { thread_id: this.getSession(opts), usage: normUsage } };
   }
 
-  spawnCollect(bin, args, stdinText, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null) {
+  spawnCollect(bin, args, stdinText, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null, sessionKey = null) {
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, {
         cwd: this.rootDir,
         env: cleanEnv(),
         stdio: ["pipe", "pipe", "pipe"],
       });
+      child._sessionKey = sessionKey || null;
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
       const timer = setTimeout(() => {

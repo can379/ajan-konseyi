@@ -13,24 +13,87 @@ import * as gitops from "./gitops.js";
 
 const exec = promisify(execFile);
 
+// Orkestratör: konsey ÜYELERİNİ (kullanıcının tanımladığı, her biri bir
+// sağlayıcıya bağlı kişilikler) yönetir. Üye sayısı serbesttir: 3 Codex mimar,
+// 1 Claude denetçi vb. Koordinatörün sağlayıcısını da kullanıcı seçer.
 export class Orchestrator {
   constructor(store, rootDir, config) {
     this.store = store;
     this.rootDir = rootDir;
     this.config = config;
     this.projectContext = new ProjectContext(rootDir);
-    this.agents = {
+    this.providers = {
       claude: new ClaudeAgent(store, rootDir),
       codex: new CodexAgent(store, rootDir),
       antigravity: new AntigravityAgent(store, rootDir),
     };
-    for (const name of Object.keys(this.agents)) {
-      this.agents[name].getModel = () => this.config?.data.agents[name]?.model || "";
-      this.agents[name].getParallel = () => this.config?.data.agents[name]?.parallel || 1;
-      this.agents[name].getEffort = () => this.config?.data.agents[name]?.effort || "";
-    }
-    this.coordinator = new Coordinator(store, rootDir);
-    setInterval(() => this.agents.antigravity.updateBridgeStatus(), 30_000);
+    this.agents = this.providers; // geriye dönük uyumluluk
+    this.coordinator = new Coordinator(store, this.providers, () => this.config.data.coordinator);
+    this.providers.antigravity.onNeedsAttention = () => {
+      this.notify("Ajan Konseyi 🔔", "Antigravity görev bekliyor — Antigravity'de ajana 'inbox'u kontrol et' deyin");
+    };
+    setInterval(() => this.providers.antigravity.updateBridgeStatus(), 30_000);
+  }
+
+  // ---- Üyeler ----
+  members() {
+    return this.config.data.members || [];
+  }
+
+  memberById(id) {
+    return this.members().find((m) => m.id === id) || null;
+  }
+
+  providerAvailable(prov) {
+    const p = this.providers[prov];
+    if (!p || !p.isAvailable()) return false;
+    if (prov === "antigravity") return p.isConnected();
+    return true;
+  }
+
+  availableMembers() {
+    return this.members().filter((m) => m.enabled && this.providerAvailable(m.provider));
+  }
+
+  // Antigravity ajanı şu anda fiilen izleme yapıyor mu? (taze kalp atışı)
+  antigravitySleeping() {
+    return !this.providers.antigravity.isFresh?.(2 * 60 * 1000);
+  }
+
+  memberListText(list) {
+    return list.map((m) =>
+      `- ${m.id} | ${m.name} | ${m.provider} | rol=${m.role}${m.model ? ` | model=${m.model}` : ""}` +
+      (m.provider === "antigravity" && this.antigravitySleeping() ? " | (şu an uyuyor, yanıtı gecikebilir — zorunlu değilse seçme)" : "")
+    ).join("\n");
+  }
+
+  sessionKeyFor(run, member) {
+    return `${run.id}#${member.id}`;
+  }
+
+  // Üye çağrısı: durum rozetini yönetir, kullanım verisini üyeye yazar
+  async callMember(run, member, prompt, opts = {}) {
+    const provider = this.providers[member.provider];
+    this.store.setAgentStatus(member.id, "busy", opts.label || "");
+    const res = await provider.send(prompt, {
+      ...opts,
+      sessionKey: this.sessionKeyFor(run, member),
+      memberId: member.id,
+      model: member.model || opts.tierModel || undefined,
+      effort: member.effort || undefined,
+      onUsage: (u) => this.accumUsage(run, member.id, u),
+    });
+    const stopped = run.stopRequested;
+    this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
+      res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
+    return res;
+  }
+
+  memberMsg(run, member, kind, content, taskId = null) {
+    this.store.addMessage(run, {
+      from: member.id, fromLabel: member.name, provider: member.provider,
+      kind, taskId, content,
+    });
   }
 
   // ---- macOS bildirimi ----
@@ -52,7 +115,6 @@ export class Orchestrator {
       health.claude = { ok: false, detail: "claude CLI çalışmıyor: " + String(e.message).slice(0, 120) };
     }
     try {
-      // codex login status çıktıyı stderr'e yazar; ikisini birlikte değerlendir
       const r = await exec("codex", ["login", "status"], { timeout: 15000 });
       const out = ((r.stdout || "") + (r.stderr || "")).trim();
       const ok = /logged in/i.test(out) && !/not logged in/i.test(out);
@@ -62,20 +124,11 @@ export class Orchestrator {
       health.codex = { ok: false, detail: out ? out.split("\n")[0] : "codex CLI çalışmıyor: " + String(e.message).slice(0, 120) };
     }
     health.antigravity = {
-      ok: this.agents.antigravity.isConnected(),
-      detail: this.agents.antigravity.isConnected() ? "köprü bağlı" : "köprü bekleniyor (isteğe bağlı)",
+      ok: this.providers.antigravity.isConnected(),
+      detail: this.providers.antigravity.isConnected() ? "köprü bağlı" : "köprü bekleniyor (isteğe bağlı)",
     };
     this.store.setHealth(health);
     return health;
-  }
-
-  availableAgents(run) {
-    return run.agents.filter((name) => {
-      const a = this.agents[name];
-      if (!a || !a.isAvailable()) return false;
-      if (name === "antigravity") return a.isConnected();
-      return true;
-    });
   }
 
   // ---- Kullanım (token) takibi ----
@@ -91,15 +144,31 @@ export class Orchestrator {
     this.store.saveRun(run);
   }
 
-  bindUsage(run) {
-    for (const [name, agent] of Object.entries(this.agents)) {
-      agent.onUsage = (u) => this.accumUsage(run, name, u);
+  // ---- Oturum kalıcılığı (restart sonrası sohbet hafızası) ----
+  persistSessions(run) {
+    run.sessions = {};
+    for (const [prov, agent] of Object.entries(this.providers)) {
+      for (const [key, id] of agent.sessions) {
+        if (key.startsWith(run.id + "#") || key === run.id) {
+          run.sessions[key] = { provider: prov, id };
+        }
+      }
     }
-    this.coordinator.agent.onUsage = (u) => this.accumUsage(run, "koordinator", u);
+    this.store.saveRun(run);
+  }
+
+  restoreSessions(run) {
+    for (const [key, val] of Object.entries(run.sessions || {})) {
+      if (val?.provider && val?.id) {
+        this.providers[val.provider]?.sessions.set(key, val.id);
+      }
+    }
   }
 
   startRun(run) {
-    this.runPipeline(run, false).catch((err) => this.failRun(run, err));
+    this.runPipeline(run, false)
+      .catch((err) => this.failRun(run, err))
+      .finally(() => this.persistSessions(run));
   }
 
   resumeRun(run) {
@@ -109,7 +178,9 @@ export class Orchestrator {
     run.stopRequested = false;
     this.store.updateRun(run, { status: "running" });
     this.store.addMessage(run, { from: "sistem", kind: "info", content: "Koşu kaldığı yerden devam ettiriliyor." });
-    this.runPipeline(run, true).catch((err) => this.failRun(run, err));
+    this.runPipeline(run, true)
+      .catch((err) => this.failRun(run, err))
+      .finally(() => this.persistSessions(run));
   }
 
   failRun(run, err) {
@@ -117,98 +188,228 @@ export class Orchestrator {
       from: "sistem", kind: "error",
       content: "Koşu hatayla sonlandı: " + String(err.message || err),
     });
-    this.store.updateRun(run, { status: "failed", error: String(err.message || err) });
+    this.store.updateRun(run, { status: run.kind === "chat" ? "idle" : "failed", error: String(err.message || err) });
     this.notify("Ajan Konseyi", "Koşu hatayla durdu");
   }
 
   checkStop(run) {
-    if (run.stopRequested) throw new Error("Kullanıcı koşuyu durdurdu");
+    if (run.stopRequested) throw new Error("Kullanıcı durdurdu");
   }
 
-  // Akıllı model eşleme: kullanıcı "Otomatik" seçtiyse görev kademesine göre model
-  pickModel(agentName, tier) {
-    const cfg = this.config?.data;
-    if (!cfg?.smartModels) return undefined;
-    if (cfg.agents[agentName]?.model) return undefined; // kullanıcının seçimi önce gelir
-    return TIER_MAP[agentName]?.[tier] || undefined;
+  // Koordinatör çağrıları için koşuya özgü bağlam (durumsuz Coordinator)
+  coordCtx(run) {
+    return {
+      runId: run.id,
+      stopCheck: () => run.stopRequested,
+      onUsage: (u) => this.accumUsage(run, "koordinator", u),
+    };
   }
 
-  // ================= ANA BORU HATTI =================
-  async runPipeline(run, resume = false) {
+  pickTierModel(provider, tier) {
+    if (!this.config?.data.smartModels) return undefined;
+    return TIER_MAP[provider]?.[tier] || undefined;
+  }
+
+  // ================= SOHBET TURU =================
+  async continueChat(run, text, attachments = [], mode = "auto") {
     const S = this.store;
-    this.bindUsage(run);
+    if (run.turnActive) throw new Error("Bu sohbette bir tur zaten çalışıyor; önce durdurun");
+    run.turnActive = true;
+    run.stopRequested = false;
+    run.request = text;
+    run.attachments = attachments;
+    run.reviews = [];
+    run.votes = [];
+    run.verify = null;
+    S.updateRun(run, { status: "running", phase: "thinking" });
+    const ctx = this.coordCtx(run);
+    this.restoreSessions(run);
 
-    if (!resume) {
-      S.addMessage(run, { from: "kullanici", kind: "message", content: run.request });
-      this.coordinator.resetSession();
-      for (const a of Object.values(this.agents)) a.resetSession();
+    const attachNote = attachments.length
+      ? "\n\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n")
+      : "";
+    S.addMessage(run, { from: "kullanici", kind: "message", content: text + attachNote });
+
+    try {
+      const avail = this.availableMembers();
+      if (!avail.length) throw new Error("Ulaşılabilir üye yok (kenar çubuğundan üyeleri kontrol edin)");
+
+      let route;
+      if (mode !== "auto") {
+        route = { approach: "council", mode };
+      } else {
+        route = await this.coordinator.routeTurn(run, this.memberListText(avail), ctx);
+        this.checkStop(run);
+      }
+
+      if (route.approach === "quick") {
+        let member = avail.find((m) => m.id === route.member_id) || avail[0];
+        // Antigravity uyuyorsa sohbet bekletilmez: yanıt başka üyeden gelir
+        if (member.provider === "antigravity" && this.antigravitySleeping()) {
+          const alt = avail.find((m) => m.provider !== "antigravity");
+          if (alt) {
+            S.addMessage(run, {
+              from: "sistem", kind: "info",
+              content: `${member.name} (Antigravity) şu an uyuyor; yanıtı ${alt.name} veriyor. Antigravity'yi uyandırmak için uygulamasında ajana "inbox'u kontrol et" deyin.`,
+            });
+            member = alt;
+          }
+        }
+        await this.quickReply(run, member, text, attachments);
+      } else {
+        run.mode = ["discussion", "split", "code"].includes(route.mode) ? route.mode : "discussion";
+        run.tasks = [];
+        await this.runPipeline(run, false, true);
+      }
+    } catch (err) {
+      if (!run.stopRequested) {
+        S.addMessage(run, { from: "sistem", kind: "error", content: "Tur hatayla bitti: " + String(err.message || err) });
+      }
+    } finally {
+      run.turnActive = false;
+      this.persistSessions(run);
+      S.updateRun(run, { status: "idle", phase: "idle" });
+      if (!run.stopRequested) this.notify("Ajan Konseyi ✓", "Yanıt hazır");
+    }
+  }
+
+  async quickReply(run, member, text, attachments) {
+    const S = this.store;
+    S.setPhase(run, "answering");
+    const images = attachments.map((a) => a.path).filter((p) => fs.existsSync(p));
+    const imageNote = images.length
+      ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}`
+      : "";
+    const prefixFor = (mem) => {
+      if (this.providers[mem.provider].sessions.get(this.sessionKeyFor(run, mem))) return "";
+      const history = run.messages.slice(-10, -1)
+        .map((m) => `[${m.fromLabel || m.from}]: ${truncate(m.content, 800)}`).join("\n");
+      return `Sen "${mem.name}" adlı konsey üyesisin (${mem.provider}${mem.role !== "auto" ? ", rolün: " + mem.role : ""}); çok üyeli bir yapay zekâ konsey sohbetine katılıyorsun. ` +
+        `Türkçe ve düzgün Markdown ile yanıtla.` +
+        (run.projectDir ? ` Bağlı proje: ${run.projectDir}` : "") +
+        (history ? `\n\nSohbet geçmişi:\n${history}` : "") + "\n\n--- KULLANICININ MESAJI ---\n";
+    };
+    let res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
+      label: "yanıtlıyor",
+      images,
+      cwd: run.projectDir || undefined,
+      // Sohbette Antigravity'ye uzun süre takılı kalınmaz
+      timeoutMs: member.provider === "antigravity" ? 4 * 60 * 1000 : undefined,
+      shouldStop: () => run.stopRequested,
+    });
+    // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
+    if (!res.ok && !run.stopRequested) {
+      const alt = this.availableMembers().find((m) => m.id !== member.id && m.provider !== "antigravity");
+      if (alt) {
+        S.addMessage(run, { from: "sistem", kind: "info", content: `${member.name} yanıt veremedi (${truncate(res.error, 100)}); ${alt.name} devralıyor.` });
+        member = alt;
+        res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
+          label: "yanıtlıyor", images, cwd: run.projectDir || undefined,
+          shouldStop: () => run.stopRequested,
+        });
+      }
+    }
+    if (res.ok) {
+      this.memberMsg(run, member, "message", res.text);
+    } else if (!run.stopRequested) {
+      throw new Error(`${member.name} yanıt veremedi: ${res.error}`);
+    }
+  }
+
+  stopTurn(run) {
+    run.stopRequested = true;
+    for (const p of Object.values(this.providers)) p.stop(run.id);
+    this.store.cancelApprovals(run.id);
+    this.store.setPhase(run, "stopping");
+    this.store.addMessage(run, { from: "sistem", kind: "info", content: "⏹ Durduruldu — düzeltmenizi veya yeni talimatınızı yazabilirsiniz." });
+  }
+
+  // ================= KONSEY BORU HATTI =================
+  async runPipeline(run, resume = false, chatTurn = false) {
+    const S = this.store;
+    const ctx = this.coordCtx(run);
+    this.restoreSessions(run);
+
+    if (!resume && !chatTurn) {
+      const attachNote = run.attachments?.length
+        ? "\n\n" + run.attachments.map((a) => `📎 ${a.url || a.path}`).join("\n")
+        : "";
+      S.addMessage(run, { from: "kullanici", kind: "message", content: run.request + attachNote });
     }
 
-    let available = this.availableAgents(run);
-    if (run.agents.includes("antigravity") && !available.includes("antigravity")) {
-      if (!resume) S.addMessage(run, {
-        from: "sistem", kind: "info",
-        content: "Antigravity köprüsü bağlı değil; görevler Claude ve Codex arasında dağıtılacak.",
-      });
-      available = available.filter((a) => a !== "antigravity");
+    const avail = this.availableMembers();
+    if (!avail.length) throw new Error("Ulaşılabilir üye yok");
+    if (this.members().some((m) => m.enabled && m.provider === "antigravity") &&
+        !avail.some((m) => m.provider === "antigravity") && !resume && !chatTurn) {
+      S.addMessage(run, { from: "sistem", kind: "info", content: "Antigravity köprüsü kapalı; görevler diğer üyelere dağıtılacak." });
     }
-    if (available.length === 0) throw new Error("Ulaşılabilir ajan yok (kota soğutması veya çevrimdışı)");
 
-    // ---- 1. PLANLAMA (devamda görevler zaten varsa atlanır) ----
+    // Üyeleri aynı kod sürümüne sabitle (konsey meta-bulgusu)
+    if (run.projectDir && !run.commitHash) {
+      run.commitHash = await gitops.currentCommit(run.projectDir);
+    }
+
+    // ---- 1. PLANLAMA ----
     if (!resume || run.tasks.length === 0) {
       S.setPhase(run, "planning");
-      const roles = this.config?.data.agents || {};
-      const rolesText = available
-        .map((a) =>
-          `- ${a}: rol=${roles[a]?.role || "auto"}` +
-          (roles[a]?.model ? `, model=${roles[a].model}` : "") +
-          `, paralel kopya sınırı=${roles[a]?.parallel || 1}`)
-        .join("\n") +
-        "\nBir üyeye, paralel kopya sınırına kadar AYNI ANDA çalışacak birden çok bağımsız alt görev atayabilirsin. Kopyalar birbirinin çıktısını görmez; bağımlı işler için depends_on kullan.";
-
-      const plan = await this.coordinator.plan(run, available, {
-        rolesText,
+      const plan = await this.coordinator.plan(run, this.memberListText(avail), {
         historyText: this.projectHistory(run),
         memoryText: this.projectContext.readMemory(run.projectId),
         repoMap: run.projectDir ? await this.projectContext.repoMap(run.projectDir) : "",
         testFirst: run.testFirst,
-      });
+        attachmentsText: run.attachments?.length
+          ? "Kullanıcı şu görselleri ekledi (görevlerde bu dosya yollarını ilgili üyelere ilet):\n" +
+            run.attachments.map((a) => `- ${a.path}`).join("\n")
+          : "",
+      }, ctx);
       this.checkStop(run);
       if (run.mode === "auto") run.mode = plan.mode || "discussion";
-      run.tasks = (plan.subtasks || []).map((t) => ({
-        id: t.id, title: t.title, assignee: t.assignee,
-        prompt: t.prompt, status: "pending", result: null,
-        dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
-        tier: ["fast", "balanced", "strong"].includes(t.model_tier) ? t.model_tier : "balanced",
-      }));
+      run.tasks = (plan.subtasks || []).map((t) => {
+        const m = this.memberById(t.member_id) || avail[0];
+        return {
+          id: t.id, title: t.title, assignee: m.id, assigneeName: m.name,
+          prompt: t.prompt, status: "pending", result: null,
+          dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
+          tier: ["fast", "balanced", "strong"].includes(t.model_tier) ? t.model_tier : "balanced",
+        };
+      });
       run.reviewRounds = Math.min(plan.review_rounds ?? 1, 2);
       S.addMessage(run, {
         from: "koordinator", kind: "message",
         content: `Analiz: ${plan.analysis}\n\nMod: ${run.mode}\nGörev dağılımı:\n` +
-          run.tasks.map((t) => `- [${t.id}] ${t.title} → ${t.assignee} (${t.tier}${t.dependsOn.length ? ", bağımlı: " + t.dependsOn.join(",") : ""})`).join("\n"),
+          run.tasks.map((t) => `- [${t.id}] ${t.title} → ${t.assigneeName} (${t.tier}${t.dependsOn.length ? ", bağımlı: " + t.dependsOn.join(",") : ""})`).join("\n"),
       });
       S.updateRun(run);
     }
 
-    // ---- Kod modu: worktree hazırlığı (devamda mevcutlar yeniden kullanılır) ----
+    // ---- Kod modu: üye başına worktree ----
     const worktrees = {};
     if (run.mode === "code") {
-      if (!run.projectDir) throw new Error("Kod modu için proje dizini gerekli");
+      if (!run.projectDir) throw new Error("Kod modu için proje dizini gerekli. '📁 Proje seç' ile bir klasör bağlayın.");
       if (!(await gitops.isGitRepo(run.projectDir))) {
-        throw new Error(`${run.projectDir} bir git deposu değil. Kod modu, güvenli paralel çalışma için git gerektirir.`);
+        this.notify("Ajan Konseyi ⚠", "Git deposu başlatma onayı bekleniyor");
+        const ok = await S.requestApproval(run, {
+          kind: "gitinit",
+          title: "Git deposu başlatma onayı",
+          detail: `${run.projectDir} bir git deposu değil. Onaylarsanız "git init" yapılıp mevcut dosyalar başlangıç commit'ine alınacak (dosyalarınız değişmez).`,
+        });
+        this.checkStop(run);
+        if (!ok) throw new Error("Kod modu için git deposu gerekli; başlatma onayı verilmedi.");
+        await gitops.initRepo(run.projectDir);
+        S.addMessage(run, { from: "sistem", kind: "info", content: `✓ ${run.projectDir} içinde git deposu başlatıldı.` });
       }
-      const involved = [...new Set(run.tasks.map((t) => t.assignee))].filter((a) => a !== "antigravity");
-      for (const agentName of involved) {
-        worktrees[agentName] = await gitops.createWorktree(run.projectDir, S.runsDir, run.id, agentName);
+      const involved = [...new Set(run.tasks.map((t) => t.assignee))]
+        .map((id) => this.memberById(id)).filter((m) => m && m.provider !== "antigravity");
+      for (const m of involved) {
+        worktrees[m.id] = await gitops.createWorktree(run.projectDir, S.runsDir, run.id, m.id);
       }
-      if (!resume) S.addMessage(run, {
+      if (!resume && involved.length) S.addMessage(run, {
         from: "sistem", kind: "info",
-        content: "Ayrı çalışma kopyaları hazır: " + involved.map((a) => `${a} → ajan/${run.id}/${a}`).join(", "),
+        content: "Ayrı çalışma kopyaları hazır: " + involved.map((m) => `${m.name} → ajan/${run.id}/${m.id}`).join(", "),
       });
     }
 
-    // ---- 2. DAĞITIM + BORU HATTI İNCELEMESİ ----
-    // Görev biter bitmez incelemesi başlar; diğer görevlerin bitmesi beklenmez.
+    // ---- 2. DAĞITIM + boru hattı incelemesi ----
     S.setPhase(run, "dispatch");
     run.tasks.forEach((t) => { if (t.status === "active" || t.status === "failed") t.status = "pending"; });
     const reviewPromises = [];
@@ -226,11 +427,10 @@ export class Orchestrator {
         continue;
       }
       await Promise.all(ready.map(async (task) => {
-        await this.runTask(run, task, available, worktrees);
-        // Boru hattı: görev bitti → incelemeleri hemen başlat
-        if (task.status === "done" && available.length > 1 && (run.reviewRounds ?? 1) > 0) {
+        await this.runTask(run, task, worktrees);
+        if (task.status === "done" && this.availableMembers().length > 1 && (run.reviewRounds ?? 1) > 0) {
           const already = run.reviews.some((r) => r.taskId === task.id);
-          if (!already) reviewPromises.push(this.reviewTask(run, task, available, worktrees));
+          if (!already) reviewPromises.push(this.reviewTask(run, task, worktrees));
         }
       }));
     }
@@ -243,13 +443,15 @@ export class Orchestrator {
       await Promise.all(reviewPromises);
     }
 
-    // ---- 3. ÇELİŞKİ TESPİTİ (önce sayısal, gerekirse koordinatör) ----
+    // ---- 3. ÇELİŞKİ / TARTIŞMA / OYLAMA ----
     let voteInfo = null;
-    if (available.length > 1) {
+    const activeMembers = [...new Set(doneTasks.map((t) => t.assignee))]
+      .map((id) => this.memberById(id)).filter(Boolean);
+    if (this.availableMembers().length > 1) {
       let round = 0;
       while (round < run.maxDebateRounds) {
         this.checkStop(run);
-        const assess = await this.assessConflict(run, round + 1);
+        const assess = await this.assessConflict(run, round + 1, ctx);
         S.addMessage(run, {
           from: "koordinator", kind: "message",
           content: (assess.conflict ? "Görüş ayrılığı tespit edildi: " : "Uzlaşma durumu: ") + assess.summary,
@@ -258,77 +460,99 @@ export class Orchestrator {
         round++;
         if (round >= run.maxDebateRounds) {
           S.setPhase(run, "vote");
-          voteInfo = await this.holdVote(run, available, assess);
+          voteInfo = await this.holdVote(run, assess);
           break;
         }
         S.setPhase(run, "debate");
-        await this.debateRound(run, available, assess.debate_prompt, round);
-        // Tartışma sonrası yeniden puanlı inceleme yerine koordinatör değerlendirmesi kullanılır
-        run.reviews = run.reviews.filter((r) => !r.postDebate);
+        await this.debateRound(run, assess.debate_prompt, round);
       }
     }
 
-    // ---- 4. DOĞRULAYICI TURU (çürütme denemesi) ----
-    if (available.length > 1 && !run.stopRequested) {
-      await this.verifyRound(run, available, worktrees);
+    // ---- 4. DOĞRULAYICI TURU ----
+    if (this.availableMembers().length > 1 && !run.stopRequested) {
+      await this.verifyRound(run, worktrees);
     }
 
-    // ---- 5. KOD MODU: diff, birleştirme, test, kırmızı-yeşil ----
+    // ---- 5. KOD BÜTÜNLEŞTİRME ----
     if (run.mode === "code") {
       await this.codeIntegration(run, worktrees);
     }
 
-    // ---- 6. SENTEZ, RAPOR, PROJE HAFIZASI ----
+    // ---- 6. SENTEZ ----
     this.checkStop(run);
     S.setPhase(run, "synthesis");
-    const fin = await this.coordinator.finalize(run, voteInfo);
+    const fin = await this.coordinator.finalize(run, voteInfo, this.coordCtx(run));
     S.addDecision(run, { title: fin.decision, detail: "Nihai karar", rationale: fin.rationale });
     run.report = fin.report_markdown || fin.decision;
     fs.writeFileSync(path.join(S.runsDir, run.id, "report.md"), run.report);
     S.addMessage(run, { from: "koordinator", kind: "decision", content: `KARAR: ${fin.decision}\n\nGerekçe: ${fin.rationale}` });
     this.projectContext.appendMemory(run.projectId, run, fin.decision);
-    S.updateRun(run, { status: "done", phase: "done" });
-    this.notify("Ajan Konseyi ✓", "Koşu tamamlandı: " + truncate(run.request, 60));
+    if (!chatTurn) {
+      S.updateRun(run, { status: "done", phase: "done" });
+      this.notify("Ajan Konseyi ✓", "Koşu tamamlandı: " + truncate(run.request, 60));
+    }
   }
 
   // ---- Tek alt görev ----
-  async runTask(run, task, available, worktrees) {
+  async runTask(run, task, worktrees) {
     const S = this.store;
-    if (!available.includes(task.assignee)) {
-      const fb = this.coordinator.pickFallback(task.assignee, available);
+    let member = this.memberById(task.assignee);
+    const avail = this.availableMembers();
+    if (!member || !avail.some((m) => m.id === member.id)) {
+      const fb = avail.find((m) => m.id !== task.assignee);
       if (!fb) { task.status = "failed"; return; }
-      S.addMessage(run, { from: "sistem", kind: "info", taskId: task.id, content: `${task.assignee} ulaşılamaz; görev ${fb} üyesine devredildi.` });
-      task.assignee = fb;
+      S.addMessage(run, { from: "sistem", kind: "info", taskId: task.id, content: `${task.assigneeName || task.assignee} ulaşılamaz; görev ${fb.name} üyesine devredildi.` });
+      member = fb;
+      task.assignee = fb.id;
+      task.assigneeName = fb.name;
     }
     task.status = "active";
     task.startedAt = new Date().toISOString();
     S.updateRun(run);
-    S.addMessage(run, { from: "koordinator", kind: "task", taskId: task.id, content: `[${task.assignee}] için görev: ${task.title}\n\n${task.prompt}` });
+    S.addMessage(run, { from: "koordinator", kind: "task", taskId: task.id, content: `[${member.name}] için görev: ${task.title}\n\n${task.prompt}` });
 
+    const images = (run.attachments || []).map((a) => a.path).filter((p) => fs.existsSync(p));
+    const agSleeping = member.provider === "antigravity" && this.antigravitySleeping();
+    if (agSleeping) {
+      this.notify("Ajan Konseyi 🔔", `${member.name} görev bekliyor — Antigravity'de ajana 'inbox'u kontrol et' deyin`);
+    }
     const opts = {
       label: task.title,
+      timeoutMs: agSleeping ? 5 * 60 * 1000 : undefined,
       codeMode: run.mode === "code",
-      cwd: worktrees[task.assignee]?.wtDir,
-      model: this.pickModel(task.assignee, task.tier),
+      cwd: worktrees[member.id]?.wtDir || (run.mode !== "code" ? run.projectDir || undefined : undefined),
+      tierModel: this.pickTierModel(member.provider, task.tier),
+      images,
       shouldStop: () => run.stopRequested,
     };
+    const imageNote = images.length
+      ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}\n`
+      : "";
     let depContext = "";
     for (const depId of task.dependsOn || []) {
       const dep = run.tasks.find((t) => t.id === depId);
       if (dep?.status === "done" && dep.result) {
-        depContext += `\n--- ÖNCEKİ GÖREVİN ÇIKTISI [${dep.id}: ${dep.title} / ${dep.assignee}] ---\n${truncate(dep.result, 6000)}\n`;
+        depContext += `\n--- ÖNCEKİ GÖREVİN ÇIKTISI [${dep.id}: ${dep.title} / ${dep.assigneeName}] ---\n${truncate(dep.result, 6000)}\n`;
       }
     }
-    const header = this.roleHeader(task.assignee, run) + depContext;
-    let res = await this.agents[task.assignee].sendParallel(header + task.prompt, opts);
+    const header = this.roleHeader(member, run) + depContext + imageNote;
+    let res = await this.callMember(run, member, header + task.prompt, opts);
 
     if (!res.ok && !run.stopRequested) {
-      S.addMessage(run, { from: "sistem", kind: "error", taskId: task.id, content: `${task.assignee} görevi tamamlayamadı: ${res.error}` });
-      const fb = this.coordinator.pickFallback(task.assignee, this.availableAgents(run));
+      S.addMessage(run, { from: "sistem", kind: "error", taskId: task.id, content: `${member.name} görevi tamamlayamadı: ${res.error}` });
+      if (member.provider === "antigravity") {
+        S.addMessage(run, {
+          from: "koordinator", kind: "info", taskId: task.id,
+          content: `⚠ ${member.name} (Antigravity) görüşü alınamadı — sentez bu görüş EKSİK olarak yapılacak. Köprüyü uyandırmak için Antigravity'de ajana "inbox'u kontrol et" deyin.`,
+        });
+      }
+      const fb = this.availableMembers().find((m) => m.id !== member.id);
       if (fb) {
-        S.addMessage(run, { from: "koordinator", kind: "info", taskId: task.id, content: `Görev ${fb} üyesine yeniden atandı.` });
-        task.assignee = fb;
-        res = await this.agents[fb].sendParallel(header + task.prompt, { ...opts, cwd: worktrees[fb]?.wtDir, model: this.pickModel(fb, task.tier) });
+        S.addMessage(run, { from: "koordinator", kind: "info", taskId: task.id, content: `Görev ${fb.name} üyesine yeniden atandı.` });
+        member = fb; task.assignee = fb.id; task.assigneeName = fb.name;
+        res = await this.callMember(run, member, header + task.prompt, {
+          ...opts, cwd: worktrees[fb.id]?.wtDir, tierModel: this.pickTierModel(fb.provider, task.tier),
+        });
       }
     }
 
@@ -336,7 +560,7 @@ export class Orchestrator {
     if (res.ok) {
       task.status = "done";
       task.result = res.text;
-      S.addMessage(run, { from: task.assignee, kind: "result", taskId: task.id, content: res.text });
+      this.memberMsg(run, member, "result", res.text, task.id);
     } else {
       task.status = "failed";
       task.result = res.error;
@@ -347,51 +571,50 @@ export class Orchestrator {
     S.updateRun(run);
   }
 
-  roleHeader(agentName, run) {
-    const role = this.config?.data.agents[agentName]?.role;
-    const rolePart = role && role !== "auto" ? ` Konsey içindeki rolün: ${role}.` : "";
-    return `Sen "${agentName}" adlı üye olarak üç yapay zekâdan oluşan bir konseyde çalışıyorsun (üyeler: claude, codex, antigravity; koordinatör görevleri dağıtır).${rolePart} Yanıtlarını Türkçe yaz ve gereksiz uzatma.\n\nKullanıcının ana isteği: "${truncate(run.request, 1200)}"\n\n--- SANA VERİLEN GÖREV ---\n`;
+  roleHeader(member, run) {
+    const rolePart = member.role !== "auto" ? ` Konsey içindeki rolün: ${member.role}.` : "";
+    const commitPart = run.commitHash
+      ? ` Kod tabanı sürümü: commit ${run.commitHash} — kod hakkında iddia üretmeden önce dosyanın GÜNCEL halini oku ve iddialarına dosya:satır kanıtı ekle.`
+      : "";
+    return `Sen "${member.name}" adlı konsey üyesisin (sağlayıcı: ${member.provider}). Konseyde başka üyeler de var; koordinatör görevleri dağıtır.${rolePart}${commitPart} Yanıtlarını Türkçe ve düzgün Markdown biçiminde yaz (başlıklar, listeler, kod için \`\`\` blokları); gereksiz uzatma.\n\nKullanıcının ana isteği: "${truncate(run.request, 1200)}"\n\n--- SANA VERİLEN GÖREV ---\n`;
   }
 
-  // ---- Puanlı çapraz inceleme (görev başına, boru hattında) ----
-  async reviewTask(run, task, available, worktrees) {
+  // ---- Puanlı çapraz inceleme ----
+  async reviewTask(run, task, worktrees) {
     const S = this.store;
-    const reviewers = available.filter((a) => a !== task.assignee);
+    const reviewers = this.availableMembers().filter((m) => m.id !== task.assignee);
     await Promise.all(reviewers.map(async (reviewer) => {
       const prompt = this.roleHeader(reviewer, run) +
-        `"${task.assignee}" üyesinin şu çıktısını eleştirel incele:\n\n### ${task.title}\n${truncate(task.result, 6000)}\n\n` +
+        `"${task.assigneeName}" üyesinin şu çıktısını eleştirel incele:\n\n### ${task.title}\n${truncate(task.result, 6000)}\n\n` +
         `Değerlendirmeni YALNIZCA şu şemada tek bir JSON nesnesi olarak ver:\n` +
-        `{"agreement": 1-5 arası tam sayı (5=tamamen katılıyorum), "severity": "dusuk|orta|yuksek" (bulduğun sorunların önemi), ` +
-        `"points": ["somut eleştiri/iyileştirme maddeleri"], "evidence": ["varsa dosya:satır veya somut kanıt"], "suggestion": "tek cümlelik öneri"}`;
-      const res = await this.agents[reviewer].send(prompt, {
+        `{"agreement": 1-5 arası tam sayı (5=tamamen katılıyorum), "severity": "dusuk|orta|yuksek", ` +
+        `"points": ["somut eleştiri/iyileştirme maddeleri"], "evidence": ["varsa dosya:satır"], "suggestion": "tek cümlelik öneri"}`;
+      const res = await this.callMember(run, reviewer, prompt, {
         label: `inceleme: ${task.id}`,
-        cwd: worktrees?.[reviewer]?.wtDir,
+        cwd: worktrees?.[reviewer.id]?.wtDir,
         shouldStop: () => run.stopRequested,
       });
       if (!res.ok) {
-        if (!run.stopRequested) S.addMessage(run, { from: "sistem", kind: "error", content: `${reviewer} incelemesi başarısız: ${res.error}` });
+        if (!run.stopRequested) S.addMessage(run, { from: "sistem", kind: "error", content: `${reviewer.name} incelemesi başarısız: ${res.error}` });
         return;
       }
       const j = extractJson(res.text) || { agreement: 3, severity: "orta", points: [res.text], suggestion: "" };
       run.reviews.push({
-        taskId: task.id, reviewer,
+        taskId: task.id, reviewer: reviewer.id, reviewerName: reviewer.name,
         agreement: Math.min(5, Math.max(1, Number(j.agreement) || 3)),
         severity: j.severity || "orta",
         points: j.points || [],
       });
-      S.addMessage(run, {
-        from: reviewer, kind: "review", taskId: task.id,
-        content: `İnceleme [${task.id}] — katılım: ${j.agreement}/5, önem: ${j.severity}\n` +
-          (j.points || []).map((p) => `• ${p}`).join("\n") +
-          (j.evidence?.length ? `\nKanıt: ${j.evidence.join("; ")}` : "") +
-          (j.suggestion ? `\nÖneri: ${j.suggestion}` : ""),
-      });
+      this.memberMsg(run, reviewer, "review",
+        `İnceleme [${task.id}] — katılım: ${j.agreement}/5, önem: ${j.severity}\n` +
+        (j.points || []).map((p) => `• ${p}`).join("\n") +
+        (j.evidence?.length ? `\nKanıt: ${j.evidence.join("; ")}` : "") +
+        (j.suggestion ? `\nÖneri: ${j.suggestion}` : ""), task.id);
       S.updateRun(run);
     }));
   }
 
-  // ---- Çelişki: önce sayısal eşik, belirsizse koordinatör ----
-  async assessConflict(run, round) {
+  async assessConflict(run, round, ctx) {
     const scores = run.reviews.map((r) => r.agreement);
     if (scores.length) {
       const min = Math.min(...scores);
@@ -400,7 +623,7 @@ export class Orchestrator {
         return {
           conflict: true,
           summary: `Puanlı incelemelerde ciddi itiraz var (en düşük katılım: ${min}/5). ` +
-            worst.map((r) => `${r.reviewer}→[${r.taskId}]`).join(", "),
+            worst.map((r) => `${r.reviewerName}→[${r.taskId}]`).join(", "),
           debate_prompt: "Şu itirazlar çözülmeli: " + worst.flatMap((r) => r.points).slice(0, 6).join(" | "),
         };
       }
@@ -408,53 +631,51 @@ export class Orchestrator {
         return { conflict: false, summary: `Tüm incelemeler olumlu (katılım ${Math.min(...scores)}-${Math.max(...scores)}/5); uzlaşma var.`, debate_prompt: "" };
       }
     }
-    return this.coordinator.assessConflict(run, round);
+    return this.coordinator.assessConflict(run, round, ctx);
   }
 
-  async debateRound(run, available, debatePrompt, round) {
+  async debateRound(run, debatePrompt, round) {
     const S = this.store;
-    await Promise.all(available.map(async (agentName) => {
+    await Promise.all(this.availableMembers().map(async (member) => {
       const recent = run.messages
-        .filter((m) => ["review", "debate", "result"].includes(m.kind) && m.from !== agentName)
+        .filter((m) => ["review", "debate", "result"].includes(m.kind) && m.from !== member.id)
         .slice(-4)
-        .map((m) => `[${m.from}]: ${truncate(m.content, 3000)}`)
+        .map((m) => `[${m.fromLabel || m.from}]: ${truncate(m.content, 3000)}`)
         .join("\n\n");
-      const prompt = this.roleHeader(agentName, run) +
+      const prompt = this.roleHeader(member, run) +
         `TARTIŞMA TURU ${round}. Koordinatörün sorusu: ${debatePrompt}\n\n` +
         `Diğer üyelerin son görüşleri:\n${recent}\n\n` +
         `Kendi görüşünü savun veya ikna olduysan güncelle. Uzlaşıya katkı sağlayacak somut bir öneriyle bitir.`;
-      const res = await this.agents[agentName].send(prompt, {
+      const res = await this.callMember(run, member, prompt, {
         label: `tartışma (tur ${round})`,
         shouldStop: () => run.stopRequested,
       });
       if (res.ok) {
-        S.addMessage(run, { from: agentName, kind: "debate", content: `Tartışma (tur ${round}):\n${res.text}` });
+        this.memberMsg(run, member, "debate", `Tartışma (tur ${round}):\n${res.text}`);
       }
     }));
   }
 
-  // ---- Rubrikli hakemli oylama ----
-  async holdVote(run, available, assess) {
+  async holdVote(run, assess) {
     const S = this.store;
     S.addMessage(run, { from: "koordinator", kind: "info", content: "Tartışma tur sınırına ulaşıldı; rubrikli oylamaya geçiliyor." });
     const positions = run.tasks.filter((t) => t.status === "done")
-      .map((t) => `- "${t.assignee}" yaklaşımı: ${truncate(t.result, 2000)}`).join("\n");
+      .map((t) => `- "${t.assigneeName}" (${t.assignee}) yaklaşımı: ${truncate(t.result, 2000)}`).join("\n");
     const votes = [];
-    await Promise.all(available.map(async (agentName) => {
-      const prompt = this.roleHeader(agentName, run) +
+    await Promise.all(this.availableMembers().map(async (member) => {
+      const prompt = this.roleHeader(member, run) +
         `OYLAMA. Anlaşmazlık: ${assess.summary}\n\nYaklaşımlar:\n${positions}\n\n` +
-        `Her yaklaşımı değerlendirip birine (veya karmaya) oy ver. YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
-        `{"choice": "claude|codex|antigravity|karma", "scores": {"dogruluk": 1-5, "eksiksizlik": 1-5, "risk": 1-5 (5=en az riskli)}, "reason": "teknik gerekçe (Türkçe)"}`;
-      const res = await this.agents[agentName].send(prompt, { label: "oylama", shouldStop: () => run.stopRequested });
+        `Bir üyeye (id ile) veya "karma"ya oy ver. YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
+        `{"choice": "üye id'si veya karma", "scores": {"dogruluk": 1-5, "eksiksizlik": 1-5, "risk": 1-5}, "reason": "teknik gerekçe (Türkçe)"}`;
+      const res = await this.callMember(run, member, prompt, { label: "oylama", shouldStop: () => run.stopRequested });
       if (res.ok) {
         const v = extractJson(res.text) || { choice: "?", reason: res.text };
-        votes.push({ agent: agentName, choice: v.choice, scores: v.scores || null, reason: v.reason });
-        S.addMessage(run, {
-          from: agentName, kind: "vote",
-          content: `OY: ${v.choice}` +
-            (v.scores ? ` (doğruluk ${v.scores.dogruluk}/5, eksiksizlik ${v.scores.eksiksizlik}/5, risk ${v.scores.risk}/5)` : "") +
-            `\nGerekçe: ${v.reason}`,
-        });
+        const choiceName = this.memberById(v.choice)?.name || v.choice;
+        votes.push({ agent: member.name, choice: choiceName, scores: v.scores || null, reason: v.reason });
+        this.memberMsg(run, member, "vote",
+          `OY: ${choiceName}` +
+          (v.scores ? ` (doğruluk ${v.scores.dogruluk}/5, eksiksizlik ${v.scores.eksiksizlik}/5, risk ${v.scores.risk}/5)` : "") +
+          `\nGerekçe: ${v.reason}`);
       }
     }));
     run.votes = votes;
@@ -464,56 +685,53 @@ export class Orchestrator {
     return { votes, tally };
   }
 
-  // ---- Doğrulayıcı turu: çözümü çürütmeye çalış ----
-  async verifyRound(run, available, worktrees) {
+  async verifyRound(run, worktrees) {
     const S = this.store;
     this.checkStop(run);
     S.setPhase(run, "verify");
-    // Denetçi rolü atanmışsa onu, yoksa en az görev üretmiş üyeyi seç
-    const roles = this.config?.data.agents || {};
-    let verifier = available.find((a) => roles[a]?.role === "denetci");
+    const avail = this.availableMembers();
+    let verifier = avail.find((m) => m.role === "denetci");
     if (!verifier) {
-      const counts = Object.fromEntries(available.map((a) => [a, run.tasks.filter((t) => t.assignee === a).length]));
-      verifier = available.sort((a, b) => counts[a] - counts[b])[0];
+      const counts = Object.fromEntries(avail.map((m) => [m.id, run.tasks.filter((t) => t.assignee === m.id).length]));
+      verifier = [...avail].sort((a, b) => counts[a.id] - counts[b.id])[0];
     }
+    if (!verifier) return;
     const solution = run.tasks.filter((t) => t.status === "done")
-      .map((t) => `### [${t.id}] ${t.title} (${t.assignee})\n${truncate(t.result, 4000)}`).join("\n\n");
+      .map((t) => `### [${t.id}] ${t.title} (${t.assigneeName})\n${truncate(t.result, 4000)}`).join("\n\n");
     const prompt = this.roleHeader(verifier, run) +
       `DOĞRULAYICI TURU. Konseyin ürettiği çözüm aşağıda. Görevin bu çözümü ÇÜRÜTMEYE çalışmak: ` +
       `hatalar, kenar durumlar, güvenlik açıkları, yanlış varsayımlar, eksikler ara.\n\n${solution}\n\n` +
       `YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
       `{"verdict": "saglam|riskli|curutuldu", "issues": ["bulunan somut sorunlar"], "summary": "tek cümlelik özet"}`;
-    const res = await this.agents[verifier].send(prompt, {
-      label: "doğrulama", cwd: worktrees?.[verifier]?.wtDir, shouldStop: () => run.stopRequested,
+    const res = await this.callMember(run, verifier, prompt, {
+      label: "doğrulama", cwd: worktrees?.[verifier.id]?.wtDir, shouldStop: () => run.stopRequested,
     });
     if (!res.ok) return;
     const v = extractJson(res.text) || { verdict: "riskli", issues: [res.text], summary: "" };
-    run.verify = { verifier, verdict: v.verdict, issues: v.issues || [], summary: v.summary || "" };
-    S.addMessage(run, {
-      from: verifier, kind: "review",
-      content: `🔎 DOĞRULAMA: ${v.verdict === "saglam" ? "✓ sağlam" : v.verdict}\n${v.summary}\n` +
-        (v.issues || []).map((i) => `• ${i}`).join("\n"),
-    });
+    run.verify = { verifier: verifier.name, verdict: v.verdict, issues: v.issues || [], summary: v.summary || "" };
+    this.memberMsg(run, verifier, "review",
+      `🔎 DOĞRULAMA: ${v.verdict === "saglam" ? "✓ sağlam" : v.verdict}\n${v.summary}\n` +
+      (v.issues || []).map((i) => `• ${i}`).join("\n"));
     S.updateRun(run);
 
-    // Çürütüldüyse bir düzeltme turu: ana yazar sorunları giderir
     if (v.verdict !== "saglam" && v.issues?.length && !run.stopRequested) {
       const counts = {};
       for (const t of run.tasks) counts[t.assignee] = (counts[t.assignee] || 0) + 1;
-      const author = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
-      if (author && available.includes(author)) {
+      const authorId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
+      const author = this.availableMembers().find((m) => m.id === authorId);
+      if (author) {
         const fixPrompt = this.roleHeader(author, run) +
-          `Doğrulayıcı (${verifier}) çözümde şu sorunları buldu:\n` +
+          `Doğrulayıcı (${verifier.name}) çözümde şu sorunları buldu:\n` +
           v.issues.map((i) => `• ${i}`).join("\n") +
           `\n\nBu sorunları gider: düzeltilmiş/iyileştirilmiş halini üret.` +
           (run.mode === "code" ? " Kod değişikliği gerekiyorsa kendi çalışma kopyanda uygula ve ne değiştirdiğini özetle." : "");
-        const fix = await this.agents[author].send(fixPrompt, {
+        const fix = await this.callMember(run, author, fixPrompt, {
           label: "düzeltme", codeMode: run.mode === "code",
-          cwd: worktrees?.[author]?.wtDir, shouldStop: () => run.stopRequested,
+          cwd: worktrees?.[author.id]?.wtDir, shouldStop: () => run.stopRequested,
         });
         if (fix.ok) {
-          S.addMessage(run, { from: author, kind: "result", content: `Düzeltme (doğrulama sonrası):\n${fix.text}` });
-          const mainTask = run.tasks.filter((t) => t.assignee === author && t.status === "done").pop();
+          this.memberMsg(run, author, "result", `Düzeltme (doğrulama sonrası):\n${fix.text}`);
+          const mainTask = run.tasks.filter((t) => t.assignee === author.id && t.status === "done").pop();
           if (mainTask) mainTask.result += `\n\n--- DÜZELTME ---\n${truncate(fix.text, 4000)}`;
           S.updateRun(run);
         }
@@ -521,32 +739,33 @@ export class Orchestrator {
     }
   }
 
-  // ---- Kod bütünleştirme: diff, onaylı merge, test, kırmızı-yeşil ----
+  // ---- Kod bütünleştirme ----
   async codeIntegration(run, worktrees) {
     const S = this.store;
     S.setPhase(run, "integration");
     const diffs = [];
-    for (const [agentName, wt] of Object.entries(worktrees)) {
+    for (const [memberId, wt] of Object.entries(worktrees)) {
+      const member = this.memberById(memberId);
       const { status, diff } = await gitops.collectDiff(wt.wtDir);
       if (!status) continue;
-      diffs.push({ agent: agentName, branch: wt.branch, diff });
+      diffs.push({ memberId, memberName: member?.name || memberId, branch: wt.branch, diff });
       for (const line of status.split("\n")) {
         const m = line.trim().match(/^(\S+)\s+(.+)$/);
-        if (m) run.files.push({ agent: agentName, path: m[2], change: m[1] });
+        if (m) run.files.push({ agent: member?.name || memberId, path: m[2], change: m[1] });
       }
-      await gitops.commitAll(wt.wtDir, `ajan(${agentName}): ${truncate(run.request, 60)}`);
+      await gitops.commitAll(wt.wtDir, `ajan(${member?.name || memberId}): ${truncate(run.request, 60)}`);
     }
-    run.diffs = diffs.map((d) => ({ agent: d.agent, branch: d.branch, diff: truncate(d.diff, 60000) }));
+    run.diffs = diffs.map((d) => ({ agent: d.memberName, branch: d.branch, diff: truncate(d.diff, 60000) }));
     S.updateRun(run);
     if (diffs.length === 0) {
-      S.addMessage(run, { from: "sistem", kind: "info", content: "Hiçbir ajan dosya değişikliği yapmadı; birleştirme adımı atlandı." });
+      S.addMessage(run, { from: "sistem", kind: "info", content: "Hiçbir üye dosya değişikliği yapmadı; birleştirme adımı atlandı." });
       return;
     }
 
-    const plan = await this.coordinator.mergePlan(run, diffs);
+    const plan = await this.coordinator.mergePlan(run, diffs, this.coordCtx(run));
     S.addMessage(run, {
       from: "koordinator", kind: "message",
-      content: `Birleştirme planı: ${plan.summary}\nSıra: ${(plan.merge_order || []).join(" → ")}` +
+      content: `Birleştirme planı: ${plan.summary}\nSıra: ${(plan.merge_order || []).map((id) => this.memberById(id)?.name || id).join(" → ")}` +
         (plan.conflicts?.length ? `\n\n⚠ Çakışmalar (elle inceleme gerekli):\n- ${plan.conflicts.join("\n- ")}` : "") +
         (plan.risks?.length ? `\nRiskler:\n- ${plan.risks.join("\n- ")}` : ""),
     });
@@ -556,7 +775,7 @@ export class Orchestrator {
       kind: "merge",
       title: "Dalları birleştirme onayı",
       detail: `Şu dallar "ajan/${run.id}/integration" dalında birleştirilecek:\n` +
-        diffs.map((d) => `- ${d.branch} (${d.agent})`).join("\n") +
+        diffs.map((d) => `- ${d.branch} (${d.memberName})`).join("\n") +
         (plan.conflicts?.length ? "\n\n⚠ Koordinatör olası çakışmalar bildirdi; çakışan birleştirmeler otomatik yapılmaz." : ""),
     });
     this.checkStop(run);
@@ -564,10 +783,10 @@ export class Orchestrator {
     if (!approved) {
       S.addMessage(run, { from: "sistem", kind: "info", content: "Birleştirme reddedildi. Değişiklikler kendi dallarında duruyor; diff'ler Dosyalar sekmesinde." });
     } else {
-      const order = (plan.merge_order || []).filter((a) => diffs.some((d) => d.agent === a));
-      const finalOrder = order.length ? order : diffs.map((d) => d.agent);
-      for (const agentName of finalOrder) {
-        const d = diffs.find((x) => x.agent === agentName);
+      const order = (plan.merge_order || []).filter((id) => diffs.some((d) => d.memberId === id));
+      const finalOrder = order.length ? order : diffs.map((d) => d.memberId);
+      for (const memberId of finalOrder) {
+        const d = diffs.find((x) => x.memberId === memberId);
         const result = await gitops.mergeBranch(run.projectDir, S.runsDir, run.id, d.branch);
         if (result.ok) {
           merged = true;
@@ -575,13 +794,12 @@ export class Orchestrator {
         } else {
           S.addMessage(run, {
             from: "sistem", kind: "error",
-            content: `✗ ${d.branch} birleştirilemedi (çakışma): ${result.conflicts.join(", ") || result.error}. Elle inceleme gerekli; otomatik birleştirme yapılmadı.`,
+            content: `✗ ${d.branch} birleştirilemedi (çakışma): ${result.conflicts.join(", ") || result.error}. Elle inceleme gerekli.`,
           });
         }
       }
     }
 
-    // Testler (onaylı) + kırmızı-yeşil döngüsü
     if (run.testCommand) {
       const testDir = merged
         ? path.join(S.runsDir, run.id, "worktrees", "_integration")
@@ -596,21 +814,21 @@ export class Orchestrator {
       if (ok) {
         S.setPhase(run, "testing");
         let testResult = await this.runTests(run, testDir);
-        // Kırmızı-yeşil: test kırıldıysa bir otomatik düzeltme turu
         if (!testResult.ok && merged && !run.stopRequested) {
-          S.addMessage(run, { from: "koordinator", kind: "info", content: "Testler kırıldı; otomatik düzeltme turu başlatılıyor (kırmızı-yeşil)." });
-          const fixer = run.diffs.sort((a, b) => b.diff.length - a.diff.length)[0]?.agent;
-          if (fixer && this.agents[fixer]?.isAvailable()) {
+          S.addMessage(run, { from: "koordinator", kind: "info", content: "Testler kırıldı; otomatik düzeltme turu (kırmızı-yeşil)." });
+          const fixerId = diffs.sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
+          const fixer = this.availableMembers().find((m) => m.id === fixerId);
+          if (fixer) {
             const fixPrompt = this.roleHeader(fixer, run) +
               `Birleştirme sonrası testler KIRILDI. Test çıktısı:\n\n${truncate(testResult.output, 6000)}\n\n` +
               `Bu dizinde çalışıyorsun: ${testDir}\nTestleri geçirecek asgari düzeltmeyi uygula ve ne değiştirdiğini özetle.`;
-            const fix = await this.agents[fixer].send(fixPrompt, {
+            const fix = await this.callMember(run, fixer, fixPrompt, {
               label: "test düzeltme", codeMode: true, cwd: testDir, shouldStop: () => run.stopRequested,
             });
             if (fix.ok) {
-              S.addMessage(run, { from: fixer, kind: "result", content: `Test düzeltmesi:\n${fix.text}` });
-              await gitops.commitAll(testDir, `ajan(${fixer}): test düzeltmesi`).catch(() => {});
-              await this.runTests(run, testDir); // aynı onaylı komut yeniden koşulur
+              this.memberMsg(run, fixer, "result", `Test düzeltmesi:\n${fix.text}`);
+              await gitops.commitAll(testDir, `ajan(${fixer.name}): test düzeltmesi`).catch(() => {});
+              await this.runTests(run, testDir);
             }
           }
         }
@@ -650,21 +868,24 @@ export class Orchestrator {
       .join("\n\n");
   }
 
-  async directMessage(run, agentName, content) {
+  async directMessage(run, memberId, content, attachments = []) {
     const S = this.store;
-    const agent = this.agents[agentName];
-    if (!agent) throw new Error("Bilinmeyen ajan: " + agentName);
-    this.bindUsage(run);
-    S.addMessage(run, { from: "kullanici", kind: "message", content: `@${agentName}: ${content}` });
-    const res = await agent.send(
-      `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey bağlamında, Türkçe yanıtla):\n\n${content}`,
-      { label: "doğrudan mesaj" }
-    );
+    const member = this.memberById(memberId);
+    if (!member) throw new Error("Bilinmeyen üye: " + memberId);
+    this.restoreSessions(run);
+    const images = attachments.map((a) => a.path).filter((p) => fs.existsSync(p));
+    const attachNote = attachments.length ? "\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n") : "";
+    S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${content}${attachNote}` });
+    const imageNote = images.length ? `\n\nEkli görseller (dosya yolundan incele):\n${images.map((p) => `- ${p}`).join("\n")}` : "";
+    const res = await this.callMember(run, member,
+      `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla):\n\n${content}${imageNote}`,
+      { label: "doğrudan mesaj", images });
     if (res.ok) {
-      S.addMessage(run, { from: agentName, kind: "message", content: res.text });
+      this.memberMsg(run, member, "message", res.text);
     } else {
-      S.addMessage(run, { from: "sistem", kind: "error", content: `${agentName} yanıt veremedi: ${res.error}` });
+      S.addMessage(run, { from: "sistem", kind: "error", content: `${member.name} yanıt veremedi: ${res.error}` });
     }
+    this.persistSessions(run);
     return res;
   }
 
@@ -682,8 +903,7 @@ export class Orchestrator {
 
   stopRun(run) {
     run.stopRequested = true;
-    for (const a of Object.values(this.agents)) a.stop();
-    this.coordinator.stop();
+    for (const p of Object.values(this.providers)) p.stop(run.id);
     this.store.cancelApprovals(run.id);
     this.store.updateRun(run, { status: "stopped", phase: "stopped" });
     this.store.addMessage(run, { from: "sistem", kind: "info", content: "Koşu kullanıcı tarafından durduruldu." });

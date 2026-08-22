@@ -20,6 +20,15 @@ export class ClaudeAgent extends BaseAgent {
     try {
       return await this._invoke(prompt, opts);
     } catch (err) {
+      // Kullanıcı durdurduysa ASLA yeniden deneme (Codex incelemesi bulgusu:
+      // aksi hâlde Durdur düğmesi yeni bir üretim tetikleyebilir)
+      if (opts.shouldStop?.()) throw err;
+      // Oturum bozulduysa (örn. tur ortasında durduruldu) taze oturumla bir kez dene
+      if (this.getSession(opts) && !opts.fresh && !opts._noResumeRetry) {
+        this.log(`resume başarısız (${err.message}); taze oturumla yeniden deneniyor`);
+        this.clearSession(opts);
+        return this.invoke(prompt, { ...opts, _noResumeRetry: true });
+      }
       // Seçili model/çaba tanınmıyorsa varsayılan ayarlarla bir kez dene
       const model = opts.model ?? this.getModel?.();
       const effort = opts.effort ?? this.getEffort?.();
@@ -34,8 +43,9 @@ export class ClaudeAgent extends BaseAgent {
   async _invoke(prompt, opts = {}) {
     // stream-json: hem canlı akış hem token kullanımı için JSONL olay akışı
     const args = ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages"];
-    if (this.sessionId && !opts.fresh) {
-      args.push("--resume", this.sessionId);
+    const sess = opts.fresh ? null : this.getSession(opts);
+    if (sess) {
+      args.push("--resume", sess);
     }
     const model = opts.model ?? this.getModel?.();
     if (model) args.push("--model", model);
@@ -54,10 +64,10 @@ export class ClaudeAgent extends BaseAgent {
       try { ev = JSON.parse(line); } catch { return; }
       if (ev.type === "stream_event" && ev.event?.delta?.type === "text_delta") {
         live += ev.event.delta.text;
-        this.progress(opts.label || "", live);
+        this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
         const text = ev.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
-        if (text) { live = text; this.progress(opts.label || "", live); }
+        if (text) { live = text; this.progress(opts.label || "", live, opts.memberId); }
       } else if (ev.type === "result") {
         result = ev;
       }
@@ -71,13 +81,13 @@ export class ClaudeAgent extends BaseAgent {
     }
 
     const { code, timedOut, stderr, stdout } = await this.spawnCollect(
-      this.bin, args, prompt, opts.cwd, opts.timeoutMs, onLine, extraEnv
+      this.bin, args, prompt, opts.cwd, opts.timeoutMs, onLine, extraEnv, opts.sessionKey
     );
     if (timedOut) throw new Error("Claude çağrısı zaman aşımına uğradı");
     if (!result) {
       throw new Error(`Claude çıktısı çözümlenemedi (exit ${code}): ${(stderr || stdout).slice(0, 400)}`);
     }
-    if (result.session_id && !opts.fresh) this.sessionId = result.session_id;
+    if (result.session_id && !opts.fresh) this.setSession(opts, result.session_id);
     if (result.is_error) {
       throw new Error(`Claude hata döndürdü: ${String(result.result).slice(0, 400)}`);
     }
@@ -88,17 +98,18 @@ export class ClaudeAgent extends BaseAgent {
       output: u.output_tokens || 0,
       costUsd: result.total_cost_usd || 0,
     };
-    this.onUsage?.(usage);
+    (opts.onUsage || this.onUsage)?.(usage);
     return { ok: true, text: result.result || "", raw: { session_id: result.session_id, usage } };
   }
 
-  spawnCollect(bin, args, stdinText, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null, extraEnv = {}) {
+  spawnCollect(bin, args, stdinText, cwd, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null, extraEnv = {}, sessionKey = null) {
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, {
         cwd: cwd || this.rootDir,
         env: { ...cleanEnv(), ...extraEnv },
         stdio: ["pipe", "pipe", "pipe"],
       });
+      child._sessionKey = sessionKey || null;
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
       const timer = setTimeout(() => {
