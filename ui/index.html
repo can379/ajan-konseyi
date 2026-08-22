@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Ajan Konseyi</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- ================= SOL KENAR ÇUBUĞU ================= -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <div class="brand"><span class="logo">◆</span> Ajan Konseyi</div>
+      <button id="btn-side-close" class="icon-btn" title="Kenar çubuğunu gizle">«</button>
+    </div>
+
+    <button id="btn-new" class="btn-gradient">＋ Yeni Görev</button>
+
+    <div class="side-section">
+      <div class="side-title">Projeler</div>
+      <div id="project-list"></div>
+      <div class="row-btns">
+        <button id="btn-create-project" class="btn-ghost small">＋ Oluştur</button>
+        <button id="btn-pick-folder" class="btn-ghost small">📂 Klasör Seç</button>
+      </div>
+    </div>
+
+    <div class="side-section grow">
+      <div class="side-title">Geçmiş</div>
+      <div id="run-list"></div>
+    </div>
+
+    <div class="side-section">
+      <div class="side-title">Ajanlar</div>
+      <div id="agent-config"></div>
+    </div>
+
+    <div class="side-foot">
+      <a href="/api/bridge/instructions" target="_blank" id="bridge-link">Antigravity köprü talimatı ↗</a>
+    </div>
+  </aside>
+
+  <!-- ================= ANA ÇALIŞMA ALANI ================= -->
+  <main id="main">
+    <div id="topbar">
+      <button id="btn-sidebar" class="icon-btn" title="Kenar çubuğu">☰</button>
+      <div id="tb-project" class="pill">Proje seçilmedi</div>
+      <div id="tb-phase"></div>
+      <button id="btn-resume" class="btn-gradient small" hidden>▶ Devam et</button>
+      <div class="spacer"></div>
+      <div id="tb-agents"></div>
+      <button id="btn-stop" class="icon-btn danger" title="Aktif koşuyu durdur">⏹</button>
+      <button id="btn-details" class="icon-btn" title="Detay paneli">▤</button>
+    </div>
+
+    <div id="health-banner" hidden></div>
+
+    <!-- ajan avatarına tıklanınca açılan hızlı ayar paneli -->
+    <div id="agent-pop" hidden></div>
+
+    <div id="workspace">
+      <div id="empty-state">
+        <div class="hero-badge">Claude Code · Codex · Antigravity</div>
+        <h1>Konsey hazır.</h1>
+        <p>Görevi verin; koordinatör böler, ajanlar paralel çalışır, birbirini denetler ve ortak sonuca varır.</p>
+        <div class="suggestions">
+          <button class="suggestion" data-fill="Bu projedeki kod tabanını incele ve iyileştirme önerileri çıkarın.">
+            <span class="s-ico">🔍</span><b>Kodu incele</b><span>Kod tabanını analiz et, iyileştirme önerileri çıkar</span>
+          </button>
+          <button class="suggestion" data-fill="Yeni özellik: kullanıcı girişi ekle. Mimarisini tartışıp uygulayın.">
+            <span class="s-ico">⚡</span><b>Özellik geliştir</b><span>Mimarisi tartışılsın, paralel uygulanıp test edilsin</span>
+          </button>
+          <button class="suggestion" data-fill="Bu hatanın kök nedenini bulun ve düzeltmeyi test edin: ">
+            <span class="s-ico">🐛</span><b>Hata ayıkla</b><span>Kök nedeni bulunsun, düzeltme doğrulansın</span>
+          </button>
+        </div>
+      </div>
+      <div id="chat"></div>
+      <div id="live"></div>
+      <div id="typing" hidden></div>
+    </div>
+
+    <div id="composer-wrap">
+      <div id="composer">
+        <div id="mode-row">
+          <div class="segmented" id="mode-seg">
+            <button data-mode="auto" class="active">Otomatik</button>
+            <button data-mode="discussion">Tartışma</button>
+            <button data-mode="split">Paylaşım</button>
+            <button data-mode="code">Kod</button>
+          </div>
+          <button id="btn-advanced" class="btn-ghost small">Gelişmiş ▾</button>
+          <button id="btn-templates" class="btn-ghost small" title="Hazır görev şablonları">📋 Şablon</button>
+          <div class="spacer"></div>
+          <button id="btn-project" class="chip-btn" title="Ortak geliştirilecek projeyi seç">📁 Proje seç ▾</button>
+        </div>
+        <div id="advanced-row" hidden>
+          <input id="f-test" placeholder="Test komutu (örn: npm test)">
+          <label class="rounds">Tur sınırı <input id="f-rounds" type="number" value="2" min="1" max="4"></label>
+          <label class="adv-check" title="Kod görevlerinde önce başarısız testler yazılır"><input type="checkbox" id="f-testfirst"> Test-önce</label>
+          <label class="adv-check" title="Koordinatör görev zorluğuna göre model kademesi seçer"><input type="checkbox" id="f-smart"> Akıllı model</label>
+          <label class="adv-check" title="Onay ve bitişte macOS bildirimi"><input type="checkbox" id="f-notify"> 🔔</label>
+        </div>
+        <div id="input-row">
+          <select id="f-target" title="Hedef">
+            <option value="konsey">Konsey</option>
+            <option value="claude">@ Claude</option>
+            <option value="codex">@ Codex</option>
+            <option value="antigravity">@ Antigravity</option>
+          </select>
+          <textarea id="f-request" rows="1" placeholder="Göreve ne yapılacağını yazın…"></textarea>
+          <button id="btn-send" class="btn-gradient send">➤</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= SAĞ DETAY PANELİ ================= -->
+  <aside id="details" class="closed">
+    <div class="tabs" id="tabs">
+      <button data-tab="tasks" class="active">Görevler</button>
+      <button data-tab="outputs">Çıktılar</button>
+      <button data-tab="decisions">Kararlar</button>
+      <button data-tab="files">Dosyalar</button>
+      <button data-tab="tests">Testler</button>
+      <button data-tab="usage">Kullanım</button>
+      <button data-tab="report">Rapor</button>
+    </div>
+    <div id="tab-tasks" class="tab-body"></div>
+    <div id="tab-outputs" class="tab-body" hidden></div>
+    <div id="tab-decisions" class="tab-body" hidden></div>
+    <div id="tab-files" class="tab-body" hidden></div>
+    <div id="tab-tests" class="tab-body" hidden></div>
+    <div id="tab-usage" class="tab-body" hidden></div>
+    <div id="tab-report" class="tab-body" hidden></div>
+  </aside>
+
+  <!-- modal katmanı -->
+  <div id="modal-overlay" hidden>
+    <div id="modal-card"></div>
+  </div>
+
+  <!-- onay bildirimleri -->
+  <div id="toasts"></div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

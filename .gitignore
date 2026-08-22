@@ -1,0 +1,10 @@
+node_modules/
+runs/
+memory/
+uploads/
+bridge/antigravity/inbox/
+bridge/antigravity/outbox/
+bridge/antigravity/done/
+config.json
+*.log
+.DS_Store

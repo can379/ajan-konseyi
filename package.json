@@ -1,0 +1,13 @@
+{
+  "name": "ajan-konseyi",
+  "version": "0.1.0",
+  "description": "API kullanmadan yerel abonelik oturumlariyla calisan coklu yapay zeka is birligi sistemi (Claude Code + Codex + Antigravity)",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

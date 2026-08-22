@@ -1,0 +1,197 @@
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
+import { uid, now, truncate } from "./util.js";
+
+// Ortak hafıza: çalışma kayıtları, mesajlar, görevler, kararlar, onaylar.
+// Her koşu (run) diske runs/<id>/ altında JSONL + JSON olarak yazılır.
+export class Store extends EventEmitter {
+  constructor(rootDir) {
+    super();
+    this.rootDir = rootDir;
+    this.runsDir = path.join(rootDir, "runs");
+    fs.mkdirSync(this.runsDir, { recursive: true });
+    this.runs = {};          // runId -> run
+    this.approvals = {};     // approvalId -> approval
+    this.agentStatus = {};   // agentName -> { status, detail, since }
+    this.loadRuns();
+  }
+
+  // Önceki oturumların koşularını diskten geri yükle
+  loadRuns() {
+    for (const dir of fs.readdirSync(this.runsDir)) {
+      const file = path.join(this.runsDir, dir, "state.json");
+      try {
+        const run = JSON.parse(fs.readFileSync(file, "utf8"));
+        if (run.status === "running") {
+          // Sunucu yeniden başladı; koşu kesildi ama kaldığı yerden devam ettirilebilir
+          run.status = "interrupted";
+          run.phase = "interrupted";
+          run.stopRequested = false;
+        }
+        // Eski kayıtlarda olmayan alanları tamamla
+        run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null;
+        this.runs[run.id] = run;
+      } catch {
+        // state.json yoksa veya bozuksa atla
+      }
+    }
+  }
+
+  // ---- Ajan durumu ----
+  setAgentStatus(name, status, detail = "") {
+    this.agentStatus[name] = { status, detail, since: now() };
+    this.emit("event", { type: "agent_status", agent: name, status, detail });
+  }
+
+  // ---- Canlı akış: ajanın o anki kısmi çıktısı (kalıcı değil, yalnız SSE) ----
+  streamProgress(agent, label, text) {
+    this.emit("event", { type: "stream", agent, label, text: String(text).slice(-2000) });
+  }
+
+  // ---- Sağlık durumu ----
+  setHealth(health) {
+    this.health = health;
+    this.emit("event", { type: "health" });
+  }
+
+  // ---- Koşular ----
+  createRun({ request, mode, agents, projectId, projectDir, testCommand, maxDebateRounds }) {
+    const id = uid("run-");
+    const run = {
+      id,
+      request,
+      mode: mode || "auto",
+      agents,
+      projectId: projectId || null,
+      projectDir: projectDir || null,
+      testCommand: testCommand || null,
+      maxDebateRounds: maxDebateRounds ?? 2,
+      status: "running",       // running | done | stopped | failed
+      phase: "planning",
+      tasks: [],               // {id,title,assignee,prompt,status,result,dependsOn,startedAt,endedAt}
+      messages: [],            // ortak konuşma alanı
+      decisions: [],           // {id,ts,title,detail,rationale}
+      votes: [],               // {round, agent, choice, scores, reason}
+      reviews: [],             // {taskId, reviewer, agreement, severity, points}
+      files: [],               // {agent, path, change}
+      tests: [],               // {ts, command, ok, output}
+      diffs: [],               // {agent, branch, diff}
+      usage: {},               // agent -> {input, cachedInput, output, calls, costUsd}
+      verify: null,            // doğrulayıcı turu sonucu
+      report: null,
+      error: null,
+      stopRequested: false,
+      createdAt: now(),
+    };
+    this.runs[id] = run;
+    fs.mkdirSync(path.join(this.runsDir, id), { recursive: true });
+    this.saveRun(run);
+    this.emit("event", { type: "run_created", runId: id });
+    return run;
+  }
+
+  getRun(id) {
+    return this.runs[id] || null;
+  }
+
+  saveRun(run) {
+    const file = path.join(this.runsDir, run.id, "state.json");
+    fs.writeFileSync(file, JSON.stringify(run, null, 2));
+  }
+
+  updateRun(run, patch = {}) {
+    Object.assign(run, patch);
+    this.saveRun(run);
+    this.emit("event", { type: "run_updated", runId: run.id });
+  }
+
+  setPhase(run, phase) {
+    run.phase = phase;
+    this.saveRun(run);
+    this.emit("event", { type: "phase", runId: run.id, phase });
+  }
+
+  // ---- Mesajlar (ortak konuşma alanı) ----
+  addMessage(run, { from, kind = "message", taskId = null, content }) {
+    const msg = {
+      id: uid("m-"),
+      ts: now(),
+      from,               // kullanici | koordinator | claude | codex | antigravity | sistem
+      kind,               // message | task | result | review | debate | vote | decision | error | info
+      taskId,
+      content: truncate(String(content ?? ""), 16000),
+    };
+    run.messages.push(msg);
+    const line = JSON.stringify({ runId: run.id, ...msg }) + "\n";
+    fs.appendFileSync(path.join(this.runsDir, run.id, "messages.jsonl"), line);
+    this.saveRun(run);
+    this.emit("event", { type: "message", runId: run.id, message: msg });
+    return msg;
+  }
+
+  addDecision(run, { title, detail, rationale }) {
+    const d = { id: uid("d-"), ts: now(), title, detail, rationale };
+    run.decisions.push(d);
+    this.saveRun(run);
+    this.emit("event", { type: "decision", runId: run.id, decision: d });
+    return d;
+  }
+
+  // ---- Onay kuyruğu ----
+  // Riskli işlemler (test komutu çalıştırma, merge, silme vb.) kullanıcı onayı bekler.
+  requestApproval(run, { kind, title, detail }) {
+    const id = uid("ap-");
+    const approval = {
+      id,
+      runId: run.id,
+      kind,
+      title,
+      detail: truncate(detail || "", 12000),
+      status: "pending", // pending | approved | rejected | cancelled
+      ts: now(),
+    };
+    this.approvals[id] = approval;
+    this.emit("event", { type: "approval", approval });
+    return new Promise((resolve) => {
+      approval._resolve = resolve;
+    });
+  }
+
+  resolveApproval(id, decision) {
+    const ap = this.approvals[id];
+    if (!ap || ap.status !== "pending") return null;
+    ap.status = decision; // approved | rejected
+    ap.resolvedAt = now();
+    this.emit("event", { type: "approval", approval: this.publicApproval(ap) });
+    ap._resolve?.(decision === "approved");
+    return ap;
+  }
+
+  cancelApprovals(runId) {
+    for (const ap of Object.values(this.approvals)) {
+      if (ap.runId === runId && ap.status === "pending") {
+        ap.status = "cancelled";
+        ap._resolve?.(false);
+        this.emit("event", { type: "approval", approval: this.publicApproval(ap) });
+      }
+    }
+  }
+
+  publicApproval(ap) {
+    const { _resolve, ...rest } = ap;
+    return rest;
+  }
+
+  // ---- UI'ya giden tam durum ----
+  snapshot() {
+    return {
+      health: this.health || {},
+      agents: this.agentStatus,
+      approvals: Object.values(this.approvals).map((a) => this.publicApproval(a)),
+      runs: Object.fromEntries(
+        Object.entries(this.runs).map(([id, r]) => [id, r])
+      ),
+    };
+  }
+}
