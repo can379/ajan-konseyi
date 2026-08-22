@@ -14,6 +14,21 @@ export function truncate(text, max = 4000) {
   return text.slice(0, max) + `\n... [${text.length - max} karakter kırpıldı]`;
 }
 
+export function conversationTitle(text, max = 58) {
+  let value = String(text || "")
+    .replace(/^\s*@[^:]{1,40}:\s*/u, "")
+    .replace(/^\s*(?:lütfen|şimdi|bana|bir|şunu|bunu)\s+/i, "")
+    .replace(/\s+/g, " ").trim();
+  value = value.replace(/[.!?]+$/g, "");
+  if (!value) return "Yeni sohbet";
+  if (value.length > max) {
+    value = value.slice(0, max + 1);
+    const cut = value.lastIndexOf(" ");
+    value = (cut > max * .6 ? value.slice(0, cut) : value.slice(0, max)).trim() + "…";
+  }
+  return value.charAt(0).toLocaleUpperCase("tr-TR") + value.slice(1);
+}
+
 // LLM çıktısından ilk geçerli JSON nesnesini çıkarır.
 // Modeller bazen JSON'u ```json blokları veya açıklama metniyle sarar.
 export function extractJson(text) {

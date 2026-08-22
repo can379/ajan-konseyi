@@ -8,6 +8,7 @@ import { Config, ROLES } from "./src/config.js";
 import { MODEL_CATALOG, EFFORT_LEVELS } from "./src/models.js";
 import { detectMedia, MAX_UPLOAD_BYTES, PROVIDER_CAPABILITIES } from "./src/media.js";
 import { discoverCapabilities } from "./src/capabilityDiscovery.js";
+import { conversationTitle } from "./src/util.js";
 import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -324,6 +325,33 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- Yeni koşu ----
+    if (req.method === "POST" && p === "/api/image-batches") {
+      const body = await readBody(req);
+      const basePrompt = String(body.prompt || "").trim();
+      let prompts = Array.isArray(body.prompts) ? body.prompts.map((v) => String(v || "").trim()).filter(Boolean) : [];
+      if (!prompts.length && basePrompt) {
+        const count = Math.max(1, Math.min(Number(body.count) || 1, 30));
+        prompts = Array.from({ length:count }, (_, i) => count === 1 ? basePrompt : `${basePrompt}\nVaryasyon ${i + 1}/${count}: özgün kompozisyon ve ayrıntılar kullan.`);
+      }
+      if (!prompts.length) return json(res, 400, { error:"En az bir görsel promptu gerekli" });
+      if (prompts.length > 30) return json(res, 400, { error:"Tek seferde en fazla 30 görsel üretilebilir" });
+      const enabledMembers = config.data.members.filter((m) => m.enabled && ["claude","codex","antigravity"].includes(m.provider));
+      const requestedIds = Array.isArray(body.agents) ? new Set(body.agents.map(String)) : null;
+      let members = requestedIds?.size ? enabledMembers.filter((m) => requestedIds.has(m.id)) : enabledMembers;
+      const generator = enabledMembers.find((m) => m.provider === "codex") || enabledMembers.find((m) => m.provider === "antigravity");
+      if (!generator) return json(res, 400, { error:"Görsel üretimi için etkin bir Codex veya Antigravity üyesi gerekli" });
+      if (!members.length) return json(res, 400, { error:"En az bir etkin üretim danışmanı seçin" });
+      if (!members.some((m) => m.id === generator.id)) members.push(generator);
+      const styleLabels = { photorealistic:"Fotogerçekçi", cinematic:"Sinematik", illustration:"İllüstrasyon", "concept-art":"Konsept sanat", product:"Ürün fotoğrafı" };
+      if (styleLabels[body.style]) prompts = prompts.map((item) => `${item}\nİstenen görsel stili: ${styleLabels[body.style]}.`);
+      const project = body.projectId ? config.getProject(body.projectId) : null;
+      const run = store.createRun({ kind:"image_batch", request:basePrompt || prompts.join("\n"), mode:"split", agents:members.map((m) => m.id), projectId:project?.id || null, projectDir:project?.path || null, maxDebateRounds:1, attachments:sanitizeAttachments(body.attachments) });
+      run.title = String(body.title || `${conversationTitle(basePrompt || prompts[0], 48)} · ${prompts.length} görsel`).slice(0, 80);
+      run.imageStudio = { adviserIds:members.filter((m)=>m.id!==generator.id || requestedIds?.has(m.id)).map((m)=>m.id), coordinator:String(body.coordinator || "koordinator"), style:String(body.style || "auto"), count:prompts.length };
+      orch.startImageBatch(run, { prompts, concurrency:body.concurrency });
+      return json(res, 202, { runId:run.id, total:prompts.length });
+    }
+
     if (req.method === "POST" && p === "/api/runs") {
       const body = await readBody(req);
       if (!body.request?.trim()) return json(res, 400, { error: "Görev metni boş olamaz" });
@@ -381,7 +409,7 @@ const server = http.createServer(async (req, res) => {
           attachments: [],
         });
         run.status = "idle";
-        run.title = text.slice(0, 80);
+        run.title = conversationTitle(text);
       }
       if (body.testCommand?.trim()) run.testCommand = body.testCommand.trim();
       run.testFirst = !!body.testFirst;
@@ -412,7 +440,7 @@ const server = http.createServer(async (req, res) => {
       });
       run.status = "idle";
       run.phase = "idle";
-      run.title = `@${member.name}: ${text.slice(0, 60)}`;
+      run.title = conversationTitle(text);
       store.updateRun(run);
       orch.directMessage(run, member.id, text, sanitizeAttachments(body.attachments)).catch((err) => {
         store.addMessage(run, { from: "sistem", kind: "error", content: "Doğrudan sohbet hatası: " + String(err.message || err) });

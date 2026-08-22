@@ -44,8 +44,8 @@ export const MODEL_CATALOG = {
   ],
   antigravity: [
     { value: "", label: "Otomatik · Antigravity hesabının varsayılan modeli" },
-    { value: "Gemini 3.7 Flash (Medium)", label: "Gemini 3.7 Flash (Medium) — yeni ve hızlı" },
-    { value: "Gemini 3.1 Pro (Low)", label: "Gemini 3.1 Pro (Low) — güçlü" },
-    { value: "Gemini 3.5 Flash (Medium)", label: "Gemini 3.5 Flash (Medium) — hızlı" },
+    { value: "gemini-3.7-flash-medium", label: "Gemini 3.7 Flash (Medium) — yeni ve hızlı" },
+    { value: "gemini-3.1-pro-low", label: "Gemini 3.1 Pro (Low) — güçlü" },
+    { value: "gemini-3.5-flash-medium", label: "Gemini 3.5 Flash (Medium) — hızlı" },
   ],
 };

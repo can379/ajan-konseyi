@@ -6,6 +6,12 @@ import { uid, now } from "./util.js";
 // config.json proje kökünde tutulur; oturum bilgisi veya anahtar İÇERMEZ.
 export const PROVIDERS = ["claude", "codex", "antigravity"];
 
+const LEGACY_ANTIGRAVITY_MODELS = {
+  "Gemini 3.7 Flash (Medium)": "gemini-3.7-flash-medium",
+  "Gemini 3.1 Pro (Low)": "gemini-3.1-pro-low",
+  "Gemini 3.5 Flash (Medium)": "gemini-3.5-flash-medium",
+};
+
 const DEFAULTS = {
   // Konsey üyeleri: her üye bir sağlayıcı (CLI) üzerinde ayrı bir kişiliktir.
   // İstenildiği kadar üye eklenebilir: örn. 3 Codex mimar + 1 Claude denetçi.
@@ -71,7 +77,9 @@ export class Config {
       name: String(m.name || "Üye " + (i + 1)).slice(0, 40),
       provider: PROVIDERS.includes(m.provider) ? m.provider : "claude",
       role: ROLES[m.role] ? m.role : "auto",
-      model: String(m.model || "").slice(0, 80),
+      model: String(m.provider === "antigravity"
+        ? (LEGACY_ANTIGRAVITY_MODELS[m.model] || m.model || "")
+        : (m.model || "")).slice(0, 80),
       effort: ["", "sinirli", "orta", "yuksek", "cokyuksek", "ultra"].includes(m.effort) ? m.effort : "",
       enabled: m.enabled !== false,
     }));

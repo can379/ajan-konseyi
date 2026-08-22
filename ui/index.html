@@ -20,6 +20,14 @@
 
     <nav class="side-nav" aria-label="Ana gezinme">
       <button id="btn-new" class="side-nav-item"><span>✎</span> Yeni sohbet</button>
+      <section class="conversation-history" aria-label="Sohbet geçmişi">
+        <label class="conversation-search" for="conversation-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="conversation-search" type="search" placeholder="Sohbetlerde ara" autocomplete="off">
+        </label>
+        <div id="conversation-list" aria-live="polite"></div>
+      </section>
+      <button id="btn-image-studio" class="side-nav-item"><span>◇</span> Görsel Oluştur</button>
       <button id="btn-open-browser" class="side-nav-item"><span>◎</span> Tarayıcı</button>
       <button id="btn-open-terminal" class="side-nav-item"><span>›_</span> Terminal</button>
     </nav>
@@ -71,6 +79,34 @@
     </div>
 
     <div id="health-banner" hidden></div>
+
+    <section id="image-studio" hidden aria-labelledby="image-studio-title">
+      <header class="image-studio-head">
+        <div><span class="image-studio-kicker">GÖRSEL STÜDYOSU</span><h1 id="image-studio-title">Bir fikri, paralel çalışan ajanlarla çoğaltın.</h1><p>Konsey istemi dağıtır; seçtiğiniz ajanlar aynı anda farklı görsel seçenekleri üretir.</p></div>
+        <span class="image-studio-limit">En fazla 30 görsel</span>
+      </header>
+      <form id="image-studio-form">
+        <div class="image-studio-card image-prompt-card">
+          <label for="image-prompt">Ne oluşturmak istiyorsunuz?</label>
+          <textarea id="image-prompt" rows="5" required placeholder="Örn. Altın saatte İstanbul çatılarında oturan beyaz bir kedi; sinematik, gerçekçi fotoğraf…"></textarea>
+          <div class="image-prompt-hint"><span>Konu, ortam, ışık ve kadrajı belirtin.</span><span id="image-prompt-count">0 karakter</span></div>
+        </div>
+        <div class="image-studio-grid">
+          <fieldset class="image-studio-card image-agent-card"><legend>Üretecek ajanlar</legend><p>Bir veya daha fazlasını seçin.</p><div id="image-agent-options" class="image-agent-options"></div></fieldset>
+          <div class="image-studio-card image-settings-card">
+            <label for="image-coordinator">Koordinatör</label><select id="image-coordinator"></select>
+            <label for="image-style">Görsel stili</label><select id="image-style"><option value="auto">İsteme göre otomatik</option><option value="photorealistic">Fotogerçekçi</option><option value="cinematic">Sinematik</option><option value="illustration">İllüstrasyon</option><option value="concept-art">Konsept sanat</option><option value="product">Ürün fotoğrafı</option></select>
+          </div>
+          <div class="image-studio-card image-count-card">
+            <label for="image-count">Görsel adedi</label><div class="image-count-control"><input id="image-count" type="range" min="1" max="30" value="4"><input id="image-count-number" type="number" min="1" max="30" value="4" aria-label="Görsel adedi"></div>
+            <div class="image-worker-copy"><b id="image-worker-count">4 paralel görev</b><span>İşler seçili ajanlara dengeli dağıtılır.</span></div>
+          </div>
+        </div>
+        <div id="image-studio-error" class="image-studio-error" hidden></div>
+        <button id="btn-start-image-batch" class="image-start" type="submit"><span>◇</span><b>Görselleri oluştur</b><small id="image-start-summary">3 ajan · 4 görsel</small></button>
+      </form>
+      <div id="image-batch-status" class="image-batch-status" hidden></div>
+    </section>
 
     <!-- ajan avatarına tıklanınca açılan hızlı ayar paneli -->
     <div id="agent-pop" hidden></div>

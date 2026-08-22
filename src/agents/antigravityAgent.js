@@ -5,6 +5,7 @@ import { BaseAgent } from "./base.js";
 import { cleanEnv } from "../util.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+const QUOTA_ERROR_RE = /(?:429|RESOURCE_EXHAUSTED|QUOTA_EXHAUSTED|exhausted your capacity|quota (?:will reset|exceeded))/i;
 
 // Antigravity'nin resmi CLI motoru. Eski language_server RPC köprüsü yalnız
 // sohbet üretimini açıyor, yerleşik terminal/tarayıcı/web/MCP/skill/alt ajan ve
@@ -31,6 +32,9 @@ export class AntigravityAgent extends BaseAgent {
       return await this._invoke(prompt, opts);
     } catch (err) {
       if (opts.shouldStop?.()) throw err;
+      // Kota hatası yeni conversation açınca düzelmez; ikinci bir pahalı çağrı
+      // yapmadan üst katmana gerçek nedeni ve sıfırlanma süresini aktar.
+      if (QUOTA_ERROR_RE.test(String(err?.message || err))) throw err;
       if (this.getSession(opts) && !opts.fresh && !opts._noResumeRetry) {
         this.log(`conversation devamı başarısız (${err.message}); yeni oturum deneniyor`);
         this.clearSession(opts);
@@ -86,6 +90,12 @@ export class AntigravityAgent extends BaseAgent {
 
     const result = await this.spawnCollect(this.bin, args, cwd, timeoutMs, onLine, opts.sessionKey);
     if (result.timedOut) throw new Error("Antigravity çağrısı zaman aşımına uğradı");
+    const quotaDetail = [resultEvent?.error, resultEvent?.message, resultEvent?.status_message,
+      finalText, result.stderr, result.stdout.slice(-2500)].filter(Boolean).join("\n");
+    if (QUOTA_ERROR_RE.test(quotaDetail)) {
+      const reset = quotaDetail.match(/(?:reset after|sıfırlanma süresi\s*[~:]*)\s*([^\n,)]+)/i)?.[1]?.trim();
+      throw new Error(`Antigravity görsel üretim kotası doldu${reset ? `; yaklaşık ${reset} sonra sıfırlanacak` : ""}. Bu bir bağlantı veya hız sorunu değildir.`);
+    }
     // agy bazı araç turlarında kullanılabilir agent_response ürettikten sonra
     // sonuç olayını ERROR olarak işaretleyebiliyor ve yine de exit 0 dönüyor.
     // Kullanıcıya ulaşabilecek gerçek bir yanıt varsa bunu kaybetme; yalnız
@@ -121,16 +131,23 @@ export class AntigravityAgent extends BaseAgent {
       child._sessionKey = sessionKey || null;
       this.children.add(child);
       let stdout = "", stderr = "", lineBuf = "", timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; try { child.kill("SIGTERM"); } catch {} }, timeoutMs);
+      let forceKillTimer = null;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGTERM"); } catch {}
+        // agy'nin iç language-server süreci SIGTERM'i bazı araç turlarında
+        // yutabiliyor. Kullanıcı arayüzü sonsuza dek "üretiyor" kalmasın.
+        forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
+      }, timeoutMs);
       child.stdout.on("data", (d) => {
         stdout += d; lineBuf += d;
         const lines = lineBuf.split("\n"); lineBuf = lines.pop();
         for (const line of lines) if (line.trim()) onLine(line.trim());
       });
       child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); this.children.delete(child); reject(err); });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
-        clearTimeout(timer); this.children.delete(child);
+        clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child);
         if (lineBuf.trim()) onLine(lineBuf.trim());
         this.log(`agy exit=${code} args=${args.slice(0, -1).join(" ")}\nstderr: ${stderr.slice(0, 2000)}`);
         resolve({ stdout, stderr, code, timedOut });

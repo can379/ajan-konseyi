@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { uid, now, truncate } from "./util.js";
+import { uid, now, truncate, conversationTitle } from "./util.js";
 
 // Ortak hafıza: çalışma kayıtları, mesajlar, görevler, kararlar, onaylar.
 // Her koşu (run) diske runs/<id>/ altında JSONL + JSON olarak yazılır.
@@ -35,9 +35,25 @@ export class Store extends EventEmitter {
           }
           run.stopRequested = false;
           run.turnActive = false;
+          run.directActive = false;
+        }
+        // Masaüstü/sunucu kapanınca canlı alt işlem artık yoktur. Eski bazı
+        // sohbetler status=idle iken directActive=true kaydedilebildiği için
+        // arayüz sonsuza kadar "üretiyor" kartı gösteriyordu.
+        if (run.kind === "chat") {
+          run.stopRequested = false;
+          run.turnActive = false;
+          run.directActive = false;
         }
         // Eski kayıtlarda olmayan alanları tamamla
         run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null;
+        if (run.kind === "chat" && (!run.title || run.title.startsWith("@") || run.title === String(run.request || "").slice(0, 80))) {
+          const firstUser = (run.messages || []).find((message) => message.from === "kullanici")?.content || run.request;
+          run.title = conversationTitle(firstUser);
+          const temp = file + ".tmp";
+          fs.writeFileSync(temp, JSON.stringify(run, null, 2));
+          fs.renameSync(temp, file);
+        }
         this.runs[run.id] = run;
       } catch {
         // state.json yoksa veya bozuksa atla

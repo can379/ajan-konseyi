@@ -11,6 +11,8 @@ let popAgent = null;      // üst çubukta açık ajan paneli
 let liveStreams = {};     // agent -> {label, text} canlı akış
 let fullCapabilities = null;
 const projectRunLimits = new Map();
+let conversationSearch = "";
+let activeMainView = "chat";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -25,6 +27,55 @@ const AGENT_META = {
 };
 const PROVIDERS = ["claude", "codex", "antigravity"];
 const PROVIDER_LABELS = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
+
+function imageStudioMembers() {
+  return PROVIDERS.map((provider) => {
+    const member = (state.config.members || []).find((m) => m.provider === provider && m.enabled);
+    return { provider, id: member?.id || provider, label: member?.name || PROVIDER_LABELS[provider] };
+  });
+}
+
+function updateImageStudioSummary() {
+  const amount = Math.max(1, Math.min(30, Number($("image-count-number")?.value || 1)));
+  const count = $("image-agent-options")?.querySelectorAll("input:checked").length || 0;
+  if ($("image-worker-count")) $("image-worker-count").textContent = `${amount} paralel görev`;
+  if ($("image-start-summary")) $("image-start-summary").textContent = `${count} ajan · ${amount} görsel`;
+}
+
+function renderImageStudio() {
+  const options = $("image-agent-options"); if (!options) return;
+  const prior = new Set([...options.querySelectorAll("input:checked")].map((x) => x.value));
+  const members = imageStudioMembers();
+  const roles = { claude:"Sanat yönetimi ve istem", codex:"Yüksek kaliteli görsel motoru", antigravity:"Araştırma ve sanat yönetimi" };
+  options.innerHTML = members.map((m) => `<label class="image-agent-option ${m.provider}"><input type="checkbox" value="${esc(m.id)}" data-provider="${m.provider}" ${prior.size ? (prior.has(m.id) ? "checked" : "") : "checked"}><span class="image-agent-mark">${AGENT_META[m.provider].short}</span><span><b>${esc(m.label)}</b><small>${roles[m.provider]}</small></span><i>✓</i></label>`).join("");
+  const coordinator = $("image-coordinator"), previous = coordinator.value;
+  coordinator.innerHTML = `<option value="koordinator">Konsey Koordinatörü</option>` + members.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
+  if ([...coordinator.options].some((o) => o.value === previous)) coordinator.value = previous;
+  updateImageStudioSummary(); renderImageBatchStatus();
+}
+
+function renderImageBatchStatus() {
+  const box = $("image-batch-status"); if (!box) return;
+  const batch = Object.values(state.runs || {}).filter((r) => r.kind === "image-batch" || r.kind === "image_batch").sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+  box.hidden = !batch; if (!batch) return;
+  const imageMap = new Map();
+  for (const image of [...(batch.messages || []), ...(batch.tasks || [])].flatMap((item) => item.attachments || []).filter((a) => a.kind === "image")) {
+    imageMap.set(image.path || image.url || image.name, image);
+  }
+  const images = [...imageMap.values()];
+  const target = Number(batch.batch?.total || batch.imageCount || batch.metadata?.imageCount || images.length || 1);
+  const done = Math.min(target, Number(batch.batch?.completed ?? batch.completedCount ?? images.length));
+  const failed = Number(batch.batch?.failed || 0);
+  const percent = Math.round(done / target * 100);
+  box.innerHTML = `<div class="image-batch-head"><span><b>${batch.status === "running" ? "Görseller üretiliyor" : "Son görsel grubu"}</b><small>${done}/${target} tamamlandı${failed ? ` · ${failed} hatalı` : ""}</small></span><strong>${percent}%</strong></div><div class="image-batch-progress"><i style="width:${percent}%"></i></div>${images.length ? `<div class="image-batch-thumbs">${images.slice(0,8).map((a) => `<button type="button" data-media-src="${esc(a.url)}" data-media-name="${esc(a.name || "Üretilen görsel")}"><img src="${esc(a.url)}" alt=""></button>`).join("")}</div>` : ""}`;
+}
+
+function showMainView(view) {
+  activeMainView = view; const studio = view === "images";
+  $("image-studio").hidden = !studio; $("workspace").hidden = studio; $("composer-wrap").hidden = studio;
+  $("btn-image-studio").classList.toggle("active", studio);
+  if (studio) renderImageStudio();
+}
 
 function memberById(id) {
   return (state.config.members || []).find((m) => m.id === id) || null;
@@ -224,6 +275,7 @@ function activeProject() { return state.config.projects.find((p) => p.id === act
 
 // ================= RENDER =================
 function render() {
+  renderConversations();
   renderProjects();
   renderAgentConfig();
   renderTopbar();
@@ -237,8 +289,28 @@ function render() {
   renderDetails(run);
   renderToasts();
   syncToggles();
+  if (activeMainView === "images") renderImageStudio();
   const toolProject = $("tool-project");
   if (toolProject) toolProject.textContent = activeProject()?.name || "Proje seçilmedi";
+}
+
+function runSearchText(run) {
+  return [run.title, run.request, run.searchText, run.preview, run.lastMessage, ...(run.messages || []).map((m) => m.content)]
+    .filter(Boolean).join("\n").toLocaleLowerCase("tr-TR");
+}
+
+// Projeye bağlı olmayan konuşmalar, proje listesinden bağımsız bir geçmiş olarak görünür.
+function renderConversations() {
+  const el = $("conversation-list");
+  if (!el) return;
+  const query = conversationSearch.trim().toLocaleLowerCase("tr-TR");
+  const runs = Object.values(state.runs)
+    .filter((run) => run.kind === "chat" && !run.projectId && (!query || runSearchText(run).includes(query)))
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
+    <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
+    <div class="r-meta"><span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
+  </div>`).join("") : `<div class="conversation-empty">${query ? "Eşleşen sohbet bulunamadı." : "Henüz sohbet yok."}</div>`;
 }
 
 function renderCapabilities() {
@@ -326,9 +398,8 @@ function renderProjects() {
       </div>
     </div>`;
   };
-  const unassigned=sortedRunIds.filter((id)=>!state.runs[id].projectId);
   $("project-list").innerHTML = list.length
-    ? list.map(projectHTML).join("")+(unassigned.length?`<div class="project-group unassigned"><div class="project-label">Diğer sohbetler</div><div class="project-runs">${unassigned.slice(0,projectRunLimits.get("unassigned")||5).map(runHTML).join("")}${unassigned.length>(projectRunLimits.get("unassigned")||5)?`<button class="project-more" data-more-project="unassigned">Daha fazla göster <span>${unassigned.length-(projectRunLimits.get("unassigned")||5)}</span></button>`:""}</div></div>`:"")
+    ? list.map(projectHTML).join("")
     : `<div class="muted">Proje ekleyin; koşular projeye bağlanır ve konsey kaldığı yerden devam eder.</div>`;
 }
 
@@ -827,7 +898,7 @@ document.addEventListener("click", async (e) => {
     if(run?.projectId&&run.projectId!==activeProjectId()) {
       await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:run.projectId})});
     }
-    selectRun(runEl.dataset.run); autoCloseSidebar(); fetchState(); return;
+    selectRun(runEl.dataset.run); showMainView("chat"); autoCloseSidebar(); fetchState(); return;
   }
 
   const moreProject=closest("[data-more-project]");
@@ -982,6 +1053,18 @@ document.addEventListener("change", async (e) => {
   const inConfig = t.closest("#agent-config, #agent-pop");
   if (!inConfig) return;
 
+  // Sağlayıcı değiştiğinde eski sağlayıcının model değerini kaydetme. Model
+  // kataloğunu aynı anda yenileyerek Codex seçiliyken Claude modellerinin
+  // görünmesi sorununu gider.
+  if (t.matches("[data-cprovider]")) {
+    const model = t.closest("[data-coord]")?.querySelector("[data-cmodel]");
+    if (model) model.innerHTML = modelOptsFor(t.value, "");
+  }
+  if (t.matches("[data-mprovider]")) {
+    const model = t.closest("[data-member]")?.querySelector("[data-mmodel]");
+    if (model) model.innerHTML = modelOptsFor(t.value, "");
+  }
+
   // "Özel model yaz…" seçilirse metin iste
   if ((t.matches("[data-mmodel]") || t.matches("[data-cmodel]")) && t.value === "__custom") {
     const custom = prompt("Model kimliği:");
@@ -1020,7 +1103,44 @@ document.addEventListener("click", async (e) => {
 $("btn-sidebar").addEventListener("click", () => $("sidebar").classList.toggle("hidden"));
 $("btn-side-close").addEventListener("click", () => $("sidebar").classList.add("hidden"));
 function autoCloseSidebar() { if (window.innerWidth < 1100) $("sidebar").classList.add("hidden"); }
-$("btn-new").addEventListener("click", () => { selectRun(null); autoCloseSidebar(); render(); $("f-request").focus(); });
+$("btn-new").addEventListener("click", async () => {
+  // Yeni sohbet proje dışıdır; proje sohbetleri kendi gruplarında kalmaya devam eder.
+  if (activeProjectId()) {
+    await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activeProject: null }) });
+    state.config.activeProject = null;
+  }
+  selectRun(null); showMainView("chat"); autoCloseSidebar(); render(); $("f-request").focus();
+});
+$('btn-image-studio').addEventListener('click', () => { showMainView('images'); autoCloseSidebar(); });
+$('image-prompt').addEventListener('input', (e) => { $('image-prompt-count').textContent = `${e.target.value.length} karakter`; });
+$('image-agent-options').addEventListener('change', updateImageStudioSummary);
+function syncImageCount(value) {
+  const n = Math.max(1, Math.min(30, Number(value) || 1));
+  $('image-count').value = n; $('image-count-number').value = n; updateImageStudioSummary();
+}
+$('image-count').addEventListener('input', (e) => syncImageCount(e.target.value));
+$('image-count-number').addEventListener('input', (e) => syncImageCount(e.target.value));
+$('image-studio-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const prompt = $('image-prompt').value.trim();
+  const agents = [...$('image-agent-options').querySelectorAll('input:checked')].map((x) => x.value);
+  const error = $('image-studio-error');
+  if (!prompt || !agents.length) { error.textContent = !prompt ? 'Görsel istemini yazın.' : 'En az bir ajan seçin.'; error.hidden = false; return; }
+  error.hidden = true;
+  const button = $('btn-start-image-batch'); button.disabled = true; button.classList.add('busy');
+  try {
+    const response = await fetch('/api/image-batches', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ prompt, agents, coordinator:$('image-coordinator').value, count:Number($('image-count-number').value), style:$('image-style').value }) });
+    const result = await response.json();
+    if (!response.ok || result.error) throw new Error(result.error || 'Görsel grubu başlatılamadı.');
+    if (result.runId) selectRun(result.runId);
+    await fetchState(); renderImageBatchStatus();
+  } catch (err) { error.textContent = err.message; error.hidden = false; }
+  finally { button.disabled = false; button.classList.remove('busy'); }
+});
+$("conversation-search").addEventListener("input", (e) => {
+  conversationSearch = e.target.value;
+  renderConversations();
+});
 $("btn-details").addEventListener("click", () => $("details").classList.toggle("closed"));
 
 function openToolPanel(tab) {

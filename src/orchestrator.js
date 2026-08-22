@@ -156,9 +156,9 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     }
     const res = await provider.send(effectivePrompt, {
       ...effectiveOpts,
-      sessionKey: route?.mode === "shared"
+      sessionKey: opts.sessionKey || (route?.mode === "shared"
         ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
-        : this.sessionKeyFor(run, member),
+        : this.sessionKeyFor(run, member)),
       memberId: member.id,
       model: member.model || opts.tierModel || undefined,
       effort: member.effort || undefined,
@@ -176,7 +176,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // "Görsel üretme yeteneğini denetle" bir görsel siparişi değil, meta
     // incelemedir. Bu ayrım yapılmazsa rapor sonunda gereksiz ImageGen açılır.
     if(/(?:yetenek denetimi|yeteneklerini (?:öğren|incele|değerlendir|karşılaştır)|ayrı ayrı değerlendir|eksik yetenek|durumunu raporla)/i.test(value)) return false;
-    return /(?:görsel|fotoğraf|resim|image|illustration|poster|logo|ikon).{0,80}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,80}(?:görsel|fotoğraf|resim|image)/i.test(value);
+    return /(?:görsel|fotoğraf|resim|image|illustration|illüstrasyon|poster|logo|ikon).{0,80}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,80}(?:görsel|fotoğraf|resim|image|illüstrasyon)/i.test(value);
   }
 
   isImageRevisionRequest(run, text) {
@@ -184,38 +184,176 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     return previousImage && /(?:gerçekçi|fotogerçekçi|fotoğraf gibi|daha doğal|yeniden|tekrar|düzelt|değiştir|benzer|bunun neresi)/i.test(String(text||""));
   }
 
+  imageGenerationPrompt(text) {
+    if (!this.isImageGenerationRequest(text)) return String(text || "");
+    const explicitIllustration = /(?:svg|vektör|vector|ikon|logo|çizgi|karikatür|cartoon|anime|illustration|illüstrasyon|flat design)/i.test(String(text || ""));
+    return `${text}\n\n--- GÖRSEL ÜRETİM KALİTE SÖZLEŞMESİ ---
+Yerleşik generate_image aracını doğrudan kullan. SVG, HTML, canvas, Mermaid, Python/çizim kodu, programatik rasterleştirme veya webden hazır görsel indirme kullanma.
+${explicitIllustration
+  ? "Kullanıcının açıkça istediği illüstrasyon/vektör stilini koru; yine de sonucu native görsel üretim aracıyla yüksek kaliteli raster olarak üret."
+  : "Kullanıcı başka bir stil istemediyse varsayılan sonuç fotogerçekçi, doğal, profesyonel fotoğraf kalitesinde, doğru anatomi ve ince doku ayrıntılarıyla üretilsin; çocuk kitabı/clip-art/vektör görünümüne dönüştürme."}
+Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopyasını hazırlama. Ara durum veya 'hazırlanıyor' metni yazma; yalnız araç tamamlandıktan sonra gerçek dosya yolunu bildir.
+--- KALİTE SÖZLEŞMESİ SONU ---`;
+  }
+
+  requestedImageCount(text) {
+    const value = String(text || "");
+    const numeric = value.match(/\b(\d{1,2})\s*(?:adet|tane|farklı|varyasyon|görsel|resim|fotoğraf)/i)?.[1];
+    return Math.max(1, Math.min(Number(numeric) || 1, 30));
+  }
+
+  async validatedImageAssets(requestText, assets) {
+    const raster = (assets || []).filter((a) => a.kind === "image" && a.mime !== "image/svg+xml" && a.path && fs.existsSync(a.path));
+    if (!raster.length) return [];
+    const count = this.requestedImageCount(requestText);
+    const rules = [
+      { request: /(?:kedi|cat|kitten)/i, labels: /(?:\bcat\b|feline|kitten|adult_cat)/i },
+      { request: /(?:köpek|dog|puppy)/i, labels: /(?:\bdog\b|canine|puppy)/i },
+      { request: /(?:kuş|bird)/i, labels: /(?:\bbird\b|avian)/i },
+      { request: /(?:araba|otomobil|car\b)/i, labels: /(?:automobile|vehicle|\bcar\b)/i },
+    ];
+    const rule = rules.find((item) => item.request.test(String(requestText || "")));
+    if (!rule) return raster.slice(0, count);
+    const accepted = [];
+    for (const asset of raster) {
+      try {
+        const vision = await analyzeImagesLocally([asset.path], this.rootDir);
+        if (rule.labels.test(vision)) accepted.push(asset);
+      } catch (err) {
+        this.log(`üretilen görsel kalite doğrulaması atlandı (${path.basename(asset.path)}): ${String(err.message || err)}`);
+        accepted.push(asset); // Vision yoksa gerçek dosyayı haksız yere kaybetme.
+      }
+      if (accepted.length >= count) break;
+    }
+    return accepted;
+  }
+
+  keepOnlyAssetPaths(text, allAssets, keptAssets) {
+    const kept = new Set((keptAssets || []).map((a) => path.resolve(a.path)));
+    let result = String(text || "");
+    for (const asset of allAssets || []) {
+      if (!asset.path || kept.has(path.resolve(asset.path))) continue;
+      const escaped = String(asset.path).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      result = result.replace(new RegExp(`^.*${escaped}.*$`, "gmi"), "");
+    }
+    return result.replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  /**
+   * Koordinatörlü toplu görsel koşusu. Fikir/prompt iyileştirme işleri konsey
+   * üyelerine dağıtılır; gerçek dosya üretimi yüksek kaliteli ortak raster
+   * motorundan geçer. Worker havuzu aynı anda en fazla 6 dış
+   * işlem açarak masaüstünü ve sağlayıcı oturumlarını korur.
+   */
+  startImageBatch(run, { prompts, concurrency = 4 } = {}) {
+    const work = Array.isArray(prompts) ? prompts : [];
+    const limit = Math.max(1, Math.min(Number(concurrency) || 4, 6, work.length || 1));
+    run.turnActive = true;
+    run.status = "running";
+    run.phase = "image_planning";
+    run.batch = { total:work.length, completed:0, failed:0, concurrency:limit, startedAt:new Date().toISOString() };
+    const members = this.members().filter((m) => run.agents.includes(m.id));
+    const advisers = members.filter((m) => ["claude", "codex", "antigravity"].includes(m.provider));
+    run.tasks = work.map((prompt, index) => ({
+      id:uid("img-"), title:`Görsel ${index + 1}`, prompt,
+      assignee:(advisers[index % Math.max(1, advisers.length)] || members[0])?.id || "antigravity",
+      generator:"codex", status:"pending", result:null, error:null,
+    }));
+    this.store.updateRun(run);
+    this.store.addMessage(run, { from:"koordinator", kind:"info", content:`${work.length} görsel görevi ${limit} eşzamanlı worker ile konseye dağıtıldı. Sanat yönetimini seçilen ajanlar, yüksek kaliteli raster üretimini ortak görsel motoru yapacak.` });
+    this.runImageBatch(run, limit).catch((err) => this.failRun(run, err));
+  }
+
+  async runImageBatch(run, concurrency) {
+    const members = this.members();
+    const generator = members.find((m) => m.provider === "codex") || members.find((m) => m.provider === "antigravity") || {
+      id:"shared-image-generator", name:"Ortak Görsel Motoru", provider:"codex", role:"uygulayici", model:"", effort:"",
+    };
+    let cursor = 0;
+    const worker = async () => {
+      while (!run.stopRequested) {
+        const task = run.tasks[cursor++];
+        if (!task) return;
+        task.status = "running"; task.startedAt = new Date().toISOString();
+        run.phase = "image_generating"; this.store.updateRun(run);
+        const adviser = members.find((m) => m.id === task.assignee);
+        try {
+          let productionPrompt = this.imageGenerationPrompt(`${task.prompt}\nGörsel oluştur.`);
+          // Görev sahibi kompozisyonu hazırlar; raster motoru ayrı çalışır.
+          if (adviser && adviser.id !== generator.id) {
+            const advised = await this.callMember(run, adviser,
+              `Bu görsel için kısa, üretime hazır ve kullanıcı niyetine sadık bir prompt yaz. Canva, MCP veya görsel üretim aracı çağırma; dosya üretme. Yalnız üretim promptunu döndür.\n\n${task.prompt}`,
+              { label:"görsel promptu hazırlıyor", timeoutMs:90_000, shouldStop:()=>run.stopRequested });
+            if (advised.ok && advised.text?.trim()) productionPrompt = this.imageGenerationPrompt(`${advised.text.trim()}\nGörsel oluştur.`);
+          }
+          const generated = await this.callMember(run, generator,
+            `${productionPrompt}\n\nDosyayı ${this.rootDir}/generated içine benzersiz bir adla kaydet ve mutlak dosya yolunu yaz. Yerleşik görsel üretim aracını MUTLAKA kullan; gerçek PNG/JPEG/WebP olmadan görevi tamamlanmış sayma.`,
+            { label:`${task.title} üretiliyor`, cwd:run.projectDir || this.rootDir,
+              sessionKey:`${run.id}#image#${task.id}`, timeoutMs:5*60*1000,
+              shouldStop:()=>run.stopRequested });
+          if (!generated.ok) throw new Error(generated.error || "Ortak görsel motoru başarısız");
+          const assets = collectGeneratedAssets(generated.text, this.rootDir)
+            .filter((a) => a.kind === "image" && a.mime !== "image/svg+xml" && a.path && fs.existsSync(a.path));
+          const accepted = await this.validatedImageAssets(task.prompt, assets);
+          if (!accepted.length) throw new Error("Native araç konuya uygun, açılabilir bir PNG/JPEG/WebP dosyası döndürmedi");
+          const cleanResult = this.keepOnlyAssetPaths(generated.text, assets, accepted);
+          task.status="done"; task.result=cleanResult; task.attachments=accepted; run.batch.completed++;
+          this.memberMsg(run, adviser || generator, "result", cleanResult, task.id, task.prompt);
+        } catch (err) {
+          task.status="failed"; task.error=String(err.message || err); run.batch.failed++;
+          this.store.addMessage(run, { from:"sistem", kind:"error", taskId:task.id, content:`${task.title} üretilemedi: ${task.error}` });
+        } finally {
+          task.endedAt = new Date().toISOString(); this.store.updateRun(run);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length:concurrency }, worker));
+    run.turnActive=false; run.batch.endedAt=new Date().toISOString();
+    const stopped=run.stopRequested;
+    this.store.updateRun(run, { status:stopped ? "stopped" : (run.batch.completed ? "done" : "failed"), phase:stopped ? "stopped" : "done" });
+    this.store.addMessage(run, { from:"koordinator", kind:run.batch.failed ? "info" : "result", content:`Toplu üretim tamamlandı: ${run.batch.completed}/${run.batch.total} başarılı, ${run.batch.failed} hatalı.` });
+    this.persistSessions(run);
+  }
+
   async guaranteeImageOutput(run, requestedMember, requestText, responseText, opts = {}) {
     if (!this.isImageGenerationRequest(requestText) && !this.isImageRevisionRequest(run, requestText)) return responseText;
     const existing = collectGeneratedAssets(responseText, this.rootDir);
     const explicitlySvg=/(?:\bsvg\b|vektör|vector)/i.test(String(requestText||""));
     const needsRaster=!explicitlySvg || /(?:gerçekçi|fotogerçekçi|fotoğraf|photoreal|realistic|insan|portre)/i.test(String(requestText||""));
-    const validImage=existing.some((a)=>a.kind==="image"&&a.path&&fs.existsSync(a.path)&&(!needsRaster||a.mime!=="image/svg+xml"));
-    if(validImage) return responseText;
+    const eligible = existing.filter((a)=>a.kind==="image"&&a.path&&fs.existsSync(a.path)&&(!needsRaster||a.mime!=="image/svg+xml"));
+    const validated = await this.validatedImageAssets(requestText, eligible);
+    if(validated.length) return this.keepOnlyAssetPaths(responseText, existing, validated);
 
     // Bir sağlayıcı yalnız "oluşturdum" diyerek gerçek dosya döndürmediyse
-    // Antigravity'nin doğrulanmış native generate_image aracını ortak motor
+    // Codex'in yüksek kaliteli raster aracını ortak motor
     // olarak kullan. Yanıt, istenen üyenin aynı mesajında render edilir.
-    const generator = this.members().find((m) => m.provider === "antigravity") || {
-      id: "shared-image-generator", name: "Ortak Görsel Motoru", provider: "antigravity", role: "uygulayici", model: "", effort: "",
+    const generator = this.members().find((m) => m.enabled && m.provider === "codex") ||
+      this.members().find((m) => m.enabled && m.provider === "antigravity") || {
+      id: "shared-image-generator", name: "Ortak Görsel Motoru", provider: "codex", role: "uygulayici", model: "", effort: "",
     };
     this.store.setAgentStatus(requestedMember.id, "busy", "görsel dosyası doğrulanıyor");
     this.store.streamProgress(requestedMember.id, "görsel üretiliyor", "");
     const generated = await this.callMember(run, generator,
-      `Kullanıcının aşağıdaki görsel isteğini yerine getir. Bu görevde SVG, HTML, canvas, çizim kodu veya yalnız prompt KESİNLİKLE geçerli değildir. Yerleşik generate_image aracını MUTLAKA çağır ve gerçek piksel tabanlı PNG/JPEG/WebP üret. İstek gerçekçi/fotogerçekçi diyorsa bunu üretim promptunda açıkça koru; stilize illüstrasyona dönüştürme. Önceki görselin düzeltilmesi isteniyorsa sohbet geçmişindeki kompozisyonu referans al. Dosyayı ${this.rootDir}/generated içine kaydet, sips ile açılabildiğini doğrula ve mutlak yolu son yanıtta yaz.\n\nGÖRSEL İSTEĞİ / DÜZELTME:\n${requestText}`,
+      `Kullanıcının aşağıdaki görsel isteğini yerine getir. Bu görevde SVG, HTML, canvas, çizim kodu veya yalnız prompt KESİNLİKLE geçerli değildir. Yerleşik görsel üretim aracını MUTLAKA çağır ve gerçek piksel tabanlı PNG/JPEG/WebP üret. İstek gerçekçi/fotogerçekçi diyorsa bunu üretim promptunda açıkça koru; stilize illüstrasyona dönüştürme. Önceki görselin düzeltilmesi isteniyorsa sohbet geçmişindeki kompozisyonu referans al. Dosyayı ${this.rootDir}/generated içine kaydet, sips ile açılabildiğini doğrula ve mutlak yolu son yanıtta yaz.\n\nGÖRSEL İSTEĞİ / DÜZELTME:\n${requestText}`,
       { label:"görsel üretiliyor", cwd:run.projectDir || this.rootDir, images:opts.images || [], media:opts.media || [], timeoutMs:5*60*1000, shouldStop:()=>run.stopRequested }
     );
     if (!generated.ok) throw new Error(`Görsel üretilemedi: ${generated.error}`);
     const assets = collectGeneratedAssets(generated.text, this.rootDir);
-    if (!assets.some((a) => a.kind === "image" && a.path && fs.existsSync(a.path))) {
+    const accepted = await this.validatedImageAssets(requestText, assets);
+    if (!accepted.length) {
       throw new Error("Görsel motoru yanıt verdi ancak açılabilir bir görsel dosyası oluşturmadı");
     }
     // Geçersiz SVG/"yapamam" açıklamasını son mesaja taşımıyoruz; kullanıcı
     // yalnız gerçek üretim sonucunu ve raster önizlemeyi görür.
-    return `İstenen görsel Gemini görsel üretim motoruyla oluşturuldu ve doğrulandı.\n\n${generated.text}`;
+    return `İstenen görsel yüksek kaliteli ortak görsel motoruyla oluşturuldu ve doğrulandı.\n\n${this.keepOnlyAssetPaths(generated.text, assets, accepted)}`;
   }
 
-  memberMsg(run, member, kind, content, taskId = null) {
-    const attachments = collectGeneratedAssets(content, this.rootDir);
+  memberMsg(run, member, kind, content, taskId = null, requestText = "") {
+    let attachments = collectGeneratedAssets(content, this.rootDir);
+    const wantsVector = /(?:\bsvg\b|vektör|vector)/i.test(String(requestText || ""));
+    if (!wantsVector && attachments.some((a) => a.kind === "image" && a.mime !== "image/svg+xml")) {
+      attachments = attachments.filter((a) => a.mime !== "image/svg+xml");
+    }
     let displayContent = attachments.some((a) => a.inlineSource === "svg")
       ? String(content).replace(/```(?:svg|xml)\s*\n[\s\S]*?<svg\b[\s\S]*?<\/svg>\s*```/gi, "_SVG tasarımı oluşturuldu; aşağıdaki önizlemeden açabilir veya indirebilirsiniz._")
       : content;
@@ -229,6 +367,9 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
         .replace(/^\s*(?:\*\*)?(?:Mutlak )?Dosya yolu:(?:\*\*)?\s*$/gmi, "")
         .replace(/^\s*\/(?:Users|private|tmp)\/[^\n]+\.(?:png|jpe?g|webp|gif|avif|svg|pdf|docx?|xlsx?|csv|mp4|mov|webm)\s*$/gmi, "")
         .replace(/\n{3,}/g, "\n\n").trim();
+      if (!wantsVector) displayContent = displayContent
+        .replace(/\s*\([^)]*(?:SVG|vektör)[^)]*\)/gi, "")
+        .replace(/\b(?:ve|,)?\s*(?:ölçeklenebilir\s+)?vektör\s+SVG\s+format(?:ında|larında)?/gi, "");
       if (!displayContent) displayContent = "Görsel hazır.";
     }
     this.store.addMessage(run, {
@@ -336,6 +477,23 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     run.stopRequested = false;
     this.store.updateRun(run, { status: "running" });
     this.store.addMessage(run, { from: "sistem", kind: "info", content: "Koşu kaldığı yerden devam ettiriliyor." });
+    if (run.kind === "image_batch" || run.kind === "image-batch") {
+      const pending = (run.tasks || []).filter((task) => task.status !== "done");
+      for (const task of pending) {
+        task.status = "pending";
+        task.error = null;
+      }
+      run.batch ??= {};
+      run.batch.total = run.tasks.length;
+      run.batch.completed = run.tasks.filter((task) => task.status === "done").length;
+      run.batch.failed = 0;
+      run.turnActive = true;
+      this.store.updateRun(run, { phase:"image_planning" });
+      this.runImageBatch(run, Math.max(1, Math.min(Number(run.batch.concurrency) || 4, 6)))
+        .catch((err) => this.failRun(run, err))
+        .finally(() => this.persistSessions(run));
+      return;
+    }
     this.runPipeline(run, true)
       .catch((err) => this.failRun(run, err))
       .finally(() => this.persistSessions(run));
@@ -474,13 +632,24 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
         (history ? `\n\nSohbet geçmişi:\n${history}` : "") + "\n\n--- KULLANICININ MESAJI ---\n";
     };
     const generatingImage = this.isImageGenerationRequest(text) || this.isImageRevisionRequest(run, text);
-    let res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
+    const agentText = generatingImage ? this.imageGenerationPrompt(text) : text;
+    // Claude ve Antigravity görsel görevinde sanat yönetmeni olarak çalışır;
+    // Canva/MCP oturumuna takılmaz. Gerçek raster dosyası aşağıda ortak Codex
+    // motoruyla üretilir ve seçilen ajanın yanıtı olarak gösterilir.
+    const adviserOnly = generatingImage && member.provider !== "codex";
+    let res = await this.callMember(run, member, prefixFor(member) + (adviserOnly
+      ? `Canva, MCP veya herhangi bir görsel üretim aracı çağırma. Dosya üretme. Kullanıcının isteği için yalnız kısa, ayrıntılı ve üretime hazır bir görsel promptu yaz.\n\n${text}`
+      : agentText) + imageNote, {
       label: generatingImage ? "görsel üretiyor" : "yanıtlıyor",
       images,
       media: attachments,
       cwd: run.projectDir || undefined,
       // Sohbette Antigravity'ye uzun süre takılı kalınmaz
-      timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
+      // Flash görsel üretimi dakikalarca yanıtsız kalırsa bu gerçek ilerleme
+      // değildir. Kartı kapatıp anlaşılır hata/yeniden deneme akışına geç.
+      timeoutMs: adviserOnly ? 90 * 1000 : member.provider === "antigravity"
+        ? 6 * 60 * 1000
+        : undefined,
       shouldStop: () => run.stopRequested,
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
@@ -496,8 +665,11 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       }
     }
     if (res.ok) {
-      res.text = await this.guaranteeImageOutput(run, member, text, res.text, { images, media:attachments });
-      this.memberMsg(run, member, "message", res.text);
+      // Danışmanın üretim promptunu gerçek görsel isteğine eklemek kaliteyi ve
+      // ajanın yaratıcı katkısını korur; kullanıcı ham promptu görmez.
+      const renderRequest = adviserOnly && res.text?.trim() ? `${text}\n\nSANAT YÖNETMENİ NOTU:\n${res.text.trim()}` : text;
+      res.text = await this.guaranteeImageOutput(run, member, renderRequest, adviserOnly ? "" : res.text, { images, media:attachments });
+      this.memberMsg(run, member, "message", res.text, null, text);
     } else if (!run.stopRequested) {
       throw new Error(`${member.name} yanıt veremedi: ${res.error}`);
     }
