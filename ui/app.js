@@ -22,6 +22,37 @@ let flowAccountConnected = false;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+function formatElapsed(startedAt, endedAt = Date.now()) {
+  const start = typeof startedAt === "number" ? startedAt : +new Date(startedAt);
+  const end = typeof endedAt === "number" ? endedAt : +new Date(endedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+  const total = Math.max(0, Math.floor((end - start) / 1000));
+  if (total < 60) return `${total} sn`;
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes < 60) return `${minutes} dk${seconds ? ` ${seconds} sn` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) return `${hours} sa${remainingMinutes ? ` ${remainingMinutes} dk` : ""}`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return `${days} gün${remainingHours ? ` ${remainingHours} sa` : ""}`;
+}
+
+function updateElapsedTimers() {
+  document.querySelectorAll("[data-elapsed-start]").forEach((node) => {
+    const value = formatElapsed(Number(node.dataset.elapsedStart), node.dataset.elapsedEnd ? Number(node.dataset.elapsedEnd) : Date.now());
+    if (node.textContent !== value) node.textContent = value;
+  });
+}
+
+function elapsedHTML(startedAt, endedAt = null, cls = "elapsed-time") {
+  const start = typeof startedAt === "number" ? startedAt : +new Date(startedAt);
+  const end = endedAt ? (typeof endedAt === "number" ? endedAt : +new Date(endedAt)) : null;
+  if (!Number.isFinite(start)) return "";
+  return `<span class="${cls}" data-elapsed-start="${start}"${Number.isFinite(end) ? ` data-elapsed-end="${end}"` : ""}>${formatElapsed(start, end || Date.now())}</span>`;
+}
+
 const AGENT_META = {
   claude: { label: "Claude Code", short: "C" },
   codex: { label: "Codex", short: "X" },
@@ -262,7 +293,7 @@ function renderLive() {
     const meta = metaFor(a);
     if(imageGeneration) return `<div class="msg live-msg image-live from-${esc(meta.cls)}">
       <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
-      <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span></div>
+      <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span>${elapsedHTML(state.agents[a]?.since || s.startedAt)}</div>
       <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
       <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
     </div>`;
@@ -273,6 +304,7 @@ function renderLive() {
         <div class="m-head">
           <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
           <span class="lb-live">${esc(statusLabel)}…</span>
+          ${elapsedHTML(state.agents[a]?.since || s.startedAt)}
         </div>
       </div>
     </div>`;
@@ -789,11 +821,11 @@ function renderChat(run) {
 
   const busy = Object.entries(state.agents)
     .filter(([, st]) => st.status === "busy")
-    .map(([n, st]) => `${AGENT_META[n]?.label || n}${st.detail ? ` (${st.detail})` : ""}`);
+    .map(([n, st]) => ({ name:n, label:AGENT_META[n]?.label || n, detail:st.detail, since:st.since }));
   const typing = $("typing");
   if (run?.status === "running" && busy.length) {
     typing.hidden = false;
-    typing.innerHTML = `<span class="dots">${esc(busy.join(", "))} çalışıyor</span>`;
+    typing.innerHTML = busy.map((agent) => `<span class="typing-agent"><span class="dots">${esc(agent.label)}${agent.detail ? ` (${esc(agent.detail)})` : ""} çalışıyor</span>${elapsedHTML(agent.since)}</span>`).join(`<span class="typing-separator"> · </span>`);
   } else {
     typing.hidden = true;
   }
@@ -831,7 +863,7 @@ function renderDetails(run) {
         const left = Math.max(0, ((s - t0) / span) * 100);
         const width = Math.max(2, ((e - s) / span) * 100);
         bar = `<div class="t-bar-wrap"><div class="t-bar" style="left:${left.toFixed(1)}%;width:${Math.min(width, 100 - left).toFixed(1)}%"></div></div>`;
-        dur = `<div class="t-dur">${Math.round((e - s) / 1000)} sn${t.tier ? " · " + t.tier : ""}</div>`;
+        dur = `<div class="t-dur">${elapsedHTML(s, t.endedAt ? e : null, "task-elapsed")}${t.tier ? " · " + esc(t.tier) : ""}</div>`;
       }
       return `
         <div class="task-row ${t.status}">
@@ -1987,3 +2019,4 @@ fetchState();
 fetchCapabilities();
 if(window.desktopAPI?.updateStatus)setTimeout(checkApplicationUpdate,2500);
 setInterval(fetchState, 15000);
+setInterval(updateElapsedTimers, 1000);
