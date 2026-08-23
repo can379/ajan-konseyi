@@ -24,7 +24,25 @@ export const DIRECT_CONNECTORS = {
 
 export function requestedConnector(text) {
   const value = String(text || "");
-  return Object.entries(CONNECTORS).find(([, item]) => item.pattern.test(value))?.[0] || null;
+  // "git config user.email", e-posta alanı veya kod içindeki `email` gibi
+  // ifadeler bir Gmail görevi değildir. Gmail yalnız servis adı açıkça
+  // söylendiğinde ya da e-posta nesnesi üzerinde gerçek bir kullanıcı eylemi
+  // istendiğinde seçilir.
+  const gmailMention=/\bgmail\b|mail kutu(?:su|sunu|sunda)?/iu.test(value);
+  const configurationOnly=/\buser\.email\b|\bgit\s+(?:-c\s+[^\s]+\s+)*config\b/iu.test(value);
+  const mailObject=/\be-?posta[^\s,.;:!?)]*|\b(?:mail|email)(?:i|leri|lerimi)?\b/iu.test(value);
+  const mailAction=/(?:ara|bul|oku|listele|kontrol et|incele|özetle|göster|gönder|yolla|yanıtla|cevapla|sil|arşivle|taslak|oluştur|yaz)/iu.test(value);
+  if(gmailMention||(!configurationOnly&&mailObject&&mailAction))return "gmail";
+  return Object.entries(CONNECTORS)
+    .filter(([id])=>id!=="gmail")
+    .find(([, item]) => item.pattern.test(value))?.[0] || null;
+}
+
+export function connectorAccessMode(connector,text){
+  if(!connector)return null;
+  const value=String(text||"");
+  const mutation=/(?:gönder|yolla|yanıtla|cevapla|sil|arşivle|taşı|yükle|oluştur|yarat|değiştir|düzenle|güncelle|yayınla|paylaş|birleştir|merge|push|deploy)/iu.test(value);
+  return mutation?"write":"read";
 }
 
 export function connectorRoute(provider, text) {

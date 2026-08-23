@@ -1,12 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bridgePrompt, connectorCatalog, connectorRoute, requestedConnector } from "../src/connectorBridge.js";
+import { bridgePrompt, connectorAccessMode, connectorCatalog, connectorRoute, requestedConnector } from "../src/connectorBridge.js";
 import { Orchestrator, identityResponseMatchesProvider, isIdentityQuestion, verifiedMemberIdentity } from "../src/orchestrator.js";
 
 test("servis adını görevden algılar", () => {
   assert.equal(requestedConnector("Canva'da yeni bir afiş oluştur"), "canva");
   assert.equal(requestedConnector("GitHub pull requestlerini incele"), "github");
   assert.equal(requestedConnector("normal kodu incele"), null);
+});
+
+test("kod ve git yapılandırmasındaki email metnini Gmail isteği saymaz",()=>{
+  assert.equal(requestedConnector("git -c user.email=ajan@example.com commit oluştur"),null);
+  assert.equal(requestedConnector("Formdaki email alanını doğrula"),null);
+  assert.equal(requestedConnector("Önceki görevde e-posta yapılandırması yapıldı"),null);
+  assert.equal(requestedConnector("Gmail gelen kutusunu incele"),"gmail");
+  assert.equal(requestedConnector("E-postaları listele"),"gmail");
+});
+
+test("bağlayıcı erişim modu okumayı yazmadan ayırır",()=>{
+  assert.equal(connectorAccessMode("gmail","Gmail gelen kutusunu incele"),"read");
+  assert.equal(connectorAccessMode("gmail","Gmail ile yanıt gönder"),"write");
 });
 
 test("Claude yerel bağlayıcısını, eksik olanlarda Codex köprüsünü kullanır", () => {
@@ -75,6 +88,39 @@ test("geçmişteki bağlayıcı sözcüğü Ox Alpha mesajını Codex'e yönlend
   assert.equal(called, "openrouter");
   assert.equal(result.text, "Ox Alpha");
   assert.equal(result.raw.connectorRoute, undefined);
+});
+
+test("bağımlılık çıktısındaki user.email saf görev yönlendirmesini kirletmez",async()=>{
+  let called="",leaseCalls=0;
+  const orchestrator=Object.create(Orchestrator.prototype);
+  orchestrator.rootDir=process.cwd();
+  orchestrator.store={setAgentStatus(){},streamProgress(){}};
+  orchestrator.config={data:{members:[{id:"m-claude",name:"Claude",provider:"claude",enabled:true}]}};
+  orchestrator.providers={
+    claude:{async send(){called="claude";return{ok:true,text:"analiz",raw:{}};}},
+    codex:{async send(){called="codex";return{ok:true,text:"gmail",raw:{}};}},
+  };
+  orchestrator.acquireAgentLease=()=>{leaseCalls++;return null;};
+  const run={id:"run-dependency",messages:[],stopRequested:false,usage:{}};
+  const result=await orchestrator.callMember(run,orchestrator.config.data.members[0],
+    "Önceki çıktı: git -c user.email=ajan@example.com commit oluştur\nProjeyi analiz et",
+    {routeText:"Projeyi analiz et"});
+  assert.equal(result.ok,true);
+  assert.equal(called,"claude");
+  assert.equal(leaseCalls,0);
+});
+
+test("salt okunur Gmail çağrısı özel lease almaz",async()=>{
+  let leaseCalls=0;
+  const orchestrator=Object.create(Orchestrator.prototype);
+  orchestrator.rootDir=process.cwd();
+  orchestrator.store={setAgentStatus(){},streamProgress(){}};
+  orchestrator.config={data:{members:[{id:"m-codex",name:"Codex",provider:"codex",enabled:true}]}};
+  orchestrator.providers={codex:{async send(){return{ok:true,text:"ok",raw:{}};}}};
+  orchestrator.acquireAgentLease=()=>{leaseCalls++;return null;};
+  const run={id:"run-read",messages:[],stopRequested:false,usage:{}};
+  await orchestrator.callMember(run,orchestrator.config.data.members[0],"Gmail gelen kutusunu incele",{routeText:"Gmail gelen kutusunu incele"});
+  assert.equal(leaseCalls,0);
 });
 
 test("kimlik soruları sağlayıcıya özel ve temiz oturumda çalışır", async () => {

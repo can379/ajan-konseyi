@@ -16,7 +16,7 @@ import * as gitops from "./gitops.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
 import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
 import { analyzeImagesLocally } from "./localVision.js";
-import { bridgePrompt, connectorRoute, CONNECTORS } from "./connectorBridge.js";
+import { bridgePrompt, connectorAccessMode, connectorRoute, CONNECTORS } from "./connectorBridge.js";
 import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
 import { normalizeTaskContract } from "./taskContract.js";
 import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
@@ -255,7 +255,17 @@ export class Orchestrator {
     const route = identityQuestion ? null : connectorRoute(member.provider, routeText);
     const provider = this.providers[route?.mode === "shared" ? route.provider : member.provider];
     let connectorLease=null;
-    if(route?.connector&&!opts.isolated){try{connectorLease=this.acquireAgentLease(run,member,"external-service",route.connector,opts.label||"connector");}catch(error){this.store.setAgentStatus(member.id,"error",String(error.message).slice(0,80));return{ok:false,error:error.message};}}
+    const connectorMode=connectorAccessMode(route?.connector,routeText);
+    // Okuma/arama bağlantıları paylaşılabilir. Yalnız dış serviste durum
+    // değiştiren işlemler özel lease alır. Ortak Codex köprüsünde lease sahibi
+    // görünen üye değil, işlemi gerçekten yürüten sağlayıcıdır.
+    if(route?.connector&&connectorMode==="write"&&!opts.isolated){
+      const leaseMember=route.mode==="shared"
+        ? {id:`connector-${route.provider}`,name:`${route.provider} bağlayıcısı`,provider:route.provider}
+        : member;
+      try{connectorLease=this.acquireAgentLease(run,leaseMember,"external-service",route.connector,opts.label||"connector");}
+      catch(error){this.store.setAgentStatus(member.id,"error",String(error.message).slice(0,80));return{ok:false,error:error.message,orchestrationError:true};}
+    }
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
     // Eski yanlış yönlendirmeler oturum geçmişine "Ben Codex'im" yazmış olabilir.
     // Kimlik doğrulamasını kirlenmiş geçmişten tamamen ayır.
@@ -1167,6 +1177,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       tierModel: this.pickTierModel(member.provider, task.tier),
       images, media: run.attachments || [],
       shouldStop: () => run.stopRequested,
+      // Rol başlığı ve bağımlılık çıktıları servis yönlendirmesini kirletemez.
+      routeText: task.prompt,
     };
     const imageNote = attachmentPrompt(run.attachments || []);
     let depContext = "";
@@ -1213,7 +1225,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         if(fallbackCwd)task.workspace={branch:worktrees[fb.id].branch,path:fallbackCwd,isolated:true};
         const fallbackPrepared=preparePrompt(task.prompt,fallbackCwd);
         res = await this.callMember(run, member, header + fallbackPrepared.prompt, {
-          ...opts, cwd: fallbackCwd, tierModel: this.pickTierModel(fb.provider, task.tier),
+          ...opts, routeText: task.prompt, cwd: fallbackCwd, tierModel: this.pickTierModel(fb.provider, task.tier),
         });
         if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
         if(fallbackPrepared.inputDir)fs.rmSync(fallbackPrepared.inputDir,{recursive:true,force:true});
