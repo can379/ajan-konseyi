@@ -21,8 +21,12 @@ export class CodexAgent extends BaseAgent {
     try {
       return await this._invoke(prompt, opts);
     } catch (err) {
+      const message = String(err?.message || err);
       // Kullanıcı durdurduysa ASLA yeniden deneme
       if (opts.shouldStop?.()) throw err;
+      // Süre sınırına ulaşan işi farklı model ayarlarıyla baştan çalıştırmak
+      // gerçek sınırı katlayıp arayüzü takılmış gibi bırakır.
+      if (/zaman aşım/i.test(message)) throw err;
       // Seçili model/çaba tanınmıyorsa varsayılan ayarlarla bir kez dene
       const model = opts.model ?? this.getModel?.();
       const effort = opts.effort ?? this.getEffort?.();
@@ -129,9 +133,11 @@ export class CodexAgent extends BaseAgent {
       child._sessionKey = sessionKey || null;
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
+      let forceKillTimer = null;
       const timer = setTimeout(() => {
         timedOut = true;
         try { child.kill("SIGTERM"); } catch {}
+        forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
       }, timeoutMs);
       child.stdout.on("data", (d) => {
         stdout += d;
@@ -143,9 +149,10 @@ export class CodexAgent extends BaseAgent {
         }
       });
       child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); this.children.delete(child); reject(err); });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
         clearTimeout(timer);
+        clearTimeout(forceKillTimer);
         this.children.delete(child);
         if (onLine && lineBuf.trim()) onLine(lineBuf.trim());
         this.log(`codex exit=${code} args=${args.join(" ")}\nstderr: ${stderr.slice(0, 2000)}`);

@@ -20,9 +20,14 @@ export class ClaudeAgent extends BaseAgent {
     try {
       return await this._invoke(prompt, opts);
     } catch (err) {
+      const message = String(err?.message || err);
       // Kullanıcı durdurduysa ASLA yeniden deneme (Codex incelemesi bulgusu:
       // aksi hâlde Durdur düğmesi yeni bir üretim tetikleyebilir)
       if (opts.shouldStop?.()) throw err;
+      // Zaman aşımı aynı pahalı çağrıyı model/oturum geri dönüşleriyle yeniden
+      // başlatmamalı. Aksi halde 15 dakikalık sınır sessizce 30-45 dakikaya
+      // uzuyor ve arayüz "çalışıyor" durumunda takılı kalıyor.
+      if (/zaman aşım/i.test(message)) throw err;
       // Oturum bozulduysa (örn. tur ortasında durduruldu) taze oturumla bir kez dene
       if (this.getSession(opts) && !opts.fresh && !opts._noResumeRetry) {
         this.log(`resume başarısız (${err.message}); taze oturumla yeniden deneniyor`);
@@ -110,9 +115,13 @@ export class ClaudeAgent extends BaseAgent {
       child._sessionKey = sessionKey || null;
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
+      let forceKillTimer = null;
       const timer = setTimeout(() => {
         timedOut = true;
         try { child.kill("SIGTERM"); } catch {}
+        // Claude CLI veya onun alt süreci SIGTERM'i yutarsa Promise ancak
+        // süreç kapanınca çözüldüğü için tur sonsuza kadar active kalıyordu.
+        forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
       }, timeoutMs);
       child.stdout.on("data", (d) => {
         stdout += d;
@@ -124,9 +133,10 @@ export class ClaudeAgent extends BaseAgent {
         }
       });
       child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); this.children.delete(child); reject(err); });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
         clearTimeout(timer);
+        clearTimeout(forceKillTimer);
         this.children.delete(child);
         if (onLine && lineBuf.trim()) onLine(lineBuf.trim());
         this.log(`claude exit=${code} args=${args.join(" ")}\nstderr: ${stderr.slice(0, 2000)}`);
