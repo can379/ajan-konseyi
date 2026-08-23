@@ -17,6 +17,8 @@ import { bridgePrompt, connectorRoute, CONNECTORS } from "./connectorBridge.js";
 import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
 
 const exec = promisify(execFile);
+const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
+export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 
 // Orkestratör: konsey ÜYELERİNİ (kullanıcının tanımladığı, her biri bir
 // sağlayıcıya bağlı kişilikler) yönetir. Üye sayısı serbesttir: 3 Codex mimar,
@@ -135,7 +137,7 @@ export class Orchestrator {
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları bağlı proje ya da ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
 --- SÖZLEŞME SONU ---`;
     const browserToken=this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
-    const browserHelp=browserToken?`\n\nGörünür uygulama tarayıcısını gerektiğinde kendin açabilirsin: curl -sS -X POST -H 'Authorization: Bearer ${browserToken}' -H 'Content-Type: application/json' --data '{"action":"open","payload":{"url":"https://example.com"}}' http://127.0.0.1:4780/api/browser/action . Açılış uygulamayı öne getirir ve origin'i 60 saniye paylaşır. Sonra aynı uç noktada snapshot kullan; navigate, click ve type kullanıcı onayı bekler. E-posta/kullanıcı adı, parola, OTP ve ödeme alanlarına yazmak teknik olarak yasaktır; bunları kullanıcı elle doldurur.`:"";
+    const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
     let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     if (route?.mode === "shared") {
       const label = CONNECTORS[route.connector]?.label || route.connector;
@@ -161,7 +163,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // koru; bu durumda hesabın varsayılan modelini agy seçsin.
     const suppressAntigravityTier = member.provider === "antigravity" && !member.model && !!member.effort;
     const selectedModel = member.model || (suppressAntigravityTier ? "" : (opts.tierModel || undefined));
-    const res = await provider.send(effectivePrompt, {
+    const providerOpts = {
       ...effectiveOpts,
       sessionKey: opts.sessionKey || (route?.mode === "shared"
         ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
@@ -170,7 +172,18 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       model: selectedModel,
       effort: member.effort || undefined,
       onUsage: (u) => this.accumUsage(run, member.id, u),
-    });
+    };
+    let res = await provider.send(effectivePrompt, providerOpts);
+    // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
+    // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
+    for(let step=0;res.ok&&browserToken&&step<12;step++){
+      const action=parseBrowserAction(res.text);if(!action)break;
+      let result;
+      try{result=await this.browserBridge.request({token:browserToken,...action});}
+      catch(error){result={error:String(error.message||error)};}
+      const followup=`--- UYGULAMA TARAYICI ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının tarayıcı görevini sürdür. Başka bir tarayıcı eylemi gerekiyorsa yalnız AJAN_BROWSER_ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
+      res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}`:followup,{...providerOpts,fresh:opts.fresh});
+    }
     const stopped = run.stopRequested;
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
