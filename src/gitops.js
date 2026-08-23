@@ -6,6 +6,14 @@ import os from "node:os";
 
 const run = promisify(execFile);
 
+const gitIdentityEnv = {
+  ...process.env,
+  GIT_AUTHOR_NAME: "ajan-konseyi",
+  GIT_AUTHOR_EMAIL: "ajan@local",
+  GIT_COMMITTER_NAME: "ajan-konseyi",
+  GIT_COMMITTER_EMAIL: "ajan@local",
+};
+
 function runWithInput(bin, args, input, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { ...options, stdio:["pipe", "pipe", "pipe"] });
@@ -22,9 +30,18 @@ function runWithInput(bin, args, input, options = {}) {
 // henüz commit edilmemiş çalışması ajanlara görünmez. Ana ağaca dokunmadan
 // izlenen diff'i ve ignore edilmeyen yeni dosyaları yeni worktree'ye yansıt.
 export async function mirrorWorkingSnapshot(projectDir, wtDir) {
-  const { stdout:diff } = await run("git", ["-C", projectDir, "diff", "--binary", "--no-ext-diff", "HEAD"], { maxBuffer:50*1024*1024 });
+  const headExists = await hasHead(projectDir);
+  const { stdout:diff } = headExists
+    ? await run("git", ["-C", projectDir, "diff", "--binary", "--no-ext-diff", "HEAD"], { maxBuffer:50*1024*1024 })
+    : { stdout:"" };
   if (diff) await runWithInput("git", ["-C", wtDir, "apply", "--binary", "--whitespace=nowarn", "-"], diff);
-  const { stdout:untracked } = await run("git", ["-C", projectDir, "ls-files", "--others", "--exclude-standard", "-z"], { encoding:null, maxBuffer:20*1024*1024 });
+  // İlk commit'i olmayan (unborn HEAD) depolarda index'e eklenmiş dosyalar da
+  // olabilir. Bu durumda hem cached hem untracked dosyaları boş koşu tabanına
+  // kopyala; normal depolarda izlenen değişiklikler yukarıdaki binary diff'ten gelir.
+  const listArgs = headExists
+    ? ["-C", projectDir, "ls-files", "--others", "--exclude-standard", "-z"]
+    : ["-C", projectDir, "ls-files", "--cached", "--others", "--exclude-standard", "-z"];
+  const { stdout:untracked } = await run("git", listArgs, { encoding:null, maxBuffer:20*1024*1024 });
   for (const relative of Buffer.from(untracked).toString("utf8").split("\0").filter(Boolean)) {
     const source=path.resolve(projectDir,relative), target=path.resolve(wtDir,relative);
     if(!target.startsWith(path.resolve(wtDir)+path.sep) || !fs.existsSync(source))continue;
@@ -45,6 +62,33 @@ export async function isGitRepo(dir) {
   }
 }
 
+export async function hasHead(projectDir) {
+  try {
+    await run("git", ["-C", projectDir, "rev-parse", "--verify", "HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runBaseRef(runId) {
+  const safe=String(runId||"run").replace(/[^a-zA-Z0-9._-]/g,"-");
+  return `refs/ajan-konseyi/runs/${safe}/base`;
+}
+
+// Git worktree bir commit ister. Kullanıcının henüz ilk commit'i oluşturmadığı
+// projelerde ana dalı değiştirmeden koşuya özel boş bir kök commit üret.
+async function ensureRunBase(projectDir, runId) {
+  if (await hasHead(projectDir)) return "HEAD";
+  const ref=runBaseRef(runId);
+  const existing=await run("git",["-C",projectDir,"show-ref","--verify","--hash",ref]).catch(()=>({stdout:""}));
+  if(existing.stdout.trim())return ref;
+  const {stdout:tree}=await runWithInput("git",["-C",projectDir,"mktree"],"",{env:gitIdentityEnv});
+  const {stdout:commit}=await run("git",["-C",projectDir,"commit-tree",tree.trim(),"-m","ajan: commitsiz proje koşu tabanı"],{env:gitIdentityEnv});
+  await run("git",["-C",projectDir,"update-ref",ref,commit.trim()]);
+  return ref;
+}
+
 // Git olmayan projeyi (kullanıcı onayından sonra) depoya çevirir
 export async function initRepo(projectDir) {
   await run("git", ["-C", projectDir, "init", "-b", "main"]);
@@ -59,7 +103,8 @@ export async function createWorktree(projectDir, runsDir, runId, agentName) {
   const wtDir = path.join(runsDir, runId, "worktrees", agentName);
   // Kesinti sonrası devam: worktree zaten varsa yeniden kullan
   if (fs.existsSync(path.join(wtDir, ".git"))) return { branch, wtDir };
-  await run("git", ["-C", projectDir, "worktree", "add", wtDir, "-b", branch], {
+  const startPoint=await ensureRunBase(projectDir,runId);
+  await run("git", ["-C", projectDir, "worktree", "add", wtDir, "-b", branch, startPoint], {
     maxBuffer: 10 * 1024 * 1024,
   });
   await mirrorWorkingSnapshot(projectDir, wtDir);
@@ -75,6 +120,7 @@ export async function rollbackRun(projectDir, runsDir, runId) {
     await run("git", ["-C", projectDir, "branch", "-D", branch]).catch(() => {});
     deleted.push(branch);
   }
+  await run("git",["-C",projectDir,"update-ref","-d",runBaseRef(runId)]).catch(()=>{});
   return deleted;
 }
 
@@ -119,7 +165,8 @@ export async function mergeBranch(projectDir, runsDir, runId, branch) {
   const intDir = path.join(runsDir, runId, "worktrees", "_integration");
   const intBranch = `ajan/${runId}/integration`;
   try {
-    await run("git", ["-C", projectDir, "worktree", "add", intDir, "-b", intBranch]);
+    const startPoint=await ensureRunBase(projectDir,runId);
+    await run("git", ["-C", projectDir, "worktree", "add", intDir, "-b", intBranch, startPoint]);
   } catch {
     // integration worktree zaten var
   }

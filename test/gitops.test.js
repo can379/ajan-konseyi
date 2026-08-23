@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { createWorktree, publishCurrentBranch, publishIntegration } from "../src/gitops.js";
+import { createWorktree, hasHead, publishCurrentBranch, publishIntegration } from "../src/gitops.js";
 
 function git(dir, ...args) {
   return execFileSync("git", ["-C", dir, ...args], {
@@ -73,4 +73,23 @@ test("ajan worktree'si commit edilmemiş güncel dosyaları da devralır",async(
   assert.equal(fs.readFileSync(path.join(wt.wtDir,"tracked.txt"),"utf8"),"güncel\n");
   assert.equal(fs.readFileSync(path.join(wt.wtDir,"new.txt"),"utf8"),"yeni\n");
   assert.equal(fs.readFileSync(path.join(repo,"tracked.txt"),"utf8"),"güncel\n");
+});
+
+test("ilk commit'i olmayan Git projesi ana dalı değiştirmeden ajan worktree'sinde açılır",async(t)=>{
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),"ajan-unborn-"));
+  const repo=path.join(base,"repo"),runs=path.join(base,"runs");fs.mkdirSync(repo);fs.mkdirSync(runs);
+  t.after(()=>fs.rmSync(base,{recursive:true,force:true}));
+  git(repo,"init","-b","main");
+  fs.writeFileSync(path.join(repo,"README.md"),"commitsiz proje\n");
+  fs.writeFileSync(path.join(repo,"staged.txt"),"indexte\n");git(repo,"add","staged.txt");
+
+  assert.equal(await hasHead(repo),false);
+  const first=await createWorktree(repo,runs,"run-unborn","m-codex");
+  const second=await createWorktree(repo,runs,"run-unborn","m-claude");
+  assert.equal(fs.readFileSync(path.join(first.wtDir,"README.md"),"utf8"),"commitsiz proje\n");
+  assert.equal(fs.readFileSync(path.join(first.wtDir,"staged.txt"),"utf8"),"indexte\n");
+  assert.equal(fs.readFileSync(path.join(second.wtDir,"README.md"),"utf8"),"commitsiz proje\n");
+  assert.equal(git(first.wtDir,"merge-base",first.branch,second.branch).length>0,true);
+  assert.equal(await hasHead(repo),false);
+  assert.match(git(repo,"status","--short","--branch"),/No commits yet on main/);
 });
