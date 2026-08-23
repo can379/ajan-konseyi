@@ -3,9 +3,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { BaseAgent } from "./base.js";
 import { cleanEnv } from "../util.js";
+import { ANTIGRAVITY_EFFORT } from "../models.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const QUOTA_ERROR_RE = /(?:429|RESOURCE_EXHAUSTED|QUOTA_EXHAUSTED|exhausted your capacity|quota (?:will reset|exceeded))/i;
+const MODEL_ERROR_RE = /(?:unknown|invalid|unsupported|not found|unrecognized|not recogni[sz]ed).{0,80}\bmodel\b|\bmodel\b.{0,80}(?:unknown|invalid|unsupported|not found|unrecognized|not recogni[sz]ed)/i;
 
 // Antigravity'nin resmi CLI motoru. Eski language_server RPC köprüsü yalnız
 // sohbet üretimini açıyor, yerleşik terminal/tarayıcı/web/MCP/skill/alt ajan ve
@@ -35,6 +37,11 @@ export class AntigravityAgent extends BaseAgent {
       // Kota hatası yeni conversation açınca düzelmez; ikinci bir pahalı çağrı
       // yapmadan üst katmana gerçek nedeni ve sıfırlanma süresini aktar.
       if (QUOTA_ERROR_RE.test(String(err?.message || err))) throw err;
+      const model = opts.model ?? this.getModel?.();
+      if (model && err?.noOutput === true && MODEL_ERROR_RE.test(String(err?.message || err)) && !opts._noModelRetry) {
+        this.log(`model (${model}) tanınmadı; varsayılan modelle yeniden deneniyor`);
+        return this._invoke(prompt, { ...opts, model: "", _noModelRetry: true });
+      }
       if (this.getSession(opts) && !opts.fresh && !opts._noResumeRetry) {
         this.log(`conversation devamı başarısız (${err.message}); yeni oturum deneniyor`);
         this.clearSession(opts);
@@ -59,9 +66,14 @@ export class AntigravityAgent extends BaseAgent {
     // Eski UI kataloğundaki insan-okur etiketleri CLI model kimliği değildir.
     // Yalnız gerçek kimlik biçimindeki özel değerleri geçir; aksi halde hesabın
     // güncel varsayılan modelini kullan.
-    if (model && /^[\w.-]+$/.test(String(model)) && !String(model).startsWith("MODEL_")) args.push("--model", model);
+    const modelArgSent = !!(model && /^[\w.-]+$/.test(String(model)) && !String(model).startsWith("MODEL_"));
+    if (modelArgSent) args.push("--model", model);
     const effort = opts.effort ?? this.getEffort?.();
-    if (["low", "medium", "high"].includes(effort)) args.push("--effort", effort);
+    const cliEffort = ANTIGRAVITY_EFFORT[effort] || (["low", "medium", "high"].includes(effort) ? effort : "");
+    // Yalnız kademe son ekli model kimlikleri --effort ile çakışır. Son eksiz
+    // Claude modelleri gibi kimliklerde CLI effort'ı ayrıca kabul eder.
+    const tierInModel = modelArgSent && /-(?:low|medium|high)$/.test(String(model));
+    if (cliEffort && !tierInModel) args.push("--effort", cliEffort);
     if (opts.codeMode) args.push("--mode", "accept-edits");
 
     const media = opts.media || (opts.images || []).map((file) => ({ path: file }));
@@ -103,7 +115,9 @@ export class AntigravityAgent extends BaseAgent {
     if (result.code !== 0 || (resultEvent?.status === "ERROR" && !finalText.trim())) {
       const detail = resultEvent?.error || resultEvent?.message || resultEvent?.status_message ||
         result.stderr || result.stdout.slice(-1200);
-      throw new Error(`Antigravity hata ile çıktı (exit ${result.code}): ${String(detail).slice(0, 900)}`);
+      const err = new Error(`Antigravity hata ile çıktı (exit ${result.code}): ${String(detail).slice(0, 900)}`);
+      err.noOutput = !finalText.trim();
+      throw err;
     }
     if (!finalText.trim()) throw new Error("Antigravity yanıtı boş döndü");
     this._cliReady = true;

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { BaseAgent } from "./base.js";
 import { cleanEnv } from "../util.js";
-import { CLAUDE_EFFORT_TOKENS } from "../models.js";
+import { CLAUDE_EFFORT, CLAUDE_EFFORT_TOKENS } from "../models.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -74,6 +74,7 @@ export class ClaudeAgent extends BaseAgent {
     const effort = opts.effort ?? this.getEffort?.();
     const extraEnv = {};
     if (effort && CLAUDE_EFFORT_TOKENS[effort]) {
+      if (CLAUDE_EFFORT[effort]) args.push("--effort", CLAUDE_EFFORT[effort]);
       extraEnv.MAX_THINKING_TOKENS = String(CLAUDE_EFFORT_TOKENS[effort]);
     }
 

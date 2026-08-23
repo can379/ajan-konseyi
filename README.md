@@ -15,6 +15,7 @@ CLI araçlarını ve bu araçlarda açtığınız abonelik oturumlarını kullan
 - Antigravity araştırma, görsel üretimi, medya analizi ve tarayıcı/UX testi yapar.
 - Ajanlar çıktıları birbirleriyle paylaşır; itiraz, revizyon, tartışma, oylama ve son doğrulama turlarıyla ortak sonuca ulaşır.
 - Görsel, PDF, belge, tablo, ses, video, arşiv ve kod dosyaları aynı sohbetten gönderilebilir ve önizlenebilir.
+- Yerel görsel çözümleme kullanılamadığında istek kesilmez; tanı yerel günlüğe yazılır ve güvenli geri dönüş uygulanır.
 - GitHub, Gmail, Google Drive, Figma, Canva, Slack ve Vercel görevleri bağlı Codex araçları veya güvenli ortak köprü üzerinden kullanılabilir.
 - Konuşmalar projelerin altında saklanır ve ajan/model değişse bile bağlam korunur.
 

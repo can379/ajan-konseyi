@@ -8,7 +8,7 @@ import { AntigravityAgent } from "./agents/antigravityAgent.js";
 import { Coordinator } from "./coordinator.js";
 import { ProjectContext } from "./projectContext.js";
 import { TIER_MAP } from "./models.js";
-import { extractJson, truncate, uid } from "./util.js";
+import { extractJson, now, truncate, uid } from "./util.js";
 import * as gitops from "./gitops.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
 import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
@@ -147,20 +147,25 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // modele veya servise gönderilmeden güvenilir bağlam olarak aktarılır.
     if (member.provider === "antigravity" && images.length) {
       let vision;
-      try { vision = await analyzeImagesLocally(images, this.rootDir); }
+      try { vision = await this.analyzeImages(images); }
       catch (err) {
         this.log(`yerel görsel çözümleme atlandı: ${String(err.message || err)}`);
         vision = "";
       }
       if (vision) effectivePrompt += `\n\n--- CİHAZDA ÇÖZÜMLENEN GÖRSEL İÇERİĞİ ---\n${vision}\n--- GÖRSEL İÇERİĞİ SONU ---\nBu içeriği ekli görsel bağlamı olarak kullan; erişemediğini söyleme.`;
     }
+    // Antigravity'de otomatik tier modeli -low/-medium/-high son eki taşır ve
+    // --effort ile çakışır. Kullanıcı açık model seçmediyse effort tercihini
+    // koru; bu durumda hesabın varsayılan modelini agy seçsin.
+    const suppressAntigravityTier = member.provider === "antigravity" && !member.model && !!member.effort;
+    const selectedModel = member.model || (suppressAntigravityTier ? "" : (opts.tierModel || undefined));
     const res = await provider.send(effectivePrompt, {
       ...effectiveOpts,
       sessionKey: opts.sessionKey || (route?.mode === "shared"
         ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
         : this.sessionKeyFor(run, member)),
       memberId: member.id,
-      model: member.model || opts.tierModel || undefined,
+      model: selectedModel,
       effort: member.effort || undefined,
       onUsage: (u) => this.accumUsage(run, member.id, u),
     });
@@ -217,7 +222,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const accepted = [];
     for (const asset of raster) {
       try {
-        const vision = await analyzeImagesLocally([asset.path], this.rootDir);
+        const vision = await this.analyzeImages([asset.path]);
         if (rule.labels.test(vision)) accepted.push(asset);
       } catch (err) {
         this.log(`üretilen görsel kalite doğrulaması atlandı (${path.basename(asset.path)}): ${String(err.message || err)}`);
@@ -377,6 +382,22 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       kind, taskId, content: displayContent, attachments,
     });
     return attachments;
+  }
+
+  // Yerel Vision çağrısı tek noktadan geçer: statik ESM importu testlerde
+  // değiştirilemediği için hata yolu bu metot geçersiz kılınarak sınanır.
+  // Saf geçiş kalmalıdır; hatayı yutmak varlık-koruma semantiğini tersine çevirir.
+  analyzeImages(paths) {
+    return analyzeImagesLocally(paths, this.rootDir);
+  }
+
+  // Tanılama günlüğünün kendisi hata yollarını asla kesmemeli.
+  log(text) {
+    try {
+      const dir = path.join(this.rootDir, "runs");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.appendFileSync(path.join(dir, "orchestrator.log"), `[${now()}] ${text}\n`);
+    } catch {}
   }
 
   // ---- macOS bildirimi ----
