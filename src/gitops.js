@@ -164,9 +164,18 @@ export async function publishCurrentBranch(projectDir, deployKey, requestedBranc
       await run("git",["-C",projectDir,"diff","--quiet"]);
       await run("git",["-C",projectDir,"diff","--cached","--quiet"]);
     } catch { throw new Error("GitHub'daki değişikliği birleştirmek için önce izlenen yerel dosyaları commit edin"); }
+    const gitEnv={...env,GIT_AUTHOR_NAME:"ajan-konseyi",GIT_AUTHOR_EMAIL:"ajan@local",GIT_COMMITTER_NAME:"ajan-konseyi",GIT_COMMITTER_EMAIL:"ajan@local"};
+    // Aynı tree'nin farklı commit kimliğiyle yeniden yayınlanması (ör. yerel
+    // d8e01a9 / uzak 21ae6a3) sahte bir ayrışma üretir. Eşdeğer yerel commit'i
+    // bulup yalnız onun devamındaki commitleri uzak eşdeğerin üzerine taşı.
+    const {stdout:remoteTree}=await run("git",["-C",projectDir,"show","-s","--format=%T",`origin/${branch}`],{env});
+    const {stdout:localTrees}=await run("git",["-C",projectDir,"log","--format=%H %T",branch],{env,maxBuffer:8*1024*1024});
+    const equivalent=localTrees.split("\n").map((line)=>line.trim().split(/\s+/)).find(([,tree])=>tree===remoteTree.trim())?.[0];
     try {
-      await run("git",["-C",projectDir,"merge",ahead>0?"--no-ff":"--ff-only","--no-edit",`origin/${branch}`],{env:{...env,GIT_AUTHOR_NAME:"ajan-konseyi",GIT_AUTHOR_EMAIL:"ajan@local",GIT_COMMITTER_NAME:"ajan-konseyi",GIT_COMMITTER_EMAIL:"ajan@local"},timeout:120_000,maxBuffer:8*1024*1024});
+      if(ahead>0&&equivalent)await run("git",["-C",projectDir,"rebase","--onto",`origin/${branch}`,equivalent,branch],{env:gitEnv,timeout:120_000,maxBuffer:8*1024*1024});
+      else await run("git",["-C",projectDir,"merge",ahead>0?"--no-ff":"--ff-only","--no-edit",`origin/${branch}`],{env:gitEnv,timeout:120_000,maxBuffer:8*1024*1024});
     } catch(error) {
+      await run("git",["-C",projectDir,"rebase","--abort"]).catch(()=>{});
       await run("git",["-C",projectDir,"merge","--abort"]).catch(()=>{});
       throw new Error(`GitHub değişikliği otomatik birleştirilemedi; çalışma ağacı geri alındı: ${String(error.message||error).slice(0,300)}`);
     }

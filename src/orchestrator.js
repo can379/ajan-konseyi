@@ -21,6 +21,7 @@ const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 const HOST_ACTION_RE=/<<<AJAN_HOST_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
+export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
 
 // Orkestratör: konsey ÜYELERİNİ (kullanıcının tanımladığı, her biri bir
 // sağlayıcıya bağlı kişilikler) yönetir. Üye sayısı serbesttir: 3 Codex mimar,
@@ -189,7 +190,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       try{
         if(browserAction)result=await this.browserBridge.request({token:browserToken,...browserAction});
         else{
-          if(!/(?:github|git\b).{0,80}(?:yayın|yayin|push|gönder)|(?:yayınla|yayinla|push et).{0,80}(?:github|repo|proje|sürüm)/i.test(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
+          if(!isExplicitPublishRequest(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
           const projectDir=run.projectDir||process.env.AJAN_KONSEYI_SOURCE_DIR;
           const deployKey=path.join(this.rootDir,"generated","ajan-konseyi-deploy");
           result=await gitops.publishCurrentBranch(projectDir,deployKey,String(hostAction.payload.branch||""));

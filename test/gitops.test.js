@@ -44,6 +44,16 @@ test("ana uygulama güncel dalı sağlayıcı sandbox'ı olmadan yayınlar",asyn
   assert.equal(result.published,true);assert.equal(result.commits,1);
   assert.equal(git(remote,"rev-parse","--short","main"),result.commit);
 
+  // Aynı tree ve aynı ebeveyn, farklı commit kimliği: gerçek depoda görülen
+  // d8e01a9 / 21ae6a3 durumunun birebir küçük modeli.
+  const tree=git(remote,"show","-s","--format=%T","main"),parent=git(remote,"show","-s","--format=%P","main");
+  const duplicate=git(remote,"commit-tree",tree,"-p",parent,"-m","aynı içeriğin uzak kopyası");
+  git(remote,"update-ref","refs/heads/main",duplicate);
+  fs.writeFileSync(path.join(repo,"after-duplicate.txt"),"devam\n");git(repo,"add","after-duplicate.txt");git(repo,"commit","-m","eşdeğerden sonra");
+  const rebased=await publishCurrentBranch(repo,key);
+  assert.equal(rebased.published,true);assert.equal(rebased.integratedRemote,true);
+  assert.equal(git(remote,"rev-parse","--short","main"),rebased.commit);
+
   const other=path.join(base,"other");execFileSync("git",["clone","-b","main",remote,other]);
   fs.writeFileSync(path.join(other,"remote.txt"),"uzak\n");git(other,"add","remote.txt");git(other,"commit","-m","uzak");git(other,"push","origin","main");
   fs.writeFileSync(path.join(repo,"local.txt"),"yerel\n");git(repo,"add","local.txt");git(repo,"commit","-m","yerel");
