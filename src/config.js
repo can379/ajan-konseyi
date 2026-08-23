@@ -72,7 +72,9 @@ export class Config {
 
   sanitizeMembers(list) {
     if (!Array.isArray(list) || !list.length) return structuredClone(DEFAULTS.members);
-    return list.slice(0, 12).map((m, i) => ({
+    // Üye sayısını sessizce kırpma. Aynı sağlayıcı üzerinde farklı rol/model
+    // kullanan her kayıt bağımsız bir konsey ajanıdır.
+    return list.map((m, i) => ({
       id: String(m.id || uid("m-")).slice(0, 24),
       name: String(m.name || "Üye " + (i + 1)).slice(0, 40),
       provider: PROVIDERS.includes(m.provider) ? m.provider : "claude",

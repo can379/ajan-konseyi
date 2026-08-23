@@ -4,7 +4,9 @@ export function normalizePlan(plan, validMemberIds) {
   }
   const validModes = new Set(["discussion", "split", "code"]);
   const seen = new Set();
-  const subtasks = plan.subtasks.slice(0, 30).map((task, index) => {
+  // Koordinatör görevin gerektirdiği kadar bağımsız ajan işi oluşturabilir.
+  // Pratik sınır sağlayıcı kotası ve kullanıcının durdurma kontrolüdür.
+  const subtasks = plan.subtasks.map((task, index) => {
     if (!task || typeof task !== "object") throw new Error(`Koordinatör planı geçersiz: görev ${index + 1}`);
     let id = String(task.id || `t${index + 1}`).replace(/[^\w-]/g, "_").slice(0, 40);
     if (!id || seen.has(id)) id = `t${index + 1}`;
@@ -16,7 +18,7 @@ export function normalizePlan(plan, validMemberIds) {
       title: String(task.title || `Görev ${index + 1}`).slice(0, 160),
       member_id: memberId,
       prompt: String(task.prompt || task.title || "Görevi tamamla").slice(0, 16000),
-      depends_on: Array.isArray(task.depends_on) ? task.depends_on.map(String).filter((x) => x !== id).slice(0, 20) : [],
+      depends_on: Array.isArray(task.depends_on) ? task.depends_on.map(String).filter((x) => x !== id) : [],
       model_tier: ["fast", "balanced", "strong"].includes(task.model_tier) ? task.model_tier : "balanced",
     };
   });

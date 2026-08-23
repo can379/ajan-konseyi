@@ -116,6 +116,9 @@ Sağlayıcı güçlü yönleri ve DEĞİŞMEZ görev sınırları:
 Üyenin rolü "auto" değilse dağıtımda rolüne uy. AYNI role sahip birden çok üye varsa
 işi aralarında paylaştır — paralel çalışırlar ve birbirlerinin çıktısını çapraz incelerler.
 Farklı üyelere verilen görevler AYNI ANDA yürür; bir üyeye verilen görevler sırayla yürür.
+Gerekiyorsa aynı temel üyeyi birden fazla bağımsız ajan örneği gibi kullan: her alt görev
+ayrı oturumda çalışır. Üye veya ajan sayısını üçle ya da başka sabit bir sayıyla sınırlama;
+işin kapsamı kaç bağımsız uzman gerektiriyorsa o kadar alt görev oluştur.
 Planı tek seferlik bağımsız cevaplar gibi kurma: araştırma/tasarım bulgularını kullanacak kod görevlerine depends_on ekle. Böylece ajanlar önceki ajanın çıktısını okuyup onun üzerine çalışsın.
 
 Kullanıcının isteği:
@@ -136,6 +139,8 @@ Alt görev istemi o üyeye doğrudan gönderilecek şekilde eksiksiz yazılmalı
 - Kod incelemesi/analizi görevlerinde göreve şu kuralı YAZ: "Bir dosya hakkında
   iddia üretmeden önce dosyanın GÜNCEL halini oku; her iddiaya dosya:satır kanıtı ekle."
 - Bir görev başka görevin çıktısına ihtiyaç duyuyorsa "depends_on" ile belirt.
+- Gereksiz ajan oluşturma; fakat kapsam gerçekten paralelleşebiliyorsa gereken sayıda
+  bağımsız görev/ajan örneği oluşturmaktan kaçınma.
 - Her görev için zorluk kademesi "model_tier" ver: fast|balanced|strong.
 - En az iki uygun üye varsa çözüm üreten görevlere çapraz inceleme yapılacağını varsay; review_rounds değerini risk ve kapsam büyüdükçe 1 veya 2 seç.
 
