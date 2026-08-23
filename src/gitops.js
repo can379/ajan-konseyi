@@ -1,10 +1,38 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import os from "node:os";
 
 const run = promisify(execFile);
+
+function runWithInput(bin, args, input, options = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { ...options, stdio:["pipe", "pipe", "pipe"] });
+    let stdout="", stderr="";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", code => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(stderr || `${bin} ${args.join(" ")} exit ${code}`)));
+    child.stdin.end(input);
+  });
+}
+
+// Worktree'ler yalnız HEAD'den başlatılırsa kullanıcının ana ağaçtaki güncel,
+// henüz commit edilmemiş çalışması ajanlara görünmez. Ana ağaca dokunmadan
+// izlenen diff'i ve ignore edilmeyen yeni dosyaları yeni worktree'ye yansıt.
+export async function mirrorWorkingSnapshot(projectDir, wtDir) {
+  const { stdout:diff } = await run("git", ["-C", projectDir, "diff", "--binary", "--no-ext-diff", "HEAD"], { maxBuffer:50*1024*1024 });
+  if (diff) await runWithInput("git", ["-C", wtDir, "apply", "--binary", "--whitespace=nowarn", "-"], diff);
+  const { stdout:untracked } = await run("git", ["-C", projectDir, "ls-files", "--others", "--exclude-standard", "-z"], { encoding:null, maxBuffer:20*1024*1024 });
+  for (const relative of Buffer.from(untracked).toString("utf8").split("\0").filter(Boolean)) {
+    const source=path.resolve(projectDir,relative), target=path.resolve(wtDir,relative);
+    if(!target.startsWith(path.resolve(wtDir)+path.sep) || !fs.existsSync(source))continue;
+    const stat=fs.lstatSync(source);fs.mkdirSync(path.dirname(target),{recursive:true});
+    if(stat.isSymbolicLink()){fs.rmSync(target,{force:true});fs.symlinkSync(fs.readlinkSync(source),target);}
+    else if(stat.isFile())fs.copyFileSync(source,target);
+  }
+}
 
 // Kod modu için git yardımcıları: her ajan ayrı dal + ayrı worktree'de çalışır,
 // böylece aynı dosyanın eşzamanlı değiştirilmesi engellenir.
@@ -34,6 +62,7 @@ export async function createWorktree(projectDir, runsDir, runId, agentName) {
   await run("git", ["-C", projectDir, "worktree", "add", wtDir, "-b", branch], {
     maxBuffer: 10 * 1024 * 1024,
   });
+  await mirrorWorkingSnapshot(projectDir, wtDir);
   return { branch, wtDir };
 }
 

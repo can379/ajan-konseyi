@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { publishCurrentBranch, publishIntegration } from "../src/gitops.js";
+import { createWorktree, publishCurrentBranch, publishIntegration } from "../src/gitops.js";
 
 function git(dir, ...args) {
   return execFileSync("git", ["-C", dir, ...args], {
@@ -60,4 +60,17 @@ test("ana uygulama güncel dalı sağlayıcı sandbox'ı olmadan yayınlar",asyn
   const merged=await publishCurrentBranch(repo,key);
   assert.equal(merged.published,true);assert.equal(merged.integratedRemote,true);
   assert.equal(fs.readFileSync(path.join(repo,"remote.txt"),"utf8"),"uzak\n");
+});
+
+test("ajan worktree'si commit edilmemiş güncel dosyaları da devralır",async(t)=>{
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),"ajan-snapshot-"));
+  const repo=path.join(base,"repo"),runs=path.join(base,"runs");fs.mkdirSync(repo);fs.mkdirSync(runs);
+  t.after(()=>fs.rmSync(base,{recursive:true,force:true}));
+  git(repo,"init","-b","main");
+  fs.writeFileSync(path.join(repo,"tracked.txt"),"eski\n");git(repo,"add","tracked.txt");git(repo,"commit","-m","ilk");
+  fs.writeFileSync(path.join(repo,"tracked.txt"),"güncel\n");fs.writeFileSync(path.join(repo,"new.txt"),"yeni\n");
+  const wt=await createWorktree(repo,runs,"run-snapshot","m-claude");
+  assert.equal(fs.readFileSync(path.join(wt.wtDir,"tracked.txt"),"utf8"),"güncel\n");
+  assert.equal(fs.readFileSync(path.join(wt.wtDir,"new.txt"),"utf8"),"yeni\n");
+  assert.equal(fs.readFileSync(path.join(repo,"tracked.txt"),"utf8"),"güncel\n");
 });

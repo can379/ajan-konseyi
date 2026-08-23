@@ -93,7 +93,7 @@ export class AntigravityAgent extends BaseAgent {
       if (conversationId && !opts.fresh) this.setSession(opts, conversationId);
       if (ev.event === "step_update" && ev.step_update?.text_delta) {
         live += ev.step_update.text_delta;
-        this.progress(opts.label || "", live, opts.memberId);
+        if (!opts.silent) this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.event === "result") {
         resultEvent = ev.result;
         finalText = ev.result?.response || finalText;

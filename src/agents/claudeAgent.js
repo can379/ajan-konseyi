@@ -61,10 +61,10 @@ export class ClaudeAgent extends BaseAgent {
       try { ev = JSON.parse(line); } catch { return; }
       if (ev.type === "stream_event" && ev.event?.delta?.type === "text_delta") {
         live += ev.event.delta.text;
-        this.progress(opts.label || "", live, opts.memberId);
+        if (!opts.silent) this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.type === "assistant" && Array.isArray(ev.message?.content)) {
         const text = ev.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
-        if (text) { live = text; this.progress(opts.label || "", live, opts.memberId); }
+        if (text) { live = text; if (!opts.silent) this.progress(opts.label || "", live, opts.memberId); }
       } else if (ev.type === "result") {
         result = ev;
       }

@@ -27,9 +27,13 @@ export const TIER_MAP = {
   claude: { fast: "haiku", balanced: "sonnet", strong: "opus" },
   codex: { fast: "gpt-5.6-luna", balanced: "gpt-5.6-terra", strong: "gpt-5.6-sol" },
   antigravity: { fast: "gemini-3.7-flash-low", balanced: "gemini-3.7-flash-medium", strong: "gemini-3.1-pro-high" },
+  openrouter: { fast: "stealth/ox-alpha", balanced: "stealth/ox-alpha", strong: "stealth/ox-alpha" },
 };
 
 export const MODEL_CATALOG = {
+  openrouter: [
+    { value: "stealth/ox-alpha", label: "Ox Alpha · 1M bağlam · OpenRouter" },
+  ],
   claude: [
     { value: "", label: "Otomatik · Aboneliğin varsayılan modeli" },
     { value: "claude-fable-5", label: "Fable 5 — en güçlü · yüksek tüketim" },

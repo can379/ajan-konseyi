@@ -19,14 +19,17 @@ export function preferredCoder(members, taskCounts = {}) {
   })[0] || null;
 }
 
-export function enforceTaskAssignments(tasks, members, mode) {
+export function enforceTaskAssignments(tasks, members, mode, smartModels = true) {
   const counts = Object.fromEntries(members.map((m) => [m.id, 0]));
   return tasks.map((task) => {
     let member = members.find((m) => m.id === task.member_id) || members[0];
+    const simpleNonCode=!requiresCodeAuthoring(task,mode)&&task.model_tier!=="strong";
+    const antigravity=members.filter((m)=>m.provider==="antigravity").sort((a,b)=>(counts[a.id]||0)-(counts[b.id]||0))[0];
+    if(smartModels&&simpleNonCode&&antigravity) member=antigravity;
     if (requiresCodeAuthoring(task, mode) && !canAuthorCode(member)) {
       member = preferredCoder(members, counts) || member;
     }
     if (member) counts[member.id] = (counts[member.id] || 0) + 1;
-    return { ...task, member_id: member?.id || task.member_id };
+    return { ...task, member_id: member?.id || task.member_id, routing_reason:smartModels&&simpleNonCode&&antigravity?"Düşük maliyetli Antigravity rotası":"Uzmanlık ve risk rotası" };
   });
 }

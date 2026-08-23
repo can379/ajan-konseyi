@@ -149,7 +149,7 @@ export class BaseAgent {
     for (const child of this.children) {
       if (key && child._sessionKey && !child._sessionKey.startsWith(key)) continue;
       try { child.kill("SIGTERM"); } catch {}
-      setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 2_000);
+      if (!child._noForceKill) setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 2_000);
     }
   }
 }

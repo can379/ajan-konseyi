@@ -4,7 +4,7 @@ import { uid, now } from "./util.js";
 
 // Kalıcı kullanıcı ayarları: ajan başına model/rol/etkinlik ve proje listesi.
 // config.json proje kökünde tutulur; oturum bilgisi veya anahtar İÇERMEZ.
-export const PROVIDERS = ["claude", "codex", "antigravity"];
+export const PROVIDERS = ["claude", "codex", "antigravity", "openrouter"];
 
 const LEGACY_ANTIGRAVITY_MODELS = {
   "Gemini 3.7 Flash (Medium)": "gemini-3.7-flash-medium",
@@ -25,7 +25,9 @@ const DEFAULTS = {
   projects: [],      // {id, name, path, createdAt}
   activeProject: null,
   smartModels: true,   // koordinatör alt görev zorluğuna göre model kademesi seçer
-      notifications: true, // onay/bitiş anında macOS bildirimi
+  notifications: true, // seçili önemli olaylarda macOS bildirimi
+  notificationEvents: { done: true, error: true, approval: true },
+  apiProviders: { openrouter: { configured: false, model: "stealth/ox-alpha" } },
 };
 
 export const ROLES = {
@@ -49,7 +51,7 @@ export class Config {
       this.data = { ...structuredClone(DEFAULTS), ...saved };
       // Eski sürümden geçiş: agents nesnesi vardı, members listesi yoktu
       if (!Array.isArray(saved.members) && saved.agents) {
-        this.data.members = PROVIDERS.map((prov) => {
+        this.data.members = ["claude", "codex", "antigravity"].map((prov) => {
           const old = saved.agents[prov] || {};
           return {
             id: "m-" + prov,
@@ -64,6 +66,12 @@ export class Config {
       }
       this.data.members = this.sanitizeMembers(this.data.members);
       this.data.coordinator = this.sanitizeCoordinator(this.data.coordinator);
+      this.data.apiProviders = {
+        openrouter: {
+          configured: saved.apiProviders?.openrouter?.configured === true,
+          model: "stealth/ox-alpha",
+        },
+      };
       this.data.projects=(this.data.projects||[]).map((p)=>({...p,instructions:String(p.instructions||""),skills:Array.isArray(p.skills)?p.skills:[],devCommand:String(p.devCommand||""),artifactExport:p.artifactExport===true}));
       delete this.data.agents; // eski alan artık kullanılmıyor
     } catch {
@@ -112,6 +120,16 @@ export class Config {
     if ("activeProject" in patch) this.data.activeProject = patch.activeProject;
     if ("smartModels" in patch) this.data.smartModels = !!patch.smartModels;
     if ("notifications" in patch) this.data.notifications = !!patch.notifications;
+    if (patch.notificationEvents && typeof patch.notificationEvents === "object") {
+      this.data.notificationEvents = {
+        done: patch.notificationEvents.done !== false,
+        error: patch.notificationEvents.error !== false,
+        approval: patch.notificationEvents.approval !== false,
+      };
+    }
+    if (patch.apiProviders && typeof patch.apiProviders === "object") {
+      this.data.apiProviders = { openrouter: { configured: patch.apiProviders.openrouter?.configured === true, model: "stealth/ox-alpha" } };
+    }
     this.save();
     return this.data;
   }

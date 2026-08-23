@@ -8,6 +8,11 @@ const fs = require("node:fs");
 const os = require("node:os");
 const { SENSITIVE_FIELD_SNIPPET } = require("../src/browserFieldPolicy.cjs");
 
+// Release/package names may change, but durable project settings must always
+// use the same application profile.
+app.setName("Ajan Konseyi");
+app.setPath("userData", path.join(app.getPath("appData"), "Ajan Konseyi"));
+
 const root = path.resolve(__dirname, "..");
 const sourceRoot = app.isPackaged ? path.resolve(process.resourcesPath, "../../../../..") : root;
 let serverProcess = null;
@@ -38,7 +43,6 @@ const browserReadyWaiters = new Map();
 const uiToken = crypto.randomBytes(32).toString("base64url");
 const bridgeToken = crypto.randomBytes(32).toString("base64url");
 process.env.AJAN_UI_TOKEN = uiToken;
-app.setName("Ajan Konseyi");
 
 function allowedBrowserUrl(value) { try { const url=new URL(value); return url.protocol==="https:"||(url.protocol==="http:"&&["localhost","127.0.0.1","::1"].includes(url.hostname)); } catch { return false; } }
 // Commit öncesi origin kilidi: protokol tek başına yetmez, HTTPS bir saldırgan
@@ -177,8 +181,18 @@ ipcMain.handle("flow-video-select",async(event,runId)=>{
 function versionParts(value){return String(value||"0").replace(/^v/i,"").split(/[.-]/).slice(0,3).map(x=>Number(x)||0);}
 function newerVersion(latest,current){const a=versionParts(latest),b=versionParts(current);for(let i=0;i<3;i++){if(a[i]>b[i])return true;if(a[i]<b[i])return false;}return false;}
 async function latestRelease(){const response=await net.fetch("https://api.github.com/repos/can379/ajan-konseyi/releases/latest",{headers:{Accept:"application/vnd.github+json","User-Agent":"Ajan-Konseyi-Updater"}});if(response.status===404)return null;if(!response.ok)throw new Error(`GitHub sürüm bilgisi alınamadı (${response.status})`);return response.json();}
+function cleanupUpdateCache(keep=""){
+  const updates=path.join(app.getPath("userData"),"updates");
+  if(!fs.existsSync(updates))return;
+  for(const entry of fs.readdirSync(updates,{withFileTypes:true})){
+    if(entry.name===keep)continue;
+    fs.rmSync(path.join(updates,entry.name),{recursive:true,force:true});
+  }
+}
 ipcMain.handle("app-update-status",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const release=await latestRelease(),current=app.getVersion();if(!release)return{current,available:false,message:"Henüz yayınlanmış GitHub sürümü yok"};const asset=(release.assets||[]).find(x=>/macos.*arm64.*\.zip$/i.test(x.name))||(release.assets||[]).find(x=>/\.zip$/i.test(x.name));return{current,latest:String(release.tag_name||release.name||""),available:newerVersion(release.tag_name,current),notes:String(release.body||"").slice(0,5000),publishedAt:release.published_at,asset:asset?{name:asset.name,size:asset.size,url:asset.browser_download_url}:null,page:release.html_url};}catch(error){return{error:error.message,current:app.getVersion()};}});
-ipcMain.handle("app-update-download",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const release=await latestRelease();if(!release)throw new Error("İndirilebilir GitHub sürümü yok");const asset=(release.assets||[]).find(x=>/macos.*arm64.*\.zip$/i.test(x.name))||(release.assets||[]).find(x=>/\.zip$/i.test(x.name));if(!asset)throw new Error("Bu Mac için ZIP paketi bulunamadı");const response=await net.fetch(asset.browser_download_url);if(!response.ok)throw new Error(`Güncelleme indirilemedi (${response.status})`);const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length<1024||Number(asset.size||0)&&bytes.length!==Number(asset.size))throw new Error("İndirilen güncelleme paketi eksik");const dir=path.join(app.getPath("userData"),"updates",String(release.tag_name||"latest").replace(/[^\w.-]/g,"_"));fs.mkdirSync(dir,{recursive:true});const file=path.join(dir,path.basename(asset.name));fs.writeFileSync(file,bytes);const digest=crypto.createHash("sha256").update(bytes).digest("hex");fs.writeFileSync(file+".sha256",`${digest}  ${path.basename(file)}\n`);shell.showItemInFolder(file);return{ok:true,file,sha256:digest,size:bytes.length};}catch(error){return{error:error.message};}});
+ipcMain.handle("app-update-download",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const release=await latestRelease();if(!release)throw new Error("İndirilebilir GitHub sürümü yok");const asset=(release.assets||[]).find(x=>/macos.*arm64.*\.zip$/i.test(x.name))||(release.assets||[]).find(x=>/\.zip$/i.test(x.name));if(!asset)throw new Error("Bu Mac için ZIP paketi bulunamadı");const versionDir=String(release.tag_name||"latest").replace(/[^\w.-]/g,"_");cleanupUpdateCache(versionDir);const response=await net.fetch(asset.browser_download_url);if(!response.ok)throw new Error(`Güncelleme indirilemedi (${response.status})`);const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length<1024||Number(asset.size||0)&&bytes.length!==Number(asset.size))throw new Error("İndirilen güncelleme paketi eksik");const dir=path.join(app.getPath("userData"),"updates",versionDir);fs.mkdirSync(dir,{recursive:true});for(const entry of fs.readdirSync(dir))fs.rmSync(path.join(dir,entry),{recursive:true,force:true});const file=path.join(dir,path.basename(asset.name));fs.writeFileSync(file,bytes);const digest=crypto.createHash("sha256").update(bytes).digest("hex");fs.writeFileSync(file+".sha256",`${digest}  ${path.basename(file)}\n`);shell.showItemInFolder(file);return{ok:true,file,sha256:digest,size:bytes.length};}catch(error){return{error:error.message};}});
+ipcMain.handle("external-app-choose",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};const result=await dialog.showOpenDialog(mainWindow,{title:"Uygulama seç",defaultPath:"/Applications",properties:["openFile"],filters:[{name:"macOS uygulaması",extensions:["app"]}]});if(result.canceled||!result.filePaths[0])return{canceled:true};const appPath=result.filePaths[0];if(!appPath.endsWith(".app")||!fs.existsSync(appPath))return{error:"Geçerli bir macOS uygulaması seçin"};return{path:appPath,name:path.basename(appPath,".app")};});
+ipcMain.handle("project-open-with",async(event,detail={})=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const projectPath=fs.realpathSync(String(detail.projectPath||""));if(!fs.statSync(projectPath).isDirectory())throw new Error("Proje klasörü bulunamadı");const apps={vscode:"Visual Studio Code",terminal:"Terminal","android-studio":"Android Studio"};if(detail.kind==="finder"){const error=await shell.openPath(projectPath);if(error)throw new Error(error);return{ok:true};}let appName=apps[detail.kind];if(detail.kind==="custom"){const custom=fs.realpathSync(String(detail.appPath||""));if(!custom.endsWith(".app")||!fs.existsSync(custom))throw new Error("Uygulama bulunamadı");appName=custom;}if(!appName)throw new Error("Desteklenmeyen uygulama");const child=spawn("open",["-a",appName,projectPath],{stdio:"ignore"});child.unref();return{ok:true};}catch(error){return{error:error.message};}});
 async function pollBrowserCommands(){releaseBrowserOriginLockIfExpired();if(browserPollInFlight)return;browserPollInFlight=true;let command;try{const response=await net.fetch("http://127.0.0.1:4780/api/browser/bridge/command",{headers:bridgeHeaders});if(!response.ok)return;({command}=await response.json());if(!command)return;if(command.expiresAt<=Date.now())throw new Error("Tarayıcı izni sona erdi");let result;if(command.action==="open"){expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;await createWindow();if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();app.focus({steal:true});mainWindow.webContents.send("browser-open",{requestId:command.id,url:command.payload.url,origin:command.origin,actor:command.actor,provider:command.provider,expiresAt:command.expiresAt});await waitForBrowserReady(command.id);const guest=await waitForBrowserGuest();await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else{const guest=await waitForBrowserGuest();const activeOrigin=new URL(guest.getURL()).origin;if(command.origin){expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;if(activeOrigin!==command.origin)throw new Error("Aktif sekmenin origin'i değişti");}if(command.action==="snapshot")result=await guest.executeJavaScript(snapshotScript.replace("__ORIGIN__",JSON.stringify(command.origin||activeOrigin)),true);else if(command.action==="navigate"){await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else if(command.action==="click"||command.action==="type")result=await guest.executeJavaScript(elementActionScript(command),true);else throw new Error("Desteklenmeyen tarayıcı komutu");}if(command.origin&&new URL(result.url).origin!==command.origin)throw new Error("Origin işlem sırasında değişti");await sendBridgeResult({id:command.id,result});}catch(error){if(command?.id)await sendBridgeResult({id:command.id,error:error.message}).catch(()=>{});}finally{expectedBrowserOrigin=null;expectedBrowserOriginUntil=0;browserPollInFlight=false;}}
 
 function serverReady() {
@@ -223,7 +237,7 @@ async function createWindow() {
   await ensureServer();
   mainWindow = new BrowserWindow({
     width: 1500, height: 960, minWidth: 980, minHeight: 680,
-    title: "Ajan Konseyi", titleBarStyle: "hiddenInset", backgroundColor: "#111210",
+    title: "Ajan Konseyi", titleBarStyle: "hiddenInset", trafficLightPosition: { x: 18, y: 18 }, backgroundColor: "#111210",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       webviewTag: true, contextIsolation: true, nodeIntegration: false,
@@ -239,6 +253,18 @@ async function createWindow() {
     return { action: "deny" };
   });
   mainWindow.webContents.on("context-menu", (_event, params) => {
+    const selected=String(params.selectionText||"").trim();
+    if(selected){
+      const query=selected.slice(0,500);
+      Menu.buildFromTemplate([
+        {label:`“${query.slice(0,42)}${query.length>42?"…":""}” metnini araştır`,click:()=>shell.openExternal(`https://www.google.com/search?q=${encodeURIComponent(query)}`)},
+        {label:"Google ile ara",click:()=>shell.openExternal(`https://www.google.com/search?q=${encodeURIComponent(query)}`)},
+        {type:"separator"},
+        {label:"Kopyala",role:"copy"},
+      ]).popup({window:mainWindow});
+      return;
+    }
+    if(params.isEditable){Menu.buildFromTemplate([{role:"cut",label:"Kes"},{role:"copy",label:"Kopyala"},{role:"paste",label:"Yapıştır"},{type:"separator"},{role:"selectAll",label:"Tümünü seç"}]).popup({window:mainWindow});return;}
     if (params.mediaType !== "image" || !params.srcURL) return;
     const src = params.srcURL;
     const imageBytes = async () => Buffer.from(await (await net.fetch(src)).arrayBuffer());

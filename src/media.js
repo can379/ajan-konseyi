@@ -12,6 +12,7 @@ export const PROVIDER_CAPABILITIES = {
   codex: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
   claude: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
   antigravity: { image:true, pdf:true, document:true, spreadsheet:true, archive:true, text:true, file:true, audio:true, video:true, imageGenerate:true, web:true, browser:true, terminal:true, mcp:true, skills:true, subagents:true, automation:true },
+  openrouter: { image:true, pdf:false, document:false, spreadsheet:false, archive:false, text:true, file:false, audio:false, video:true, imageGenerate:false, web:false, browser:false, terminal:false, mcp:false, skills:false, subagents:false, automation:false },
 };
 export function unsupportedAttachments(provider, list) {
   const caps = PROVIDER_CAPABILITIES[provider] || {};

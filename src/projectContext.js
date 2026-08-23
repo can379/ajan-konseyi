@@ -88,15 +88,18 @@ export class ProjectContext {
   // Koşu bitince programatik olarak hafızaya özet eklenir (ekstra LLM maliyeti yok)
   appendMemory(projectId, run, decision) {
     if (!projectId) return;
+    const file = this.memFile(projectId);
+    const previous=this.readMemory(projectId);
+    if(previous.includes(`Koşu: ${run.id}`))return;
     const files = (run.files || []).slice(0, 20).map((f) => `${f.change} ${f.path}`).join(", ");
     const entry = [
       `\n## ${now().slice(0, 16)} — ${truncate(run.request, 120)}`,
       `- Mod: ${run.mode} · Koşu: ${run.id}`,
       `- Karar: ${truncate(decision || "-", 400)}`,
+      `- Doğrulama: ${run.verify?.verdict||"tamamlandı"}${run.evidenceGate?.passed?" · EvidenceGate geçti":""}`,
       files ? `- Değişen dosyalar: ${truncate(files, 400)}` : null,
       run.tests?.length ? `- Test: ${run.tests.map((t) => (t.ok ? "✓" : "✗") + " " + t.command).join("; ")}` : null,
     ].filter(Boolean).join("\n") + "\n";
-    const file = this.memFile(projectId);
     if (!fs.existsSync(file)) {
       fs.writeFileSync(file, `# Proje hafızası\nBu dosya, konseyin bu projedeki geçmiş kararlarını taşır.\n`);
     }

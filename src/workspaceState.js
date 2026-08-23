@@ -5,9 +5,23 @@ import { draftTaskContract, normalizeTaskContract } from "./taskContract.js";
 import { acquireResourceLease, renewResourceLease, releaseResourceLease, sweepExpiredLeases } from "./resourceLease.js";
 
 export class WorkspaceState {
-  constructor(root){this.file=path.join(root,"workspace-state.json");this.data={version:1,tasks:[],audit:[],permissions:{},trash:[],memoryPins:{},skills:[],leases:[]};this.load();}
-  load(){try{this.data={...this.data,...JSON.parse(fs.readFileSync(this.file,"utf8"))};}catch{}this.save();}
-  save(){const tmp=this.file+".tmp";fs.writeFileSync(tmp,JSON.stringify(this.data,null,2));fs.renameSync(tmp,this.file);}
+  constructor(root){this.file=path.join(root,"workspace-state.json");this.data={version:1,tasks:[],schedules:[],audit:[],permissions:{},trash:[],memoryPins:{},skills:[],leases:[]};this.load();}
+  load(){
+    try {
+      const loaded=JSON.parse(fs.readFileSync(this.file,"utf8"));
+      this.data={...this.data,...loaded};
+      this.data.permissions=loaded.permissions&&typeof loaded.permissions==="object"?loaded.permissions:{};
+      this.data.skills=Array.isArray(loaded.skills)?loaded.skills:[];
+      this.data.schedules=Array.isArray(loaded.schedules)?loaded.schedules:[];
+    } catch {}
+    this.save();
+  }
+  save(){
+    fs.mkdirSync(path.dirname(this.file),{recursive:true});
+    const tmp=`${this.file}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp,JSON.stringify(this.data,null,2),"utf8");
+    fs.renameSync(tmp,this.file);
+  }
   record(action,detail={},projectId=null){this.data.audit.push({id:crypto.randomUUID(),ts:new Date().toISOString(),action,projectId,detail});this.data.audit=this.data.audit.slice(-3000);this.save();}
   permission(projectId,capability){return this.data.permissions[projectId]?.[capability]||"ask";}
   setPermissions(projectId,value){this.data.permissions[projectId]={...(this.data.permissions[projectId]||{}),...value};this.record("permissions.update",value,projectId);return this.data.permissions[projectId];}

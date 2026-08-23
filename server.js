@@ -8,13 +8,15 @@ import { Config, ROLES } from "./src/config.js";
 import { MODEL_CATALOG, EFFORT_LEVELS } from "./src/models.js";
 import { detectMedia, MAX_UPLOAD_BYTES, PROVIDER_CAPABILITIES } from "./src/media.js";
 import { discoverCapabilities } from "./src/capabilityDiscovery.js";
-import { conversationTitle } from "./src/util.js";
+import { conversationTitle, distributeRunUsage, summarizeCalendarMonth } from "./src/util.js";
 import { BrowserBridge } from "./src/browserBridge.js";
 import { WorkspaceState } from "./src/workspaceState.js";
+import { saveOpenRouterKey, deleteOpenRouterKey, openRouterStatus } from "./src/credentialStore.js";
 import { exportRunArtifacts } from "./src/artifactExport.js";
 import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import readline from "node:readline";
 const execP = promisify(execFile);
 const HOME = os.homedir();
 
@@ -31,12 +33,19 @@ fs.mkdirSync(DATA_ROOT, { recursive: true });
 const store = new Store(DATA_ROOT);
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
+openRouterStatus().then((status)=>{
+  let members=config.data.members.filter(member=>member.provider!=="openrouter");
+  if(status.configured)members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});
+  const coordinator=!status.configured&&config.data.coordinator?.provider==="openrouter"?{provider:"claude",model:"",effort:""}:config.data.coordinator;
+  config.update({members,coordinator,apiProviders:{openrouter:status}});
+}).catch(()=>{});
 const browserBridge = new BrowserBridge({ bridgeToken:BRIDGE_TOKEN });
 const workspaceState=new WorkspaceState(DATA_ROOT);
 store.on("event",event=>{if(event.runId){const run=store.getRun(event.runId);if(run)workspaceState.syncRun(run);}});
 orch.browserBridge = browserBridge;
 orch.resourceLeases = workspaceState;
 orch.artifactExporter=(run,stage="snapshot")=>{const project=config.getProject(run.projectId);if(!project?.artifactExport)return null;const result=exportRunArtifacts(project.path,run,{stage});workspaceState.record("artifact.export",{runId:run.id,stage,relative:result.relative,files:result.files},project.id);return result;};
+setInterval(()=>{for(const schedule of workspaceState.data.schedules||[]){if(schedule.status!=="scheduled"||Date.now()<+new Date(schedule.at))continue;const project=config.getProject(schedule.projectId),agents=config.data.members.filter(member=>member.enabled).map(member=>member.id);if(!agents.length){schedule.status="blocked";schedule.error="Etkin ajan yok";workspaceState.save();continue;}const run=store.createRun({request:schedule.request,mode:"auto",agents,projectId:project?.id||null,projectDir:project?.path||null,attachments:[],maxDebateRounds:2});run.budget={enabled:false,maxCalls:24,maxTokens:250000,stopped:false};schedule.status="started";schedule.runId=run.id;schedule.startedAt=new Date().toISOString();workspaceState.save();orch.startRun(run);}},15000).unref();
 
 // Kalıcı proje kabukları: cwd, export'lar ve uzun çalışan süreçler komutlar
 // arasında korunur. Çıktı artımlı okunur; masaüstü kapanınca temizlenir.
@@ -119,6 +128,141 @@ function readBody(req) {
 function bearer(req) { return String(req.headers.authorization || "").replace(/^Bearer\s+/i, ""); }
 function uiAuthorized(req) { return Boolean(UI_TOKEN && req.headers["x-ajan-ui-token"] === UI_TOKEN); }
 
+let providerQuotaCache={at:0,value:{}};
+let providerAccountUsageCache={at:0,value:{},refreshing:false};
+let antigravityQuotaCache={at:0,refreshing:false,value:null};
+function estimateRollingReset(samples,key,windowMs){
+  if(!samples.length)return null;
+  const latest=samples.at(-1),latestValue=Number(latest?.u?.[key]);
+  let segmentStart=latest.t;
+  for(let index=samples.length-2;index>=0;index--){const current=Number(samples[index]?.u?.[key]),next=Number(samples[index+1]?.u?.[key]);if(!Number.isFinite(current)||!Number.isFinite(next))continue;if(next+1<current){segmentStart=samples[index+1].t;break;}segmentStart=samples[index].t;}
+  // Claude pencereleri kayan pencerelerdir. Kesin reset zamanı dosyada yer
+  // almadığı için yalnız pencerenin başlangıcı bulunabildiğinde gösterilir.
+  return Number.isFinite(latestValue)&&segmentStart?new Date(segmentStart+windowMs).toISOString():null;
+}
+function readClaudePlanQuota(){
+  const file=path.join(HOME,"Library","Application Support","Claude","plan-usage-history.json");
+  try{
+    const parsed=JSON.parse(fs.readFileSync(file,"utf8")),samples=(Array.isArray(parsed.samples)?parsed.samples:[]).filter(item=>Number.isFinite(item?.t)&&item?.u).sort((a,b)=>a.t-b.t),latest=samples.at(-1);
+    if(!latest)return null;
+    const fiveUsed=Number(latest.u.fh),weekUsed=Number(latest.u.sd),windows=[];
+    if(Number.isFinite(fiveUsed))windows.push({name:"five_hour",label:"5 saatlik kota",usedPercent:fiveUsed,remainingPercent:Math.max(0,100-fiveUsed),windowMinutes:300,resetsAt:estimateRollingReset(samples,"fh",5*60*60_000),updatedAt:new Date(latest.t).toISOString(),stale:Date.now()-latest.t>60*60_000});
+    if(Number.isFinite(weekUsed))windows.push({name:"weekly",label:"Haftalık kota",usedPercent:weekUsed,remainingPercent:Math.max(0,100-weekUsed),windowMinutes:7*24*60,resetsAt:estimateRollingReset(samples,"sd",7*24*60*60_000),updatedAt:new Date(latest.t).toISOString(),stale:Date.now()-latest.t>60*60_000});
+    return windows.length?{available:true,source:"Claude masaüstü plan kullanım kaydı",updatedAt:new Date(latest.t).toISOString(),windows,remainingPercent:Math.min(...windows.map(item=>item.remainingPercent)),usedPercent:Math.max(...windows.map(item=>item.usedPercent)),name:"subscription"}:null;
+  }catch{return null;}
+}
+function antigravityIdentity(){
+  const roots=[path.join(HOME,"Library","Application Support","Antigravity","logs"),path.join(HOME,".gemini","antigravity-cli")];
+  for(const item of roots.flatMap(root=>newestFiles(root,".log",80))){
+    try{const tail=readFileSlice(item.path,Math.max(0,item.size-512*1024),Math.min(item.size,512*1024)),email=[...tail.matchAll(/applyAuthResult:\s*email=([^\s,]+)/g)].at(-1)?.[1];if(email)return{accountEmail:email,accountPlan:"Google AI Pro"};}catch{}
+  }
+  return{accountPlan:"Google AI Pro"};
+}
+function parseAntigravityQuotaText(text){
+  const source=String(text||""),section=(start,end)=>source.slice(source.indexOf(start),end&&source.indexOf(end)>-1?source.indexOf(end):undefined),localizeDuration=value=>String(value||"").replace(/\bdays?\b/gi,"gün").replace(/\bhours?\b/gi,"saat").replace(/\bminutes?\b/gi,"dakika"),parse=(block,label)=>{const after=block.slice(block.indexOf(label)+label.length),percent=after.match(/\b(100|\d{1,2})%/),refresh=after.match(/fully refresh in\s+([^\n.]+(?:minutes?|hours?|days?)[^\n.]*)/i);return percent?{remainingPercent:Number(percent[1]),usedPercent:100-Number(percent[1]),refreshText:refresh?.[1]?localizeDuration(refresh[1].trim()):null}:null;},gemini=section("Gemini Models","Claude and GPT models"),windows=[];
+  const weekly=parse(gemini,"Weekly Limit Remaining"),five=parse(gemini,"Five Hour Limit Remaining");
+  if(five)windows.push({name:"five_hour",label:"5 saatlik kota",windowMinutes:300,...five,resetsAt:null,updatedAt:new Date().toISOString(),stale:false});
+  if(weekly)windows.push({name:"weekly",label:"Haftalık kota",windowMinutes:10080,...weekly,resetsAt:null,updatedAt:new Date().toISOString(),stale:false});
+  return windows.length?{available:true,source:"Antigravity Models & Usage yerel sağlayıcı ekranı",updatedAt:new Date().toISOString(),windows,remainingPercent:Math.min(...windows.map(item=>item.remainingPercent)),usedPercent:Math.max(...windows.map(item=>item.usedPercent)),...antigravityIdentity()}:null;
+}
+function antigravityDevtoolsEvaluate(webSocketDebuggerUrl,expression){return new Promise((resolve,reject)=>{let settled=false;const socket=new WebSocket(webSocketDebuggerUrl),timer=setTimeout(()=>{try{socket.close();}catch{}reject(new Error("Antigravity yerel arayüzü zaman aşımına uğradı"));},8000);socket.addEventListener("open",()=>socket.send(JSON.stringify({id:1,method:"Runtime.evaluate",params:{expression,returnByValue:true,awaitPromise:true}})));socket.addEventListener("message",event=>{const message=JSON.parse(event.data);if(message.id!==1)return;settled=true;clearTimeout(timer);socket.close();resolve(message.result?.result?.value||"");});socket.addEventListener("error",()=>{if(settled)return;clearTimeout(timer);reject(new Error("Antigravity yerel arayüzüne bağlanılamadı"));});});}
+async function refreshAntigravityQuota(){
+  if(antigravityQuotaCache.refreshing||Date.now()-antigravityQuotaCache.at<5*60_000)return;
+  antigravityQuotaCache.refreshing=true;
+  try{
+    let portFile=path.join(HOME,"Library","Application Support","Antigravity","DevToolsActivePort");
+    const findTarget=async()=>{const port=Number(String(fs.readFileSync(portFile,"utf8")).split("\n")[0]),targets=await fetch(`http://127.0.0.1:${port}/json/list`).then(response=>response.json());return targets.find(item=>item.type==="page"&&item.webSocketDebuggerUrl);};
+    let target;try{target=await findTarget();}catch{await execP("open",["-gj","-a","Antigravity"]);await new Promise(resolve=>setTimeout(resolve,1800));target=await findTarget();}
+    if(!target)throw new Error("Antigravity sayfası bulunamadı");
+    const expression=`(async()=>{const text=()=>document.body?.innerText||"";if(!text().includes("Models & Usage")){const settings=[...document.querySelectorAll("button,[role=button],a")].find(element=>element.innerText?.trim()==="Settings");settings?.click();await new Promise(resolve=>setTimeout(resolve,250));const models=[...document.querySelectorAll("button,[role=button],a")].find(element=>element.innerText?.trim()==="Models");models?.click();await new Promise(resolve=>setTimeout(resolve,900));}return text();})()`;
+    const text=await antigravityDevtoolsEvaluate(target.webSocketDebuggerUrl,expression),value=parseAntigravityQuotaText(text);
+    if(value)antigravityQuotaCache.value=value;
+  }catch{}finally{antigravityQuotaCache.at=Date.now();antigravityQuotaCache.refreshing=false;providerQuotaCache.at=0;}
+}
+function emptyUsageDays(){const days=[];for(let offset=29;offset>=0;offset--){const date=new Date();date.setHours(12,0,0,0);date.setDate(date.getDate()-offset);days.push({day:date.toISOString().slice(0,10),cost:0,tokens:0,calls:0});}return days;}
+function usageDay(stamp){return new Date(stamp).toLocaleDateString("en-CA",{timeZone:process.env.TZ||"Europe/Istanbul"});}
+function finalizeAccountUsage(provider,records,modelTotals={},source="Yerel sağlayıcı günlükleri"){
+  const byDay=new Map(records.map(item=>[item.day,item])),days=emptyUsageDays().map(day=>({...day,...(byDay.get(day.day)||{})}));
+  const today=days.at(-1)||{cost:0,tokens:0,calls:0},totals=days.reduce((sum,item)=>({cost:sum.cost+Number(item.cost||0),tokens:sum.tokens+Number(item.tokens||0),calls:sum.calls+Number(item.calls||0)}),{cost:0,tokens:0,calls:0});
+  const calendarMonth=summarizeCalendarMonth(records);
+  const mostUsedModel=Object.entries(modelTotals).sort((a,b)=>b[1]-a[1])[0]?.[0]||null;
+  return {provider,source,updatedAt:new Date().toISOString(),todayCost:today.cost,month:calendarMonth.month,monthCost:calendarMonth.cost,monthTokens:calendarMonth.tokens,monthCalls:calendarMonth.calls,thirtyDayCost:totals.cost,recentTokens:today.tokens,thirtyDayTokens:totals.tokens,calls:totals.calls,mostUsedModel,days};
+}
+function claudeRate(model){const name=String(model||"").toLowerCase();if(name.includes("opus-5"))return{input:5,cacheRead:.5,cacheWrite5m:6.25,cacheWrite1h:10,output:25};if(name.includes("opus"))return{input:15,cacheRead:1.5,cacheWrite5m:18.75,cacheWrite1h:30,output:75};if(name.includes("haiku"))return{input:1,cacheRead:.1,cacheWrite5m:1.25,cacheWrite1h:2,output:5};return{input:3,cacheRead:.3,cacheWrite5m:3.75,cacheWrite1h:6,output:15};}
+function claudeUsageAmount(usage,model){
+  const rate=claudeRate(model),input=Number(usage?.input_tokens||0),cacheRead=Number(usage?.cache_read_input_tokens||0),cacheWrite=Number(usage?.cache_creation_input_tokens||0),cache5m=Number(usage?.cache_creation?.ephemeral_5m_input_tokens||0),cache1h=Number(usage?.cache_creation?.ephemeral_1h_input_tokens||0),unclassifiedCache=Math.max(0,cacheWrite-cache5m-cache1h),output=Number(usage?.output_tokens||0),tokens=input+cacheRead+cacheWrite+output,cost=(input*rate.input+cacheRead*rate.cacheRead+(cache5m+unclassifiedCache)*rate.cacheWrite5m+cache1h*rate.cacheWrite1h+output*rate.output)/1e6;
+  return {tokens,cost};
+}
+async function scanClaudeAccountUsage(){
+  const configured=String(process.env.CLAUDE_CONFIG_DIR||"").split(path.delimiter).filter(Boolean).map(root=>path.join(root,"projects")),roots=[...new Set([...configured,path.join(HOME,".claude","projects"),path.join(HOME,".config","claude","projects")])],cutoff=Date.now()-31*86400_000,files=roots.flatMap(root=>newestFiles(root,".jsonl",10000)).filter(item=>item.mtimeMs>=cutoff),daily=new Map(),models={},seen=new Set();
+  for(const item of files){const lines=readline.createInterface({input:fs.createReadStream(item.path),crlfDelay:Infinity});for await(const line of lines){let event;try{event=JSON.parse(line);}catch{continue;}const usage=event?.message?.usage,model=event?.message?.model,messageId=event?.message?.id||event.uuid,dedupeKey=[event.sessionId||item.path,messageId,event.requestId||""].join(":");if(event.type!=="assistant"||!usage||!model||model==="<synthetic>"||seen.has(dedupeKey))continue;seen.add(dedupeKey);const stamp=Date.parse(event.timestamp||0);if(!stamp||stamp<cutoff)continue;const parts=Array.isArray(usage.iterations)&&usage.iterations.length?usage.iterations:[usage],day=usageDay(stamp),row=daily.get(day)||{day,cost:0,tokens:0,calls:0};for(const part of parts){const partModel=part.model||model,amount=claudeUsageAmount(part,partModel);row.cost+=amount.cost;row.tokens+=amount.tokens;models[partModel]=(models[partModel]||0)+amount.tokens;}row.calls++;daily.set(day,row);}}
+  return finalizeAccountUsage("claude",[...daily.values()],models,"Claude yerel oturum günlükleri · API fiyat eşdeğeri");
+}
+function codexRate(model){const name=String(model||"").toLowerCase();if(name.includes("spark"))return{input:.5,cached:.05,output:4};if(name.includes("gpt-5.6"))return{input:2.5,cached:.25,output:15};if(name.includes("gpt-5.5"))return{input:2,cached:.2,output:14};return{input:2.5,cached:.25,output:15};}
+function readFileSlice(file,start,length){const fd=fs.openSync(file,"r");try{const buffer=Buffer.alloc(length),read=fs.readSync(fd,buffer,0,length,start);return buffer.subarray(0,read).toString("utf8");}finally{fs.closeSync(fd);}}
+async function scanCodexAccountUsage(){
+  const roots=[path.join(HOME,".codex","sessions"),path.join(HOME,".codex","archived_sessions")],cutoff=Date.now()-31*86400_000,files=roots.flatMap(root=>newestFiles(root,".jsonl",20000)).filter(item=>item.mtimeMs>=cutoff),daily=new Map(),models={};
+  // Her oturumdaki son `total_token_usage`, o oturumun kümülatif ve tekil toplamıdır.
+  // Dosyanın tamamını yeniden okumak yerine kuyruğu okumak hem aynı çağrıları tekrar
+  // saymayı önler hem de çok büyük/uzun oturumlarda uygulamanın açılışını kilitlemez.
+  for(const item of files){let model="gpt-5.6-sol",usage=null,stamp=0;try{const head=readFileSlice(item.path,0,Math.min(item.size,256*1024));for(const line of head.split("\n")){try{const event=JSON.parse(line);if(event.type==="turn_context"&&event.payload?.model)model=event.payload.model;else if(event.type==="session_meta"&&event.payload?.model)model=event.payload.model;}catch{}}const tailSize=Math.min(item.size,32*1024*1024),tail=readFileSlice(item.path,item.size-tailSize,tailSize);for(const line of tail.split("\n").reverse()){try{const event=JSON.parse(line);if(event.type==="turn_context"&&event.payload?.model&&!usage)model=event.payload.model;const candidate=event.type==="event_msg"&&event.payload?.type==="token_count"?event.payload?.info?.total_token_usage:null;if(!candidate)continue;usage=candidate;stamp=Date.parse(event.timestamp||0)||item.mtimeMs;break;}catch{}}}catch{continue;}if(!usage||stamp<cutoff)continue;const input=Number(usage.input_tokens||0),cached=Number(usage.cached_input_tokens||0),output=Number(usage.output_tokens||0),tokens=input+output,rate=codexRate(model),cost=(Math.max(0,input-cached)*rate.input+cached*rate.cached+output*rate.output)/1e6,day=usageDay(stamp),row=daily.get(day)||{day,cost:0,tokens:0,calls:0};row.cost+=cost;row.tokens+=tokens;row.calls++;daily.set(day,row);models[model]=(models[model]||0)+tokens;}
+  return finalizeAccountUsage("codex",[...daily.values()],models,"Codex yerel oturum ve arşiv günlükleri · API fiyat eşdeğeri");
+}
+function localAntigravityUsage(){
+  const daily=new Map(),models={},cutoff=Date.now()-31*86400_000;for(const run of Object.values(store.runs||{})){for(const [member,total] of Object.entries(run.usage||{})){const configured=config.data.members.find(item=>item.id===member);if(configured?.provider!=="antigravity")continue;const exact=Object.entries(run.usageDaily||{}).map(([day,agents])=>({day,usage:agents?.[member]})).filter(item=>item.usage&&Date.parse(`${item.day}T12:00:00`)>=cutoff),messageDays=[...new Set((run.messages||[]).filter(message=>message.from===member||message.provider==="antigravity").map(message=>usageDay(message.ts)).filter(Boolean))],fallbackDays=messageDays.length?messageDays:[usageDay(run.createdAt||run.updatedAt)].filter(Boolean),records=distributeRunUsage(total,exact,fallbackDays);for(const {day,usage} of records){if(Date.parse(`${day}T12:00:00`)<cutoff)continue;const input=Number(usage.input||0),cached=Number(usage.cachedInput||0),output=Number(usage.output||0),tokens=input+output,cost=((Math.max(0,input-cached)*.5)+(cached*.05)+(output*3))/1e6,row=daily.get(day)||{day,cost:0,tokens:0,calls:0};row.cost+=cost;row.tokens+=tokens;row.calls+=Number(usage.calls||0);daily.set(day,row);}const model=configured.model||"Gemini",tokens=Number(total.input||0)+Number(total.output||0);models[model]=(models[model]||0)+tokens;}}
+  return finalizeAccountUsage("antigravity",[...daily.values()],models,"Ajan Konseyi Antigravity kayıtları · API fiyat eşdeğeri");
+}
+async function scanAntigravityAccountUsage(){
+  const exact=localAntigravityUsage(),byDay=new Map((exact.days||[]).filter(item=>item.tokens||item.calls||item.cost).map(item=>[item.day,{...item}]));
+  const root=path.join(HOME,".gemini","antigravity-cli","conversations"),cutoff=Date.now()-31*86400_000,files=newestFiles(root,".db",10000).filter(item=>item.mtimeMs>=cutoff);
+  const estimatedByDay=new Map();let estimated=false;
+  for(const item of files){
+    try{
+      // Antigravity konuşma DB'leri sağlayıcının kesin token sayacını tutmuyor.
+      // Eski hesap geçmişini tamamen yok saymak yerine model isteklerinin metin
+      // yükünden muhafazakâr bir yerel tahmin çıkarıyoruz. Ajan Konseyi'nin aynı
+      // gün için kesin kaydı varsa `max` sayesinde iki kez sayılmıyor.
+      const {stdout}=await execP("/usr/bin/sqlite3",[item.path,"select coalesce(sum(length(step_payload)),0),count(*) from steps where length(step_payload)>0;"],{maxBuffer:1024*1024});
+      const [payloadBytes,calls]=String(stdout||"").trim().split("|").map(Number);if(!payloadBytes&&!calls)continue;
+      const day=usageDay(item.mtimeMs),tokens=Math.max(0,Math.round(payloadBytes/4)),row=estimatedByDay.get(day)||{day,cost:0,tokens:0,calls:0};
+      row.tokens+=tokens;row.cost+=tokens/1e6;row.calls+=Math.max(1,calls||0);estimatedByDay.set(day,row);
+    }catch{}
+  }
+  for(const [day,row] of estimatedByDay){const known=byDay.get(day);if(!known||row.tokens>Number(known.tokens||0)){byDay.set(day,row);estimated=true;}}
+  const result=finalizeAccountUsage("antigravity",[...byDay.values()],{"gemini-3.7-flash-medium":[...byDay.values()].reduce((sum,item)=>sum+Number(item.tokens||0),0)},estimated?"Antigravity yerel konuşma geçmişi + Ajan Konseyi kesin kayıtları · eski konuşmalar için tahmini API eşdeğeri":"Ajan Konseyi Antigravity kayıtları · API fiyat eşdeğeri");
+  return {...result,estimatedHistory:estimated};
+}
+async function refreshProviderAccountUsage(){if(providerAccountUsageCache.refreshing||Date.now()-providerAccountUsageCache.at<5*60_000)return;providerAccountUsageCache.refreshing=true;try{const [codex,claude,antigravity]=await Promise.all([scanCodexAccountUsage(),scanClaudeAccountUsage(),scanAntigravityAccountUsage()]);providerAccountUsageCache={at:Date.now(),refreshing:false,value:{codex,claude,antigravity}};providerQuotaCache.at=0;}catch(error){providerAccountUsageCache.refreshing=false;console.error("Sağlayıcı kullanım geçmişi okunamadı:",error.message);}}
+refreshProviderAccountUsage();
+function newestFiles(root,suffix=".jsonl",limit=16){
+  const files=[];
+  const walk=(dir)=>{let entries=[];try{entries=fs.readdirSync(dir,{withFileTypes:true});}catch{return;}for(const entry of entries){const full=path.join(dir,entry.name);if(entry.isDirectory())walk(full);else if(entry.name.endsWith(suffix)){try{const stat=fs.statSync(full);files.push({path:full,mtimeMs:stat.mtimeMs,size:stat.size});}catch{}}}};
+  walk(root);return files.sort((a,b)=>b.mtimeMs-a.mtimeMs).slice(0,limit);
+}
+function providerQuotas(){
+  if(Date.now()-providerQuotaCache.at<30000)return providerQuotaCache.value;
+  const value={codex:{available:false},claude:{available:false},antigravity:{available:false}};
+  for(const provider of ["claude","antigravity","codex"]){const accountUsage=providerAccountUsageCache.value[provider];if(accountUsage)value[provider]={...value[provider],accountUsage};}
+  refreshProviderAccountUsage();
+  const claudePlan=readClaudePlanQuota();
+  if(claudePlan)value.claude={...value.claude,...claudePlan,accountUsage:value.claude.accountUsage||null};
+  refreshAntigravityQuota();
+  if(antigravityQuotaCache.value)value.antigravity={...value.antigravity,...antigravityQuotaCache.value,accountUsage:value.antigravity.accountUsage||null};
+  try{
+    const latestByLimit=new Map();
+    for(const item of newestFiles(path.join(HOME,".codex","sessions"))){
+      const size=Math.min(item.size,32*1024*1024),fd=fs.openSync(item.path,"r"),buffer=Buffer.alloc(size);fs.readSync(fd,buffer,0,size,item.size-size);fs.closeSync(fd);
+      const lines=buffer.toString("utf8").split("\n").reverse();
+      for(const line of lines){try{const event=JSON.parse(line),limits=event?.payload?.rate_limits||event?.payload?.info?.rate_limits,primary=limits?.primary;if(!primary||!Number.isFinite(primary.used_percent))continue;const timestamp=Date.parse(event.timestamp||0)||item.mtimeMs,limitId=String(limits.limit_id||"unknown");const previous=latestByLimit.get(limitId);if(!previous||timestamp>previous.timestamp)latestByLimit.set(limitId,{timestamp,event,limits,primary});}catch{}}
+    }
+    // `codex_bengalfox` gibi model-ozel limitler genel abonelik kotasi degildir.
+    // Genel kaydi kimligiyle sec; yoksa yalnizca adsiz/model-ozel olmayan limiti kullan.
+    const latest=latestByLimit.get("codex")||[...latestByLimit.values()].filter(item=>!item.limits.limit_name).sort((a,b)=>b.timestamp-a.timestamp)[0];
+    if(latest){const {event,limits,primary}=latest,direct={name:"weekly",usedPercent:primary.used_percent,remainingPercent:Math.max(0,100-primary.used_percent),windowMinutes:primary.window_minutes||null,resetsAt:primary.resets_at?new Date(primary.resets_at*1000).toISOString():null,updatedAt:event.timestamp||null,stale:false,history:[]},meta={accountPlan:limits.plan_type||null,accountUsage:value.codex.accountUsage||null};value.codex={...meta,available:true,source:"Codex yerel oturum kaydı",limitId:limits.limit_id||null,limitName:limits.limit_name||"Genel Codex kotası",...direct,plan:limits.plan_type||null,credits:limits.credits||null,windows:[direct],secondary:limits.secondary&&Number.isFinite(limits.secondary.used_percent)?{name:"secondary",usedPercent:limits.secondary.used_percent,remainingPercent:Math.max(0,100-limits.secondary.used_percent),windowMinutes:limits.secondary.window_minutes||null,resetsAt:limits.secondary.resets_at?new Date(limits.secondary.resets_at*1000).toISOString():null,updatedAt:event.timestamp||null,stale:false,history:[]}:null};if(value.codex.secondary)value.codex.windows.push(value.codex.secondary);}
+  }catch{}
+  providerQuotaCache={at:Date.now(),value};return value;
+}
+
 const MIME = { ".html": "text/html", ".htm":"text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/markdown", ".svg":"image/svg+xml", ".json":"application/json" };
 
 const server = http.createServer(async (req, res) => {
@@ -157,10 +301,26 @@ const server = http.createServer(async (req, res) => {
         efforts: EFFORT_LEVELS,
         home: HOME,
         capabilities: PROVIDER_CAPABILITIES,
+        providerQuotas:providerQuotas(),
         workspaceState:workspaceState.public(),
       });
     }
     if(req.method==="GET"&&p==="/api/workspace")return json(res,200,workspaceState.public());
+    if(req.method==="GET"&&p==="/api/api-providers/openrouter"){
+      const status=await openRouterStatus();
+      if(!status.configured&&config.data.apiProviders?.openrouter?.configured){
+        const coordinator=config.data.coordinator?.provider==="openrouter"?{provider:"claude",model:"",effort:""}:config.data.coordinator;
+        config.update({members:config.data.members.filter(member=>member.provider!=="openrouter"),coordinator,apiProviders:{openrouter:status}});
+        store.emit("event",{type:"config"});
+      }
+      return json(res,200,status);
+    }
+    if(req.method==="POST"&&p==="/api/api-providers/openrouter"){
+      const body=await readBody(req),key=String(body.apiKey||"").trim();
+      if(!key)return json(res,400,{error:"API anahtarı gerekli"});
+      try{const check=await fetch("https://openrouter.ai/api/v1/key",{headers:{Authorization:`Bearer ${key}`},signal:AbortSignal.timeout(15000)});if(!check.ok){const detail=await check.json().catch(()=>({}));return json(res,400,{error:detail?.error?.message||"OpenRouter anahtarı doğrulanamadı"});}await saveOpenRouterKey(key);const persisted=await openRouterStatus();if(!persisted.configured)throw new Error("Anahtar doğrulandı ancak macOS Anahtar Zinciri'nden tekrar okunamadı");const members=config.data.members.filter(member=>member.provider!=="openrouter");members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});config.update({members,apiProviders:{openrouter:{configured:true}}});store.emit("event",{type:"config"});return json(res,200,{configured:true,provider:"openrouter",model:"stealth/ox-alpha",storage:"macOS Keychain"});}catch(error){return json(res,500,{error:String(error.message||error)});}
+    }
+    if(req.method==="DELETE"&&p==="/api/api-providers/openrouter"){await deleteOpenRouterKey();const coordinator=config.data.coordinator?.provider==="openrouter"?{provider:"claude",model:"",effort:""}:config.data.coordinator;config.update({members:config.data.members.filter(member=>member.provider!=="openrouter"),coordinator,apiProviders:{openrouter:{configured:false}}});store.emit("event",{type:"config"});return json(res,200,{configured:false});}
     if(req.method==="GET"&&p==="/api/workspace/leases")return json(res,200,{leases:workspaceState.activeLeases()});
     if(req.method==="POST"&&p==="/api/workspace/leases"){const body=await readBody(req);try{return json(res,201,workspaceState.acquireLease(body));}catch(error){return json(res,409,{error:error.message,conflict:error.conflict||null});}}
     const leaseApi=p.match(/^\/api\/workspace\/leases\/([\w-]+)$/);
@@ -170,7 +330,14 @@ const server = http.createServer(async (req, res) => {
     if(req.method==="POST"&&artifactExportApi){const run=store.getRun(artifactExportApi[1]);if(!run)return json(res,404,{error:"Koşu bulunamadı"});const project=config.getProject(run.projectId);if(!project)return json(res,400,{error:"Koşuya bağlı proje bulunamadı"});try{const result=exportRunArtifacts(project.path,run,{stage:"manual"});workspaceState.record("artifact.export",{runId:run.id,stage:"manual",relative:result.relative,files:result.files},project.id);return json(res,200,result);}catch(error){return json(res,400,{error:error.message});}}
     if(req.method==="POST"&&p==="/api/workspace/permissions"){const body=await readBody(req);return json(res,200,workspaceState.setPermissions(String(body.projectId||"global"),body.permissions||{}));}
     if(req.method==="GET"&&p==="/api/workspace/audit")return json(res,200,{audit:workspaceState.data.audit});
-    if(req.method==="POST"&&p==="/api/workspace/skills"){const body=await readBody(req);return json(res,200,workspaceState.saveSkill(body));}
+    if(req.method==="POST"&&p==="/api/workspace/schedules"){const body=await readBody(req),at=new Date(body.at);if(!body.request||Number.isNaN(+at))return json(res,400,{error:"Görev ve geçerli tarih gerekli"});const schedule={id:crypto.randomUUID(),request:String(body.request).slice(0,10000),projectId:body.projectId||null,at:at.toISOString(),status:"scheduled",createdAt:new Date().toISOString()};workspaceState.data.schedules.push(schedule);workspaceState.record("schedule.create",schedule,schedule.projectId);return json(res,201,schedule);}
+    if(req.method==="POST"&&p==="/api/workspace/skills"){
+      const body=await readBody(req);
+      const skill={name:String(body?.name||"").trim(),version:String(body?.version||"1.0.0").trim()||"1.0.0",instructions:String(body?.instructions||"").trim(),command:String(body?.command||"").trim()};
+      if(!skill.name)return json(res,400,{error:"Yetenek adı gerekli."});
+      if(!skill.instructions&&!skill.command)return json(res,400,{error:"Talimat veya komut gerekli."});
+      return json(res,200,workspaceState.saveSkill(skill));
+    }
     const skillApi=p.match(/^\/api\/workspace\/skills\/([\w-]+)(?:\/(enable))?$/);
     if(req.method==="POST"&&skillApi?.[2]){const body=await readBody(req),skill=workspaceState.enableSkill(skillApi[1],String(body.projectId||"global"),body.enabled!==false);return json(res,skill?200:404,skill||{error:"Yetenek bulunamadı"});}
     if(req.method==="DELETE"&&skillApi?.[1]&&!skillApi[2]){const index=workspaceState.data.skills.findIndex(x=>x.id===skillApi[1]);if(index<0)return json(res,404,{error:"Yetenek bulunamadı"});const [skill]=workspaceState.data.skills.splice(index,1);workspaceState.record("skill.delete",{skillId:skill.id,name:skill.name});return json(res,200,{ok:true});}
@@ -279,7 +446,7 @@ const server = http.createServer(async (req, res) => {
       if (!run) return json(res, 404, { error: "Koşu bulunamadı" });
       return json(res, 200, run);
     }
-    if(req.method==="PATCH"&&runDetail){const run=store.getRun(runDetail[1]);if(!run)return json(res,404,{error:"Sohbet bulunamadı"});const body=await readBody(req);if("title" in body)run.title=String(body.title||"Yeni sohbet").trim().slice(0,80);if("pinned" in body)run.pinned=!!body.pinned;if("archived" in body)run.archived=!!body.archived;if("tags" in body)run.tags=Array.isArray(body.tags)?body.tags.map(x=>String(x).trim()).filter(Boolean).slice(0,12):[];if("deletedAt" in body)run.deletedAt=body.deletedAt?new Date().toISOString():null;if("projectId" in body){const project=body.projectId?config.getProject(body.projectId):null;run.projectId=project?.id||null;run.projectDir=project?.path||null;}store.updateRun(run);workspaceState.record("chat.update",{runId:run.id,fields:Object.keys(body)},run.projectId);return json(res,200,run);}
+    if(req.method==="PATCH"&&runDetail){const run=store.getRun(runDetail[1]);if(!run)return json(res,404,{error:"Sohbet bulunamadı"});const body=await readBody(req);if("title" in body){run.title=String(body.title||"Yeni sohbet").trim().slice(0,80);run.titleManual=true;}if("pinned" in body)run.pinned=!!body.pinned;if("archived" in body)run.archived=!!body.archived;if("tags" in body)run.tags=Array.isArray(body.tags)?body.tags.map(x=>String(x).trim()).filter(Boolean).slice(0,12):[];if("deletedAt" in body)run.deletedAt=body.deletedAt?new Date().toISOString():null;if("projectId" in body){const project=body.projectId?config.getProject(body.projectId):null;run.projectId=project?.id||null;run.projectDir=project?.path||null;}store.updateRun(run);workspaceState.record("chat.update",{runId:run.id,fields:Object.keys(body)},run.projectId);return json(res,200,run);}
     const exportMatch=p.match(/^\/api\/runs\/([\w-]+)\/export$/);
     if(req.method==="GET"&&exportMatch){const run=store.getRun(exportMatch[1]);if(!run)return json(res,404,{error:"Sohbet bulunamadı"});res.writeHead(200,{"Content-Type":"application/json; charset=utf-8","Content-Disposition":`attachment; filename="${run.id}.json"`});return res.end(JSON.stringify({format:"ajan-chat-v1",run},null,2));}
     if(req.method==="POST"&&p==="/api/runs/import"){const body=await readBody(req),source=body.run;if(body.format!=="ajan-chat-v1"||!source)return json(res,400,{error:"Geçersiz sohbet dosyası"});const project=body.projectId?config.getProject(body.projectId):null,run=store.createRun({kind:"chat",request:String(source.request||"İçe aktarılan sohbet"),mode:source.mode,agents:source.agents,projectId:project?.id||null,projectDir:project?.path||null,attachments:[],maxDebateRounds:source.maxDebateRounds});run.status="idle";run.phase="idle";run.title=String(source.title||"İçe aktarılan sohbet").slice(0,80);run.messages=Array.isArray(source.messages)?source.messages.slice(-500):[];run.tags=Array.isArray(source.tags)?source.tags:[];store.updateRun(run);return json(res,200,{runId:run.id});}
@@ -467,6 +634,8 @@ const server = http.createServer(async (req, res) => {
     const devMatch=p.match(/^\/api\/projects\/([\w-]+)\/dev(?:\/(start|stop))?$/);
     if(devMatch){const project=config.getProject(devMatch[1]);if(!project)return json(res,404,{error:"Proje bulunamadı"});const action=devMatch[2];try{if(req.method==="POST"&&action==="start")return json(res,200,devView(startDevSession(project)));if(req.method==="POST"&&action==="stop"){const s=devSessions.get(project.id);if(s?.alive)s.child.kill("SIGTERM");return json(res,200,{ok:true});}if(req.method==="GET"&&!action)return json(res,200,devView(devSessions.get(project.id)));}catch(error){return json(res,400,{error:error.message});}}
     const artifactsMatch=p.match(/^\/api\/projects\/([\w-]+)\/artifacts$/);
+    const healthMatch=p.match(/^\/api\/projects\/([\w-]+)\/health$/);
+    if(req.method==="GET"&&healthMatch){const project=config.getProject(healthMatch[1]);if(!project)return json(res,404,{error:"Proje bulunamadı"});let score=35;const checks=[];const add=(label,ok,points,advice)=>{if(ok)score+=points;checks.push({label,ok,points,advice});};let pkg={};try{pkg=JSON.parse(fs.readFileSync(path.join(project.path,"package.json"),"utf8"));}catch{}add("Proje tanımı",!!pkg.name,10,"package.json veya eşdeğer proje tanımı ekleyin");add("Otomatik test",!!(pkg.scripts?.test||project.testCommand),20,"Tek komutla çalışan test akışı tanımlayın");add("Geliştirme sunucusu",!!(pkg.scripts?.dev||pkg.scripts?.start||project.devCommand),10,"dev/start komutu tanımlayın");add("Dokümantasyon",fs.existsSync(path.join(project.path,"README.md")),10,"README ekleyin");add("Sürüm kontrolü",fs.existsSync(path.join(project.path,".git")),10,"Git deposu başlatın");const related=Object.values(store.runs||{}).filter(run=>run.projectId===project.id),lastTests=related.flatMap(run=>run.tests||[]).slice(-5);add("Son test sonuçları",lastTests.length>0&&lastTests.every(test=>test.ok),5,"Başarısız veya eksik testleri giderin");return json(res,200,{score:Math.min(100,score),grade:score>=90?"Mükemmel":score>=75?"İyi":score>=55?"Geliştirilmeli":"Riskli",checks,updatedAt:new Date().toISOString()});}
     if(req.method==="GET"&&artifactsMatch){const project=config.getProject(artifactsMatch[1]);if(!project)return json(res,404,{error:"Proje bulunamadı"});const allowed=/\.(html?|svg|md|json|txt|pdf|png|jpe?g|webp|mp4|webm)$/i;const out=[];const walk=(dir,depth=0)=>{if(depth>4||out.length>300)return;for(const e of fs.readdirSync(dir,{withFileTypes:true})){if(e.name.startsWith(".")||["node_modules","dist","build",".next"].includes(e.name))continue;const full=path.join(dir,e.name);if(e.isDirectory())walk(full,depth+1);else if(allowed.test(e.name)){const st=fs.statSync(full);out.push({path:full,name:e.name,relative:path.relative(project.path,full),mtimeMs:st.mtimeMs,size:st.size});}}};walk(project.path);out.sort((a,b)=>b.mtimeMs-a.mtimeMs);return json(res,200,{artifacts:out.slice(0,100)});}
     const checkpointMatch=p.match(/^\/api\/projects\/([\w-]+)\/checkpoints(?:\/([\w-]+)\/restore)?$/);
     if(checkpointMatch){const project=config.getProject(checkpointMatch[1]);if(!project)return json(res,404,{error:"Proje bulunamadı"});const base=path.join(checkpointsDir,project.id);fs.mkdirSync(base,{recursive:true});if(req.method==="GET"&&!checkpointMatch[2]){const items=fs.readdirSync(base).map(id=>{try{return JSON.parse(fs.readFileSync(path.join(base,id,"meta.json"),"utf8"));}catch{return null;}}).filter(Boolean).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));return json(res,200,{checkpoints:items});}if(req.method==="POST"&&!checkpointMatch[2]){const body=await readBody(req),id=Date.now().toString(36),dir=path.join(base,id),snapshot=path.join(dir,"files");fs.mkdirSync(dir,{recursive:true});copyCheckpoint(project.path,snapshot);const meta={id,name:String(body.name||"Kontrol noktası").slice(0,80),createdAt:new Date().toISOString()};fs.writeFileSync(path.join(dir,"meta.json"),JSON.stringify(meta));return json(res,200,meta);}if(req.method==="POST"&&checkpointMatch[2]){const snapshot=path.join(base,checkpointMatch[2],"files");if(!fs.existsSync(snapshot))return json(res,404,{error:"Kontrol noktası bulunamadı"});copyCheckpoint(snapshot,project.path);return json(res,200,{ok:true});}}
@@ -538,6 +707,7 @@ const server = http.createServer(async (req, res) => {
         attachments: sanitizeAttachments(body.attachments),
       });
       run.testFirst = !!body.testFirst;
+      run.budget={enabled:body.budget?.enabled===true,maxCalls:Math.max(1,Math.min(Number(body.budget?.maxCalls)||24,200)),maxTokens:Math.max(1000,Number(body.budget?.maxTokens)||250000),stopped:false};
       orch.startRun(run);
       return json(res, 200, { runId: run.id });
     }
@@ -551,6 +721,7 @@ const server = http.createServer(async (req, res) => {
       if (!enabled.length) return json(res, 400, { error: "Etkin üye yok — kenar çubuğundan üye ekleyin" });
 
       let run = body.conversationId ? store.getRun(body.conversationId) : null;
+      let createdConversation = false;
       if (run && run.kind !== "chat") run = null;
       if (run?.turnActive || run?.directActive) {
         const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
@@ -562,6 +733,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (!run) {
+        createdConversation = true;
         const project = body.projectId ? config.getProject(body.projectId) : null;
         run = store.createRun({
           kind: "chat",
@@ -578,9 +750,11 @@ const server = http.createServer(async (req, res) => {
         run.title = conversationTitle(text);
       }
       if (body.testCommand?.trim()) run.testCommand = body.testCommand.trim();
+      run.budget={enabled:body.budget?.enabled===true,maxCalls:Math.max(1,Math.min(Number(body.budget?.maxCalls)||24,200)),maxTokens:Math.max(1000,Number(body.budget?.maxTokens)||250000),stopped:false,reason:null};
       run.testFirst = !!body.testFirst;
       const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
       orch.continueChat(run, text, sanitizeAttachments(body.attachments), chatMode)
+        .then(()=>createdConversation?orch.generateConversationTitle(run,text):null)
         .catch(() => {});
       return json(res, 200, { runId: run.id });
     }
@@ -608,9 +782,11 @@ const server = http.createServer(async (req, res) => {
       run.phase = "idle";
       run.title = conversationTitle(text);
       store.updateRun(run);
-      orch.directMessage(run, member.id, text, sanitizeAttachments(body.attachments)).catch((err) => {
-        store.addMessage(run, { from: "sistem", kind: "error", content: "Doğrudan sohbet hatası: " + String(err.message || err) });
-      });
+      orch.directMessage(run, member.id, text, sanitizeAttachments(body.attachments))
+        .then(()=>orch.generateConversationTitle(run,text))
+        .catch((err) => {
+          store.addMessage(run, { from: "sistem", kind: "error", content: "Doğrudan sohbet hatası: " + String(err.message || err) });
+        });
       return json(res, 200, { runId: run.id });
     }
 

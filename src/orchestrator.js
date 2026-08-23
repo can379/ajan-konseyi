@@ -6,10 +6,12 @@ import { promisify } from "node:util";
 import { ClaudeAgent } from "./agents/claudeAgent.js";
 import { CodexAgent } from "./agents/codexAgent.js";
 import { AntigravityAgent } from "./agents/antigravityAgent.js";
+import { OpenRouterAgent } from "./agents/openRouterAgent.js";
+import { readOpenRouterKey } from "./credentialStore.js";
 import { Coordinator } from "./coordinator.js";
 import { ProjectContext } from "./projectContext.js";
 import { TIER_MAP } from "./models.js";
-import { extractJson, now, truncate, uid } from "./util.js";
+import { extractJson, now, truncate, uid, usageDayKey } from "./util.js";
 import * as gitops from "./gitops.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
 import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
@@ -26,6 +28,42 @@ const HOST_ACTION_RE=/<<<AJAN_HOST_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
+export function reportsBlockedResult(text){return /^\s*(?:#{1,3}\s*)?(?:durum\s*:\s*)?(?:bloke|blocked)\b|hiçbir değişiklik uygulanmadı|değişiklik uygulayamadım/i.test(String(text||""));}
+
+export function isIdentityQuestion(text) {
+  return /(?:^|\s)(?:sen\s+)?kim(?:sin|dir)?(?:\s|[?.!,]|$)|kendini\s+tan[ıi]t|hangi\s+(?:yapay\s+zek[âa]|model|sağlayıcı)/i.test(String(text || ""));
+}
+
+export function verifiedMemberIdentity(member) {
+  const provider = String(member?.provider || "").toLowerCase();
+  if (provider === "claude") return "Ben **Claude**'um. Anthropic'in Claude sağlayıcısı üzerinden çalışan Ajan Konseyi üyesiyim; Codex değilim.";
+  if (provider === "antigravity") return "Ben **Antigravity**'yim. Ajan Konseyi'nde Google Antigravity sağlayıcısı üzerinden çalışan yapay zekâ üyesiyim; Codex değilim.";
+  if (provider === "openrouter") return "Ben **Ox Alpha**'yım. OpenRouter üzerindeki `stealth/ox-alpha` modeli olarak çalışan ayrı bir Ajan Konseyi üyesiyim; Codex değilim.";
+  if (provider === "codex") return "Ben **Codex**'im. OpenAI'ın Codex sağlayıcısı üzerinden çalışan Ajan Konseyi üyesiyim.";
+  return `Ben **${member?.name || "Ajan Konseyi üyesi"}** olarak çalışan ayrı bir yapay zekâ üyesiyim.`;
+}
+
+export function identityResponseMatchesProvider(member, text) {
+  const value = String(text || "").toLowerCase();
+  const provider = String(member?.provider || "").toLowerCase();
+  if (provider === "codex") return /\bcodex\b/.test(value);
+  if (provider === "claude") return /\bclaude\b/.test(value) && !/(?:ben|i am)\s+(?:\*\*)?codex\b/i.test(value);
+  if (provider === "antigravity") return /\bantigravity\b/.test(value) && !/(?:ben|i am)\s+(?:\*\*)?codex\b/i.test(value);
+  if (provider === "openrouter") return /\box alpha\b|stealth\/ox-alpha/.test(value) && !/(?:ben|i am)\s+(?:\*\*)?codex\b/i.test(value);
+  return true;
+}
+
+export function normalizeGeneratedConversationTitle(value, max = 58) {
+  let title=String(value||"")
+    .replace(/^```(?:text|markdown)?\s*/i,"").replace(/```$/i,"")
+    .split(/\r?\n/)[0]
+    .replace(/^\s*(?:başlık|title)\s*:\s*/i,"")
+    .replace(/^[\s"'“”‘’`*_#-]+|[\s"'“”‘’`*_.!?#-]+$/g,"")
+    .replace(/\s+/g," ").trim();
+  if(!title||/^(?:yeni sohbet|sohbet başlığı|başlık)$/i.test(title))return "";
+  if(title.length>max){const cut=title.slice(0,max+1),space=cut.lastIndexOf(" ");title=(space>20?cut.slice(0,space):cut.slice(0,max)).trim()+"…";}
+  return title.charAt(0).toLocaleUpperCase("tr-TR")+title.slice(1);
+}
 
 // Her çıktıyı bütün üyelere tekrar okutmak çağrı sayısını görev×üye biçiminde
 // büyütür. Kalite kapısını korurken yalnız en uygun, mümkünse farklı sağlayıcıdan
@@ -63,6 +101,7 @@ export class Orchestrator {
       claude: new ClaudeAgent(store, rootDir),
       codex: new CodexAgent(store, rootDir),
       antigravity: new AntigravityAgent(store, rootDir),
+      openrouter: new OpenRouterAgent(store, rootDir, { keyProvider:readOpenRouterKey }),
     };
     this.agents = this.providers; // geriye dönük uyumluluk
     this.coordinator = new Coordinator(store, this.providers, () => this.config.data.coordinator);
@@ -86,6 +125,7 @@ export class Orchestrator {
     const p = this.providers[prov];
     if (!p || !p.isAvailable()) return false;
     if (prov === "antigravity") return p.isConnected();
+    if (prov === "openrouter") return this.config.data.apiProviders?.openrouter?.configured === true;
     return true;
   }
 
@@ -95,6 +135,31 @@ export class Orchestrator {
 
   mediaCapableMembers(attachments, list = this.availableMembers()) {
     return list.filter((m) => unsupportedAttachments(m.provider, attachments).length === 0);
+  }
+
+  async generateConversationTitle(run, userText) {
+    if(!run||run.titleManual)return null;
+    const originalTitle=run.title;
+    const candidates=["antigravity","claude","codex"]
+      .map((provider)=>this.availableMembers().find((m)=>m.provider===provider)).filter(Boolean);
+    const prompt=`Bu konuşma için Türkçe, doğal ve açıklayıcı 3-7 kelimelik bir başlık üret. Yalnız başlığı yaz; tırnak, Markdown, emoji, noktalama veya açıklama ekleme. Kullanıcının cümlesinin başını kopyalama; konuşmanın gerçek amacını özetle.\n\nKullanıcının isteği:\n${truncate(userText,1800)}`;
+    for(const member of candidates){
+      if(run.titleManual)return null;
+      const res=await this.providers[member.provider].send(prompt,{
+        fresh:true,silent:true,sessionKey:`title#${run.id}#${member.provider}#${uid()}`,
+        memberId:member.id,model:member.model||undefined,effort:member.effort||undefined,
+        timeoutMs:member.provider==="antigravity"?45_000:60_000,
+      });
+      const title=res.ok?normalizeGeneratedConversationTitle(res.text):"";
+      if(!title)continue;
+      if(run.titleManual||run.title!==originalTitle)return null;
+      run.title=title;
+      run.titleProvider=member.provider;
+      run.titleGeneratedAt=now();
+      this.store.updateRun(run);
+      return title;
+    }
+    return null;
   }
 
   async enhanceStudioPrompt(input={}) {
@@ -175,12 +240,26 @@ export class Orchestrator {
 
   // Üye çağrısı: durum rozetini yönetir, kullanım verisini üyeye yazar
   async callMember(run, member, prompt, opts = {}) {
-    const route = connectorRoute(member.provider, prompt);
+    const used=Object.values(run.usage||{}).reduce((sum,item)=>({calls:sum.calls+(item.calls||0),tokens:sum.tokens+(item.input||0)+(item.output||0)}),{calls:0,tokens:0});
+    const budget=run.budget||{enabled:false,maxCalls:24,maxTokens:250000};
+    if(budget.enabled&&!opts.ignoreBudget&&(used.calls>=budget.maxCalls||used.tokens>=budget.maxTokens)){
+      budget.stopped=true;budget.reason=used.calls>=budget.maxCalls?"Çağrı bütçesi doldu":"Token bütçesi doldu";run.budget=budget;this.store.saveRun(run);
+      return{ok:false,error:`${budget.reason}. Bütçeyi artırarak görevi sürdürebilirsiniz.`,budgetExceeded:true};
+    }
+    // Bağlayıcı seçimini zenginleştirilmiş prompttan/sohbet geçmişinden yapma.
+    // Aksi halde geçmişte geçen "GitHub" gibi bir sözcük, sıradan Ox Alpha
+    // mesajını Codex bağlayıcısına yönlendirip yanlış sağlayıcı çalıştırır.
+    const routeText = opts.routeText ?? prompt;
+    const identityQuestion = isIdentityQuestion(routeText);
+    // Kimlik soruları hiçbir bağlayıcıya veya ortak Codex köprüsüne devredilemez.
+    const route = identityQuestion ? null : connectorRoute(member.provider, routeText);
     const provider = this.providers[route?.mode === "shared" ? route.provider : member.provider];
     let connectorLease=null;
     if(route?.connector&&!opts.isolated){try{connectorLease=this.acquireAgentLease(run,member,"external-service",route.connector,opts.label||"connector");}catch(error){this.store.setAgentStatus(member.id,"error",String(error.message).slice(0,80));return{ok:false,error:error.message};}}
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
-    const history = opts.isolated ? "" : this.sharedConversationContext(run);
+    // Eski yanlış yönlendirmeler oturum geçmişine "Ben Codex'im" yazmış olabilir.
+    // Kimlik doğrulamasını kirlenmiş geçmişten tamamen ayır.
+    const history = opts.isolated || identityQuestion ? "" : this.sharedConversationContext(run);
     const images = opts.isolated ? [] : this.referencedImages(run, prompt, opts.images || []);
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
@@ -190,7 +269,11 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const browserToken=opts.isolated?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
     const hostHelp=`\n\n--- ANA UYGULAMA YAYIN ARACI ---\nKullanıcı açıkça seçili projenin son sürümünü GitHub'a yayınlamanı veya push etmeni isterse sağlayıcı terminalinden git/ssh/gh/curl kullanma ve .command dosyası hazırlama. Yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_HOST_ACTION>>>{"action":"publish","payload":{}}<<<END>>>\nAna uygulama açık dalı kayıtlı deploy key ile yayınlar; force-push yapmaz ve sonucu sana geri verir.\n--- YAYIN ARACI SONU ---`;
+    const identityContract = identityQuestion
+      ? `\n\n--- SAĞLAYICI KİMLİĞİ ---\n${verifiedMemberIdentity(member)} Bu kimliği değiştirme, başka bir sağlayıcı olduğunu iddia etme ve ortak köprü adına konuşma.\n--- KİMLİK SONU ---`
+      : "";
     let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}${hostHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    if (identityQuestion) effectivePrompt += identityContract;
     if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
     if (route?.mode === "shared" && !opts.isolated) {
       const label = CONNECTORS[route.connector]?.label || route.connector;
@@ -218,6 +301,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const selectedModel = member.model || (suppressAntigravityTier ? "" : (opts.tierModel || undefined));
     const providerOpts = {
       ...effectiveOpts,
+      fresh: identityQuestion ? true : effectiveOpts.fresh,
       sessionKey: opts.sessionKey || (route?.mode === "shared"
         ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
         : this.sessionKeyFor(run, member)),
@@ -251,6 +335,10 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       const followup=`--- ANA UYGULAMA ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının görevini sürdür. Başka bir araç eylemi gerekiyorsa ilgili ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
       res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}`:followup,{...providerOpts,fresh:opts.fresh});
     }
+    if (identityQuestion && res.ok && !identityResponseMatchesProvider(member, res.text)) {
+      this.log(`kimlik yanıtı düzeltildi: ${member.provider} -> ${String(res.text || "").slice(0, 160)}`);
+      res = { ...res, text: verifiedMemberIdentity(member), raw: { ...(res.raw || {}), identityCorrected: true } };
+    }
     const stopped = run.stopRequested;
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
@@ -260,11 +348,21 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
   }
 
   isImageGenerationRequest(text) {
-    const value=String(text||"");
-    // "Görsel üretme yeteneğini denetle" bir görsel siparişi değil, meta
-    // incelemedir. Bu ayrım yapılmazsa rapor sonunda gereksiz ImageGen açılır.
-    if(/(?:yetenek denetimi|yeteneklerini (?:öğren|incele|değerlendir|karşılaştır)|ayrı ayrı değerlendir|eksik yetenek|durumunu raporla)/i.test(value)) return false;
-    return /(?:görsel|fotoğraf|resim|image|illustration|illüstrasyon|poster|logo|ikon).{0,80}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,80}(?:görsel|fotoğraf|resim|image|illüstrasyon)/i.test(value);
+    const value=String(text||"").trim();
+    const visual=/(?:görsel|fotoğraf|resim|image|illustration|illüstrasyon|poster|logo|ikon)/iu;
+    if(!visual.test(value)) return false;
+
+    // Sözcük varlığı niyet değildir. Olumsuzlama, geçmiş bir eylemi anlatma,
+    // yetenek sorgusu ve meta inceleme hiçbir zaman üretim başlatmamalı.
+    if(/(?:oluştur|üret|çiz|tasarla)(?:ma|me)\b|(?:oluştur|üret|çiz|tasarla)(?:manı|menı|manızı|menizi)?\s+(?:istemedim|demedim)|(?:oluştur|üret|çiz|tasarla)(?:dı|di|du|dü|tı|ti|tu|tü)\b/iu.test(value)) return false;
+    if(/(?:yetenek denetimi|yeteneklerini? (?:öğren|incele|değerlendir|karşılaştır)|ayrı ayrı değerlendir|eksik yetenek|durumunu raporla|yapabiliyor mu|oluşturabiliyor mu|üretebiliyor mu|oluşturma yeteneği|üretme yeteneği|sana sordum|soruyorum|merak ediyorum)/iu.test(value)) return false;
+
+    // Otomatik üretim yalnız açık bir emirle başlar. Fiil kökünü eşlemek yerine
+    // tam emir biçimini eşlemek "oluşturdu/oluşturabiliyor" yanlışlarını önler.
+    const explicitCommand=/(?:görsel|fotoğraf|resim|image|illustration|illüstrasyon|poster|logo|ikon).{0,120}\b(?:oluştur|üret|çiz|tasarla|generate|create)(?:ın|iniz)?\b|\b(?:oluştur|üret|çiz|tasarla|generate|create)(?:ın|iniz)?\b.{0,120}(?:görsel|fotoğraf|resim|image|illüstrasyon|poster|logo|ikon)/iu;
+    const explicitWant=/(?:görsel|fotoğraf|resim|image|illüstrasyon|poster|logo|ikon).{0,80}(?:istiyorum|istiyoruz|hazırla|yap)(?:\b|$)/iu;
+    const explicitPolite=/(?:bana|benim için|bunu|şunu).{0,140}(?:görsel|fotoğraf|resim|image|illüstrasyon|poster|logo|ikon)?.{0,80}(?:oluşturabilir|üretebilir|çizebilir|tasarlayabilir)\s+misin/iu;
+    return explicitCommand.test(value) || explicitWant.test(value) || explicitPolite.test(value);
   }
 
   isImageRevisionRequest(run, text) {
@@ -493,8 +591,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   }
 
   // ---- macOS bildirimi ----
-  notify(title, body) {
+  notify(title, body, kind) {
     if (!this.config?.data.notifications) return;
+    const eventKind=kind||(/(?:hata|durdu)/i.test(body)?"error":/(?:onay|bekliyor)/i.test(body)?"approval":"done");
+    if (this.config.data.notificationEvents?.[eventKind] === false) return;
     try {
       const escq = (s) => String(s).replace(/"/g, '\\"').slice(0, 120);
       spawn("osascript", ["-e", `display notification "${escq(body)}" with title "${escq(title)}" sound name "Glass"`], { stdio: "ignore" }).on("error", () => {});
@@ -520,6 +620,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       health.codex = { ok: false, detail: out ? out.split("\n")[0] : "codex CLI çalışmıyor: " + String(e.message).slice(0, 120) };
     }
     health.antigravity = this.bridgeHealth();
+    const openRouterConfigured = await this.providers.openrouter.isConfigured().catch(() => false);
+    health.openrouter = {
+      ok: openRouterConfigured,
+      detail: openRouterConfigured ? "Ox Alpha · OpenRouter API bağlı" : "OpenRouter API anahtarı ayarlanmamış",
+    };
     this.store.setHealth(health);
     return health;
   }
@@ -553,6 +658,21 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     cur.costUsd += u.costUsd || 0;
     cur.calls += 1;
     run.usage[name] = cur;
+    run.usageDaily ??= {};
+    const day = usageDayKey(u.ts || Date.now());
+    if (day) {
+      const perAgent = (run.usageDaily[day] ??= {});
+      const bucket = perAgent[name] || { input: 0, cachedInput: 0, output: 0, calls: 0, costUsd: 0 };
+      bucket.input += u.input || 0;
+      bucket.cachedInput += u.cachedInput || 0;
+      bucket.output += u.output || 0;
+      bucket.costUsd += u.costUsd || 0;
+      bucket.calls += 1;
+      perAgent[name] = bucket;
+    }
+    const totals=Object.values(run.usage).reduce((sum,item)=>({calls:sum.calls+(item.calls||0),tokens:sum.tokens+(item.input||0)+(item.output||0)}),{calls:0,tokens:0});
+    run.budget ??= {enabled:false,maxCalls:24,maxTokens:250000,stopped:false};
+    run.budget.usedCalls=totals.calls;run.budget.usedTokens=totals.tokens;
     if (!run.transient) this.store.saveRun(run);
   }
 
@@ -775,6 +895,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         ? 6 * 60 * 1000
         : undefined,
       shouldStop: () => run.stopRequested,
+      routeText: text,
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
     if (!res.ok && !run.stopRequested && allowFallback) {
@@ -784,6 +905,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         member = alt;
         res = await this.callMember(run, member, prefixFor(member) + text + imageNote, {
           label: "yanıtlıyor", images, media: attachments, cwd: run.projectDir || undefined,
+          routeText: text,
           shouldStop: () => run.stopRequested,
         });
       }
@@ -802,6 +924,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   stopTurn(run) {
     run.stopRequested = true;
     for (const p of Object.values(this.providers)) p.stop(run.id);
+    for (const memberId of run.agents || []) this.store.clearStream(memberId);
     this.store.cancelApprovals(run.id);
     this.store.setPhase(run, "stopping");
     this.store.addMessage(run, { from: "sistem", kind: "info", content: "⏹ Durduruldu — düzeltmenizi veya yeni talimatınızı yazabilirsiniz." });
@@ -835,16 +958,23 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // ---- 1. PLANLAMA ----
     if (!resume || run.tasks.length === 0) {
       S.setPhase(run, "planning");
-      const plan = normalizePlan(await this.coordinator.plan(run, this.memberListText(avail), {
+      const planningContext={
         historyText: this.projectHistory(run),
         memoryText: this.projectContext.readMemory(run.projectId),
         repoMap: run.projectDir ? await this.projectContext.repoMap(run.projectDir) : "",
         testFirst: run.testFirst,
         attachmentsText: attachmentPrompt(run.attachments || []),
-      }, ctx), avail.map((m) => m.id));
+      };
+      run.contextManifest={updatedAt:new Date().toISOString(),sources:[
+        {kind:"history",label:"Proje sohbet geçmişi",chars:planningContext.historyText.length,enabled:!!planningContext.historyText},
+        {kind:"memory",label:"Kalıcı proje hafızası",chars:planningContext.memoryText.length,enabled:!!planningContext.memoryText},
+        {kind:"repo",label:"Repo haritası",chars:planningContext.repoMap.length,enabled:!!planningContext.repoMap},
+        {kind:"attachments",label:"Dosya ve görsel ekleri",chars:planningContext.attachmentsText.length,count:(run.attachments||[]).length,enabled:!!planningContext.attachmentsText},
+      ]};
+      const plan = normalizePlan(await this.coordinator.plan(run, this.memberListText(avail), planningContext, ctx), avail.map((m) => m.id));
       this.checkStop(run);
       if (run.mode === "auto") run.mode = plan.mode || "discussion";
-      const assignedTasks = enforceTaskAssignments(plan.subtasks || [], avail, plan.mode || run.mode);
+      const assignedTasks = enforceTaskAssignments(plan.subtasks || [], avail, plan.mode || run.mode, this.config?.data.smartModels!==false);
       run.tasks = assignedTasks.map((t) => {
         const m = this.memberById(t.member_id) || avail[0];
         return {
@@ -852,6 +982,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           prompt: t.prompt, status: "pending", result: null,
           dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
           tier: ["fast", "balanced", "strong"].includes(t.model_tier) ? t.model_tier : "balanced",
+          routingReason:t.routing_reason||"Koordinatör ataması",
           // Aynı yapılandırılmış üye birden fazla göreve atansa bile her görev
           // ayrı sağlayıcı konuşmasıdır; böylece koordinatör ajan çoğaltabilir.
           agentInstanceId: uid("agent-"),
@@ -894,6 +1025,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       for (const m of involved) {
         worktrees[m.id] = await gitops.createWorktree(run.projectDir, S.runsDir, run.id, m.id);
       }
+      run.tasks.forEach(task=>{const workspace=worktrees[task.assignee];if(workspace)task.workspace={branch:workspace.branch,path:workspace.wtDir,isolated:true};});
+      S.updateRun(run);
       if (!resume && involved.length) S.addMessage(run, {
         from: "sistem", kind: "info",
         content: "Ayrı çalışma kopyaları hazır: " + involved.map((m) => `${m.name} → ajan/${run.id}/${m.id}`).join(", "),
@@ -1043,8 +1176,21 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         depContext += `\n--- ÖNCEKİ GÖREVİN ÇIKTISI [${dep.id}: ${dep.title} / ${dep.assigneeName}] ---\n${truncate(dep.result, 6000)}\n`;
       }
     }
+    const preparePrompt=(source,cwd)=>{
+      let value=String(source||"");
+      if(cwd&&run.projectDir)value=value.split(run.projectDir).join(cwd);
+      if(!cwd)return{prompt:value,inputDir:null};
+      const inputDir=path.join(cwd,".ajan-inputs");let copied=false;
+      value=value.replace(/([`'\"])(\/[^`'\"\n]+)\1/g,(whole,quote,absolute)=>{
+        try{if(!path.isAbsolute(absolute)||absolute.startsWith(cwd+path.sep)||!fs.statSync(absolute).isFile())return whole;fs.mkdirSync(inputDir,{recursive:true});const target=path.join(inputDir,`${crypto.createHash("sha256").update(absolute).digest("hex").slice(0,8)}-${path.basename(absolute)}`);fs.copyFileSync(absolute,target);copied=true;return `${quote}${target}${quote}`;}catch{return whole;}
+      });
+      return{prompt:`Yazılabilir ve güncel proje kopyan: ${cwd}. Ana proje yoluna gitme; bütün okuma, düzenleme, git ve test komutlarını bu çalışma kopyasında yap.\n\n${value}`,inputDir:copied?inputDir:null};
+    };
+    const prepared=preparePrompt(task.prompt,opts.cwd);
     const header = this.roleHeader(member, run) + depContext + imageNote;
-    let res = await this.callMember(run, member, header + task.prompt, opts);
+    let res = await this.callMember(run, member, header + prepared.prompt, opts);
+    if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
+    if(prepared.inputDir)fs.rmSync(prepared.inputDir,{recursive:true,force:true});
 
     if (!res.ok && !run.stopRequested) {
       S.addMessage(run, { from: "sistem", kind: "error", taskId: task.id, content: `${member.name} görevi tamamlayamadı: ${res.error}` });
@@ -1060,9 +1206,17 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       if (fb) {
         S.addMessage(run, { from: "koordinator", kind: "info", taskId: task.id, content: `Görev ${fb.name} üyesine yeniden atandı.` });
         member = fb; task.assignee = fb.id; task.assigneeName = fb.name;
-        res = await this.callMember(run, member, header + task.prompt, {
-          ...opts, cwd: worktrees[fb.id]?.wtDir, tierModel: this.pickTierModel(fb.provider, task.tier),
+        if(run.mode==="code"&&run.projectDir&&!worktrees[fb.id]&&canAuthorCode(fb)){
+          worktrees[fb.id]=await gitops.createWorktree(run.projectDir,S.runsDir,run.id,fb.id);
+        }
+        const fallbackCwd=worktrees[fb.id]?.wtDir;
+        if(fallbackCwd)task.workspace={branch:worktrees[fb.id].branch,path:fallbackCwd,isolated:true};
+        const fallbackPrepared=preparePrompt(task.prompt,fallbackCwd);
+        res = await this.callMember(run, member, header + fallbackPrepared.prompt, {
+          ...opts, cwd: fallbackCwd, tierModel: this.pickTierModel(fb.provider, task.tier),
         });
+        if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
+        if(fallbackPrepared.inputDir)fs.rmSync(fallbackPrepared.inputDir,{recursive:true,force:true});
       }
     }
 
@@ -1415,6 +1569,15 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
               if (fix.ok) {
                 this.memberMsg(run, fixer, "result", `Test düzeltmesi:\n${fix.text}`);
                 testResult = await this.runTests(run, testDir);
+                run.repairHistory??=[];run.repairHistory.push({attempt:1,agent:fixer.name,ok:testResult.ok,at:new Date().toISOString()});
+                for(let attempt=2;!testResult.ok&&attempt<=3&&!run.stopRequested;attempt++){
+                  S.addMessage(run,{from:"koordinator",kind:"info",content:`Otomatik onarma ${attempt}/3: kalan test hataları yeniden inceleniyor.`});
+                  const retry=await this.callMember(run,fixer,`${this.roleHeader(fixer,run)}Önceki düzeltmeden sonra testler hâlâ başarısız. Güncel çıktı:\n\n${truncate(testResult.output,6000)}\n\nKök nedeni bul, yalnız gerekli kodu düzelt ve testi çalıştır.`,{label:`test düzeltme ${attempt}/3`,codeMode:true,cwd:testDir,shouldStop:()=>run.stopRequested});
+                  if(!retry.ok)break;
+                  this.memberMsg(run,fixer,"result",`Test düzeltmesi ${attempt}/3:\n${retry.text}`);
+                  testResult=await this.runTests(run,testDir);
+                  run.repairHistory.push({attempt,agent:fixer.name,ok:testResult.ok,at:new Date().toISOString()});S.updateRun(run);
+                }
                 const integrationTask={id:`${run.id}-integration-fix`,title:"Birleştirme sonrası test düzeltmesi",assignee:fixer.id,assigneeName:fixer.name,prompt:"Birleştirme sonrası testleri geçiren asgari düzeltme",status:"done",result:fix.text,tier:"strong",contract:normalizeTaskContract({goal:"Birleştirme sonrası test hatasını gider",nonGoals:["İlgisiz yeniden yapılandırma"],allowedPaths:["**"],forbiddenPaths:[],risk:"high",acceptanceCriteria:["Zorunlu test başarıyla geçer"],testCommands:[run.testCommand],approvalBoundaries:["Hedef dala uygulamadan önce kullanıcı onayı"]})};
                 run.tasks=run.tasks.filter((task)=>task.id!==integrationTask.id);run.tasks.push(integrationTask);S.updateRun(run);
                 await this.reviewTask(run,integrationTask,{[fixer.id]:{wtDir:testDir}});
@@ -1515,6 +1678,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const res = await this.callMember(run, member,
         `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}\n\n${content}${imageNote}`,
         { label: "doğrudan mesaj", images, media: attachments, timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
+          // Sağlayıcı/bağlayıcı kararını proje hafızası veya önceki sohbetten
+          // değil, yalnız kullanıcının bu turdaki gerçek mesajından üret.
+          // Böylece geçmişte geçen "Codex" ya da "GitHub" sözcükleri Claude,
+          // Antigravity ve Ox Alpha'yı ortak Codex köprüsüne taşıyamaz.
+          routeText: content,
           shouldStop: () => run.stopRequested });
       if (res.ok) {
         res.text = await this.guaranteeImageOutput(run, member, content, res.text, { images, media:attachments });
@@ -1557,6 +1725,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   stopRun(run) {
     run.stopRequested = true;
     for (const p of Object.values(this.providers)) p.stop(run.id);
+    for (const memberId of run.agents || []) this.store.clearStream(memberId);
     this.store.cancelApprovals(run.id);
     this.store.updateRun(run, { status: "stopped", phase: "stopped" });
     this.store.addMessage(run, { from: "sistem", kind: "info", content: "Koşu kullanıcı tarafından durduruldu." });

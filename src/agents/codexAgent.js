@@ -80,7 +80,7 @@ export class CodexAgent extends BaseAgent {
         } else if (ev.item.type === "reasoning" && ev.item.text) {
           live += `\n💭 ${String(ev.item.text).slice(0, 200)}`;
         }
-        this.progress(opts.label || "", live, opts.memberId);
+        if (!opts.silent) this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.type === "turn.completed" && ev.usage) {
         usage = ev.usage;
       }

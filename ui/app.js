@@ -26,15 +26,17 @@ const AGENT_META = {
   claude: { label: "Claude Code", short: "C" },
   codex: { label: "Codex", short: "X" },
   antigravity: { label: "Antigravity", short: "A" },
+  openrouter: { label: "Ox Alpha", short: "OX" },
   koordinator: { label: "Koordinatör", short: "K" },
   kullanici: { label: "Siz", short: "S" },
   sistem: { label: "Sistem", short: "•" },
 };
-const PROVIDERS = ["claude", "codex", "antigravity"];
-const PROVIDER_LABELS = { claude: "Claude", codex: "Codex", antigravity: "Antigravity" };
+const PROVIDERS = ["claude", "codex", "antigravity", "openrouter"];
+const SUBSCRIPTION_PROVIDERS = ["claude", "codex", "antigravity"];
+const PROVIDER_LABELS = { claude: "Claude", codex: "Codex", antigravity: "Antigravity", openrouter: "Ox Alpha" };
 
 function imageStudioMembers() {
-  return PROVIDERS.map((provider) => {
+  return SUBSCRIPTION_PROVIDERS.map((provider) => {
     const member = (state.config.members || []).find((m) => m.provider === provider && m.enabled);
     return { provider, id: member?.id || provider, label: member?.name || PROVIDER_LABELS[provider] };
   });
@@ -52,8 +54,8 @@ function renderImageStudio() {
   const options = $("image-agent-options"); if (!options) return;
   const prior = new Set([...options.querySelectorAll("input:checked")].map((x) => x.value));
   const members = imageStudioMembers();
-  const roles = { claude:"Sanat yönetimi ve istem", codex:"Yüksek kaliteli görsel motoru", antigravity:"Araştırma ve sanat yönetimi" };
-  options.innerHTML = members.map((m) => `<label class="image-agent-option ${m.provider}"><input type="checkbox" value="${esc(m.id)}" data-provider="${m.provider}" ${prior.size ? (prior.has(m.id) ? "checked" : "") : "checked"}><span class="image-agent-mark">${AGENT_META[m.provider].short}</span><span><b>${esc(m.label)}</b><small>${roles[m.provider]}</small></span><i>✓</i></label>`).join("");
+  const roles = { claude:"Sanat yönetimi ve istem", codex:"Yüksek kaliteli görsel motoru", antigravity:"Araştırma ve sanat yönetimi", openrouter:"Kodlama ve uzun ajan görevleri" };
+  options.innerHTML = members.map((m) => `<label class="image-agent-option ${m.provider}"><input type="checkbox" value="${esc(m.id)}" data-provider="${m.provider}" ${prior.size ? (prior.has(m.id) ? "checked" : "") : "checked"}><span class="image-agent-mark">${agentLogo(m.provider)}</span><span><b>${esc(m.label)}</b><small>${roles[m.provider]}</small></span><i>✓</i></label>`).join("");
   const coordinator = $("image-coordinator"), previous = coordinator.value;
   coordinator.innerHTML = `<option value="koordinator">Konsey Koordinatörü</option>` + members.map((m) => `<option value="${esc(m.id)}">${esc(m.label)}</option>`).join("");
   if ([...coordinator.options].some((o) => o.value === previous)) coordinator.value = previous;
@@ -234,6 +236,11 @@ function connectSSE() {
       delete liveStreams[ev.agent];
       renderLive();
     }
+    if (ev?.type === "stream_end") {
+      delete liveStreams[ev.agent];
+      renderLive();
+      return;
+    }
     scheduleRefresh();
   };
   es.onerror = () => { es.close(); setTimeout(connectSSE, 3000); };
@@ -246,26 +253,22 @@ function renderLive() {
   const busyAgents = Object.keys(liveStreams).filter((a) => state.agents[a]?.status === "busy");
   const ws = $("workspace");
   const stick = ws.scrollTop + ws.clientHeight >= ws.scrollHeight - 150;
-  const recentUserMessages=(run.messages||[]).filter((m)=>m.from==="kullanici").slice(-4);
-  const lastUser=recentUserMessages.at(-1)?.content || run.request || "";
-  const recentUserText=recentUserMessages.map((m)=>m.content||"").join("\n");
-  const previousGeneratedImage=(run.messages||[]).some((m)=>(m.attachments||[]).some((a)=>a.kind==="image"&&a.generated));
-  const imageGeneration=Object.values(liveStreams).some((s)=>/görsel (?:üretiyor|hazırlanıyor)/i.test(s.label||"")) ||
-    /(?:görsel|fotoğraf|resim|image|illustration|poster|logo|ikon).{0,100}(?:oluştur|üret|çiz|tasarla|generate|create)|(?:oluştur|üret|çiz|tasarla).{0,100}(?:görsel|fotoğraf|resim|image)/i.test(recentUserText) ||
-    (previousGeneratedImage&&/(?:gerçekçi|fotogerçekçi|fotoğraf gibi|daha doğal|yeniden|tekrar|düzelt|değiştir|benzer|bunun neresi|antigravit)/i.test(lastUser));
+  // Arayüz kullanıcı metnindeki anahtar kelimelerden niyet tahmini yapmaz.
+  // Görsel durumu yalnız orkestratör gerçekten üretim başlattığında gösterilir.
+  const imageGeneration=Object.values(liveStreams).some((s)=>/görsel (?:üretiyor|hazırlanıyor)/i.test(s.label||""));
   const referenceImage=[...(run.messages||[])].reverse().flatMap((m)=>m.attachments||[]).find((a)=>a.kind==="image")?.url || "";
   $("live").innerHTML = busyAgents.map((a) => {
     const s = liveStreams[a];
     const meta = metaFor(a);
     if(imageGeneration) return `<div class="msg live-msg image-live from-${esc(meta.cls)}">
-      <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>
+      <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
       <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span></div>
       <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
       <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
     </div>`;
     const statusLabel=s.label ? String(s.label).replace(/\.{2,}$/g,"") : "yanıt hazırlanıyor";
     return `<div class="msg live-msg live-status-only from-${esc(meta.cls)}">
-      <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>
+      <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
       <div class="m-body">
         <div class="m-head">
           <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
@@ -295,6 +298,8 @@ function render() {
   renderLive();
   renderDetails(run);
   renderToasts();
+  renderNotificationCount();
+  renderQuotaOverviewDetailed();
   syncToggles();
   if (activeMainView === "images") renderImageStudio();
   const toolProject = $("tool-project");
@@ -348,7 +353,7 @@ function renderCapabilities() {
       if(!items.length) return "";
       return `<section class="cap-group"><h5>${title}</h5><div>${items.map(([name,status])=>`<span class="cap-item cap-${esc(status)}"><i></i><b>${esc(labels[name]||name)}</b><small>${esc(statusLabel[status]||status)}</small></span>`).join("")}</div></section>`;
     }).join("");
-    return `<details class="cap-provider" ${id==="claude"?"open":""}><summary><span class="cap-agent-dot bg-${id}">${esc(AGENT_META[id]?.short||id[0])}</span><span class="cap-agent-title"><b class="c-${id}">${esc(AGENT_META[id]?.label||id)}</b><small>${esc(p.version)}</small></span><span class="cap-count"><b>${ready}</b> hazır${attention?`<small>${attention} sınırlı</small>`:""}</span><span class="cap-chevron">›</span></summary><div class="cap-provider-body">${sections}<div class="cap-runtime"><span>MCP <b>${connected}</b></span><span>Eklenti <b>${plugins}</b></span></div></div></details>`;
+    return `<details class="cap-provider" ${id==="claude"?"open":""}><summary><span class="cap-agent-dot bg-${id}">${agentLogo(id)}</span><span class="cap-agent-title"><b class="c-${id}">${esc(AGENT_META[id]?.label||id)}</b><small>${esc(p.version)}</small></span><span class="cap-count"><b>${ready}</b> hazır${attention?`<small>${attention} sınırlı</small>`:""}</span><span class="cap-chevron">›</span></summary><div class="cap-provider-body">${sections}<div class="cap-runtime"><span>MCP <b>${connected}</b></span><span>Eklenti <b>${plugins}</b></span></div></div></details>`;
   }).join("");
   const connectors=Object.values(fullCapabilities.connectors||{}).map((item)=>{
     const states=Object.entries(item.providers||{}).map(([provider,value])=>
@@ -378,6 +383,10 @@ function syncToggles() {
   if (document.activeElement?.closest?.("#advanced-row")) return;
   $("f-smart").checked = !!state.config.smartModels;
   $("f-notify").checked = !!state.config.notifications;
+  $("f-notify-done").checked = state.config.notificationEvents?.done !== false;
+  $("f-notify-error").checked = state.config.notificationEvents?.error !== false;
+  $("f-notify-approval").checked = state.config.notificationEvents?.approval !== false;
+  document.querySelector(".notification-preferences")?.classList.toggle("disabled",!state.config.notifications);
 }
 
 function renderProjects() {
@@ -412,7 +421,36 @@ function renderProjects() {
   bindProjectContextMenu();
   bindRunContextMenu();
 }
-function bindRunContextMenu(){const menu=$("run-context-menu");let timer;const close=()=>{clearTimeout(timer);timer=setTimeout(()=>menu.hidden=true,140);};for(const row of document.querySelectorAll(".run-item[data-run]")){row.addEventListener("mouseenter",()=>{clearTimeout(timer);const rect=row.getBoundingClientRect(),run=state.runs[row.dataset.run];menu.dataset.runId=row.dataset.run;menu.querySelector('[data-run-menu="pin"]').textContent=run?.pinned?"Sabitlemeyi kaldır":"Sabitle";menu.querySelector('[data-run-menu="archive"]').textContent=run?.archived?"Arşivden çıkar":"Arşivle";menu.hidden=false;requestAnimationFrame(()=>{menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;});});row.addEventListener("mouseleave",close);}menu.onmouseenter=()=>clearTimeout(timer);menu.onmouseleave=close;}
+let runMenuTimer=null;
+function bindRunContextMenu(){
+  const menu=$("run-context-menu");
+  const cancelClose=()=>clearTimeout(runMenuTimer);
+  const close=(delay=120)=>{cancelClose();runMenuTimer=setTimeout(()=>{menu.hidden=true;menu.dataset.runId="";},delay);};
+  for(const row of document.querySelectorAll(".run-item[data-run]")){
+    row.addEventListener("mouseenter",()=>{
+      cancelClose();
+      const rect=row.getBoundingClientRect(),run=state.runs[row.dataset.run];
+      menu.dataset.runId=row.dataset.run;
+      menu.querySelector('[data-run-menu="pin"]').textContent=run?.pinned?"Sabitlemeyi kaldır":"Sabitle";
+      menu.querySelector('[data-run-menu="archive"]').textContent=run?.archived?"Arşivden çıkar":"Arşivle";
+      menu.hidden=false;
+      requestAnimationFrame(()=>{
+        menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+2)}px`;
+        menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;
+      });
+    });
+    row.addEventListener("mouseleave",(event)=>{
+      if(event.relatedTarget===menu||menu.contains(event.relatedTarget))return;
+      close(420);
+    });
+  }
+  menu.onmouseenter=cancelClose;
+  menu.onmouseleave=(event)=>{
+    const row=event.relatedTarget?.closest?.(".run-item[data-run]");
+    if(row?.dataset.run===menu.dataset.runId)return;
+    close();
+  };
+}
 async function patchRun(id,patch){await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});await fetchState();}
 async function startProjectPreview(id){await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:id})});const response=await fetch(`/api/projects/${id}/dev/start`,{method:"POST"}),result=await response.json();if(!response.ok)return alert(result.error);openToolPanel("browser");$("browser-notice").hidden=false;$("browser-notice").textContent=`${result.command} başlatılıyor…`;for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,500));const status=await fetch(`/api/projects/${id}/dev`).then(r=>r.json());if(status.url){createBrowserTab(status.url);$("browser-notice").hidden=true;return;}if(status.alive===false)return alert(`Sunucu kapandı.\n${status.output||""}`);}alert("Sunucu çalışıyor ancak port henüz algılanamadı.");}
 function openProjectSettings(id){const p=state.config.projects.find(x=>x.id===id);if(!p)return;showModal(`<div class="m-head"><h2>${esc(p.name)} · Proje ayarları</h2><button data-modal-close>×</button></div><label class="field">Kalıcı proje talimatları<textarea id="project-instructions" rows="7">${esc(p.instructions||"")}</textarea></label><label class="field">Yeniden kullanılabilir yetenekler <small>Her satıra bir çalışma kuralı veya yetenek yazın.</small><textarea id="project-skills" rows="5">${esc((p.skills||[]).join("\n"))}</textarea></label><label class="field">Geliştirme komutu<input id="project-dev-command" value="${esc(p.devCommand||"")}" placeholder="npm run dev"></label><label class="field artifact-export-setting"><span><input type="checkbox" id="project-artifact-export" ${p.artifactExport?"checked":""}> Konsey kanıtlarını repoya aktar</span><small>Task, handoff, review ve integration sonuçlarını .ajan-konseyi/ altında saklar. Varsayılan olarak kapalıdır.</small></label><div class="m-foot"><button data-modal-close>Vazgeç</button><button class="btn-gradient" data-save-project-settings="${id}">Kaydet</button></div>`);}
@@ -444,6 +482,12 @@ function effortOptsFor(current) {
   return (state.efforts || []).map((ef) => `<option value="${ef.value}" ${(current || "") === ef.value ? "selected" : ""}>${esc(ef.label)}</option>`).join("");
 }
 
+function configurableProviders(current = "") {
+  const providers = [...SUBSCRIPTION_PROVIDERS];
+  if (state.config.apiProviders?.openrouter?.configured || current === "openrouter") providers.push("openrouter");
+  return providers;
+}
+
 function memberCardHTML(m) {
   const st = state.agents[m.id] || state.agents[m.provider] || { status: "idle" };
   const provSt = state.agents[m.provider] || { status: "idle" };
@@ -451,12 +495,13 @@ function memberCardHTML(m) {
   const roleOpts = Object.entries(state.roles)
     .map(([k, v]) => `<option value="${k}" ${m.role === k ? "selected" : ""}>${esc(v.split(" — ")[0])}</option>`)
     .join("");
-  const provOpts = PROVIDERS
+  const provOpts = configurableProviders(m.provider)
     .map((p) => `<option value="${p}" ${m.provider === p ? "selected" : ""}>${PROVIDER_LABELS[p]}</option>`)
     .join("");
   return `
     <div class="agent-card ${m.enabled ? "" : "disabled"}" data-member="${esc(m.id)}">
       <div class="a-head">
+        <span class="agent-card-logo bg-${m.provider}">${agentLogo(m.provider)}</span>
         <span class="a-dot ${dotStatus}" title="${esc(provSt.detail || "")}"></span>
         <input type="text" class="a-name-input c-${m.provider}" data-mname value="${esc(m.name)}" title="Üye adı">
         <label class="switch">
@@ -488,13 +533,14 @@ function coordinatorCardHTML() {
   return `
     <div class="agent-card coord-card" data-coord>
       <div class="a-head">
+        <span class="agent-card-logo bg-koordinator">${agentLogo("koordinator")}</span>
         <span class="a-dot ${st.status}"></span>
-        <span class="a-name c-koordinator">👑 Koordinatör</span>
+        <span class="a-name c-koordinator">Koordinatör</span>
         <span class="a-status">${STATUS_TR[st.status] || st.status}</span>
       </div>
       <div class="a-field"><label>Hangi yapay zekâ yönetsin?</label>
         <select data-cprovider>
-          ${PROVIDERS.map((p) => `<option value="${p}" ${c.provider === p ? "selected" : ""}>${PROVIDER_LABELS[p]}</option>`).join("")}
+          ${configurableProviders(c.provider).map((p) => `<option value="${p}" ${c.provider === p ? "selected" : ""}>${PROVIDER_LABELS[p]}</option>`).join("")}
         </select>
       </div>
       <div class="a-row2">
@@ -551,6 +597,7 @@ function renderTopbar() {
   pill.textContent = proj ? `📁 ${proj.name}` : "Proje seçilmedi";
   pill.classList.toggle("has-project", !!proj);
   pill.title = proj?.path || "";
+  $("btn-open-project-app").disabled=!proj;
 
   const run = selectedRun ? state.runs[selectedRun] : null;
   $("tb-phase").innerHTML = run
@@ -560,6 +607,7 @@ function renderTopbar() {
 
   // Codex davranışı: çalışırken kutu boşsa durdur; metin varsa sıraya gönder.
   const busy = run && run.status === "running";
+  $("btn-stop").hidden=!busy;
   const sendBtn = $("btn-send");
   const hasInput = !!$("f-request").value.trim() || pendingAttachments.length > 0;
   const stopMode = busy && !hasInput;
@@ -570,18 +618,19 @@ function renderTopbar() {
   sendBtn.title = stopMode ? "Yanıtı durdur" : busy ? "Mesajı sıraya ekle" : "Gönder";
   sendBtn.setAttribute("aria-label", sendBtn.title);
 
-  // Üye çipleri: her üye kendi rengi (sağlayıcı) ve baş harfiyle + Koordinatör
+  // Üye çipleri: ad değişse bile sağlayıcının gerçek görsel kimliği korunur.
   const memberChips = (state.config.members || []).filter((m) => m.enabled).map((m) => {
     const own = state.agents[m.id];
     const prov = state.agents[m.provider] || { status: "idle" };
     const status = own?.status === "busy" ? "busy" : prov.status;
     return `<span class="mini-agent bg-${m.provider} st-${status}" data-agent-pop="${esc(m.id)}"
-      title="${esc(m.name)} (${PROVIDER_LABELS[m.provider]}${m.role !== "auto" ? " · " + esc(m.role) : ""}): ${STATUS_TR[status] || status} · ayarlar için tıkla">${esc((m.name[0] || "?").toUpperCase())}</span>`;
+      title="${esc(m.name)} (${PROVIDER_LABELS[m.provider]}${m.role !== "auto" ? " · " + esc(m.role) : ""}): ${STATUS_TR[status] || status} · ayarlar için tıkla">${agentLogo(m.provider)}</span>`;
   }).join("");
   const kSt = state.agents.koordinator || { status: "idle" };
+  $("tb-agents").hidden = false;
   $("tb-agents").innerHTML = memberChips +
     `<span class="mini-agent bg-koordinator st-${kSt.status}" data-agent-pop="koordinator"
-      title="Koordinatör (${PROVIDER_LABELS[state.config.coordinator?.provider] || "Claude"}): ${STATUS_TR[kSt.status] || kSt.status}">K</span>`;
+      title="Koordinatör (${PROVIDER_LABELS[state.config.coordinator?.provider] || "Claude"}): ${STATUS_TR[kSt.status] || kSt.status}">${agentLogo("koordinator")}</span>`;
 
   // Hedef seçici: üyeler dinamik
   const targetSel = $("f-target");
@@ -597,6 +646,11 @@ function renderTopbar() {
   chip.textContent = proj ? `📁 ${proj.name} ▾` : "📁 Proje seç ▾";
   chip.classList.toggle("has-project", !!proj);
 }
+
+function externalApps(){try{return JSON.parse(localStorage.getItem("ajan.externalApps")||"[]").filter(item=>item?.path&&item?.name);}catch{return[];}}
+function renderExternalApps(){const box=$("external-app-list");if(!box)return;const builtins=["VS Code","Finder","Terminal","Android Studio"],custom=externalApps();box.innerHTML=builtins.map(name=>`<div><span><b>${esc(name)}</b><small>Yerleşik</small></span></div>`).join("")+custom.map((item,index)=>`<div><span><b>${esc(item.name)}</b><small>${esc(item.path)}</small></span><button data-remove-external-app="${index}">Kaldır</button></div>`).join("")+`<button id="btn-add-external-app" class="btn-ghost small">＋ Uygulama ekle</button>`;}
+async function chooseExternalApp(){if(!window.desktopAPI?.chooseExternalApp)return alert("Uygulama ekleme masaüstü sürümünde kullanılabilir.");const result=await window.desktopAPI.chooseExternalApp();if(result?.error)return alert(result.error);if(result?.canceled)return;const items=externalApps();if(!items.some(item=>item.path===result.path))items.push({name:result.name,path:result.path});localStorage.setItem("ajan.externalApps",JSON.stringify(items.slice(-20)));renderExternalApps();return result;}
+async function openProjectWith(kind,appPath){const project=activeProject();if(!project)return alert("Önce proje seçin.");if(!window.desktopAPI?.openProjectWith)return alert("Bu özellik masaüstü uygulamasında kullanılabilir.");const result=await window.desktopAPI.openProjectWith({kind,appPath,projectPath:project.path});if(result?.error)alert(`${kind} açılamadı: ${result.error}`);}
 
 function renderMessageQueue(run) {
   const box = $("message-queue");
@@ -688,7 +742,7 @@ function msgHTML(m) {
   }).join("");
   const delivery = m.attachments?.length && m.from === "kullanici" ? `<div class="attachment-delivery">İletildi: ${(state.config.members||[]).filter(x=>x.enabled && (m.attachments||[]).every(a=>state.capabilities?.[x.provider]?.[a.kind])).map(x=>`<span class="c-${x.provider}">${esc(x.name)}</span>`).join(" · ") || "uyumlu ajan yok"}</div>` : "";
   return `<div class="msg from-${esc(align)} kind-${esc(m.kind)}">
-    <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>
+    <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
     <div class="m-body">
       <div class="m-head">
         <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
@@ -761,10 +815,15 @@ function renderDetails(run) {
   // Görevler + zaman çizelgesi
   let tasksHtml = `<div class="muted">Görev listesi koşu başlayınca oluşur.</div>`;
   if (run?.tasks?.length) {
+    const statusLabel={pending:"Bekliyor",active:"Çalışıyor",running:"Çalışıyor",review:"İncelemede",done:"Tamamlandı",failed:"Hatalı"};
+    const completed=run.tasks.filter((task)=>task.status==="done").length;
+    const active=run.tasks.filter((task)=>["active","running","review"].includes(task.status)).length;
+    const failed=run.tasks.filter((task)=>task.status==="failed").length;
+    const progress=Math.round((completed/run.tasks.length)*100);
     const t0 = Math.min(...run.tasks.filter((t) => t.startedAt).map((t) => +new Date(t.startedAt)), +new Date(run.createdAt));
     const t1 = Math.max(...run.tasks.filter((t) => t.endedAt).map((t) => +new Date(t.endedAt)), t0 + 1);
     const span = t1 - t0;
-    tasksHtml = run.tasks.map((t) => {
+    tasksHtml = `<section class="task-plan-summary"><div><span>İlerleme</span><strong>${progress}%</strong></div><div><span>Toplam</span><strong>${run.tasks.length}</strong></div><div><span>Çalışıyor</span><strong>${active}</strong></div><div><span>Tamamlandı</span><strong>${completed}</strong></div>${failed?`<div class="failed"><span>Hatalı</span><strong>${failed}</strong></div>`:""}</section><div class="task-plan-progress"><i style="width:${progress}%"></i></div><div class="task-plan-list">` + run.tasks.map((t) => {
       let bar = "", dur = "";
       if (t.startedAt) {
         const s = +new Date(t.startedAt);
@@ -776,11 +835,11 @@ function renderDetails(run) {
       }
       return `
         <div class="task-row ${t.status}">
-          <div>${esc(t.title)}</div>
-          <div class="t-who">${esc(t.assigneeName || metaFor(t.assignee).label)} · ${t.status}${t.dependsOn?.length ? " · bağımlı: " + t.dependsOn.join(",") : ""}</div>
+          <div class="task-title"><span class="task-status-dot"></span>${esc(t.title)}<b>${esc(statusLabel[t.status]||t.status)}</b></div>
+          <div class="t-who">${esc(t.assigneeName || metaFor(t.assignee).label)}${t.dependsOn?.length ? ` · Önce: ${t.dependsOn.map(esc).join(", ")}` : " · Bağımsız"}<br><span>${esc(t.routingReason||"")}${t.workspace?` · İzole dal: ${esc(t.workspace.branch)}`:""}</span></div>
           ${bar}${dur}
         </div>`;
-    }).join("");
+    }).join("") + `</div>`;
   }
   $("tab-tasks").innerHTML = tasksHtml;
 
@@ -815,7 +874,10 @@ function renderDetails(run) {
   // Dosyalar: renkli diff görüntüleyici + geri alma
   let filesHtml = `<div class="muted">Değiştirilen dosya yok.</div>`;
   if (run?.files?.length || run?.diffs?.length) {
-    filesHtml = (run.files || []).map((f) => `<div class="file-line"><b>[${esc(f.agent)}]</b> ${esc(f.change)} ${esc(f.path)}</div>`).join("");
+    const allDiff=(run.diffs||[]).map(item=>item.diff||"").join("\n");
+    const additions=(allDiff.match(/^\+[^+]/gm)||[]).length,deletions=(allDiff.match(/^-[^-]/gm)||[]).length;
+    filesHtml=`<div class="change-review-summary"><span><b>${(run.files||[]).length} dosya</b><small>${(run.diffs||[]).length} izole ajan dalı</small></span><strong><i>+${additions}</i> <em>−${deletions}</em></strong></div>`;
+    filesHtml += (run.files || []).map((f) => `<div class="file-line"><b>[${esc(f.agent)}]</b> ${esc(f.change)} ${esc(f.path)}</div>`).join("");
     for (const d of run.diffs || []) {
       filesHtml += `<div class="diff-agent-head c-${esc(d.agent)}">${AGENT_META[d.agent]?.label || d.agent} — ${esc(d.branch)}</div>` + renderDiff(d.diff);
     }
@@ -827,7 +889,7 @@ function renderDetails(run) {
   if(run?.projectId)renderProjectArtifacts(run.projectId,run);
 
   $("tab-tests").innerHTML = run?.tests?.length
-    ? run.tests.map((t) => `<h3>${t.ok ? "✓" : "✗"} ${esc(t.command)}</h3><pre>${esc(t.output)}</pre>`).join("")
+    ? `${run.repairHistory?.length?`<div class="repair-history"><b>Otomatik onarma</b>${run.repairHistory.map(item=>`<span>${item.ok?"✓":"✗"} Deneme ${item.attempt} · ${esc(item.agent)}</span>`).join("")}</div>`:""}`+run.tests.map((t) => `<h3>${t.ok ? "✓" : "✗"} ${esc(t.command)}</h3><pre>${esc(t.output)}</pre>`).join("")
     : `<div class="muted">Test çalıştırılmadı.</div>`;
 
   // Kullanım panosu
@@ -847,12 +909,20 @@ function renderDetails(run) {
         <div class="usage-row"><span>Çıktı token</span><b>${(u.output || 0).toLocaleString("tr")}</b></div>
       </div>`;
     }).join("");
-    $("tab-usage").innerHTML = cards +
+    const budget=run.budget||{enabled:false,maxCalls:24,maxTokens:250000};
+    const usedCalls=names.reduce((total,key)=>total+(usage[key].calls||0),0);
+    const budgetPercent=Math.min(100,Math.max(Math.round((totIn+totOut)/(budget.maxTokens||250000)*100),Math.round(usedCalls/(budget.maxCalls||24)*100)));
+    $("tab-usage").innerHTML = budget.enabled?`<div class="budget-meter"><div><b>Yerel görev bütçesi</b><span>${usedCalls}/${budget.maxCalls||24} çağrı · ${(totIn+totOut).toLocaleString("tr")}/${(budget.maxTokens||250000).toLocaleString("tr")} token</span></div><i><b style="width:${budgetPercent}%"></b></i>${budget.stopped?`<strong>${esc(budget.reason||"Bütçe doldu")}</strong>`:""}</div>` + cards +
+      `<div class="usage-card"><div class="usage-total"><span>Toplam</span><span>${totIn.toLocaleString("tr")} girdi · ${totOut.toLocaleString("tr")} çıktı</span></div>
+       <div class="muted" style="margin-top:4px">Abonelik oturumları kullanılır; API faturası oluşmaz. Tüketim, aboneliğin mesaj/kota limitlerinden düşer.</div></div>`:`<div class="budget-meter"><div><b>Yerel görev bütçesi kapalı</b><span>Kullanım uygulama tarafından durdurulmaz</span></div></div>` + cards +
       `<div class="usage-card"><div class="usage-total"><span>Toplam</span><span>${totIn.toLocaleString("tr")} girdi · ${totOut.toLocaleString("tr")} çıktı</span></div>
        <div class="muted" style="margin-top:4px">Abonelik oturumları kullanılır; API faturası oluşmaz. Tüketim, aboneliğin mesaj/kota limitlerinden düşer.</div></div>`;
   } else {
     $("tab-usage").innerHTML = `<div class="muted">Kullanım verisi koşu sırasında birikir.</div>`;
   }
+
+  const context=run?.contextManifest;
+  $("tab-context").innerHTML=context?.sources?.length?`<div class="context-summary"><b>Modele gönderilen bağlam</b><span>Yaklaşık ${Math.ceil(context.sources.reduce((n,s)=>n+(s.chars||0),0)/4).toLocaleString("tr")} token</span></div>${context.sources.map(source=>`<div class="context-source ${source.enabled?"included":"excluded"}"><span><b>${esc(source.label)}</b><small>${source.enabled?"Dahil edildi":"Boş — gönderilmedi"}${source.count?` · ${source.count} ek`:""}</small></span><strong>${(source.chars||0).toLocaleString("tr")} karakter</strong></div>`).join("")}`:`<div class="muted">Bağlam dökümü görev planlanınca oluşur.</div>`;
 
   $("tab-report").innerHTML = run?.report
     ? `<div class="m-content" style="white-space:pre-wrap">${md(run.report)}</div>`
@@ -881,8 +951,9 @@ async function renderProjectArtifacts(projectId,run){try{const data=await fetch(
 function renderToasts() {
   const pending = state.approvals.filter((a) => a.status === "pending");
   $("toasts").innerHTML = pending.map((a) => `
-    <div class="toast">
+    <div class="toast risk-${esc(a.risk||"düşük")}">
       <div class="t-title">${esc(a.title)}</div>
+      <div class="approval-meta"><b>${esc((a.risk||"düşük").toLocaleUpperCase("tr-TR"))} RİSK</b><span>${a.reversible===false?"Geri alınamayabilir":"Geri alınabilir"}</span></div>
       <pre>${esc(a.detail)}</pre>
       <div class="t-btns">
         <button class="approve" data-ap="${a.id}" data-d="approve">✓ Onayla</button>
@@ -890,6 +961,48 @@ function renderToasts() {
       </div>
     </div>`).join("");
 }
+
+const NOTIFICATION_READ_KEY="ajan.notifications.read";
+const NOTIFICATION_DISMISSED_KEY="ajan.notifications.dismissed";
+function storedNotificationIds(key){try{return new Set(JSON.parse(localStorage.getItem(key)||"[]"));}catch{return new Set();}}
+function saveNotificationIds(key,ids){localStorage.setItem(key,JSON.stringify([...ids].slice(-500)));}
+function notificationId(item){return [item.kind,item.runId||item.approvalId||"system",item.at||"",item.title||""].join(":");}
+function importantNotifications(){const runs=Object.values(state.runs||{}),dismissed=storedNotificationIds(NOTIFICATION_DISMISSED_KEY);return[
+  ...state.approvals.filter(item=>item.status==="pending").map(item=>({kind:"approval",title:"Onay bekleniyor",detail:item.title,at:item.ts,approvalId:item.id})),
+  ...runs.filter(run=>["failed","evidence_blocked"].includes(run.status)).slice(-20).map(run=>({kind:"error",title:run.status==="evidence_blocked"?"Kanıt kapısı engelledi":"Görev başarısız",detail:run.title||run.request,at:run.updatedAt||run.createdAt,runId:run.id})),
+  ...runs.filter(run=>run.budget?.enabled&&run.budget?.stopped).slice(-20).map(run=>({kind:"budget",title:"Yerel görev sınırı",detail:run.budget.reason,at:run.updatedAt,runId:run.id})),
+  ...runs.filter(run=>run.status==="done").slice(-10).map(run=>({kind:"done",title:"Görev tamamlandı",detail:run.title||run.request,at:run.updatedAt||run.createdAt,runId:run.id}))
+].map(item=>({...item,id:notificationId(item)})).filter(item=>!dismissed.has(item.id)).sort((a,b)=>+new Date(b.at||0)-+new Date(a.at||0));}
+function renderNotificationCount(){const read=storedNotificationIds(NOTIFICATION_READ_KEY),count=importantNotifications().filter(item=>!read.has(item.id)).length,el=$("notification-count");el.hidden=!count;el.textContent=count>99?"99+":count;}
+function closeNotificationPopover(){document.querySelector("#notification-popover")?.remove();$("btn-notifications").setAttribute("aria-expanded","false");}
+function dismissNotification(id){const dismissed=storedNotificationIds(NOTIFICATION_DISMISSED_KEY);dismissed.add(id);saveNotificationIds(NOTIFICATION_DISMISSED_KEY,dismissed);document.querySelector(`[data-notification-id="${CSS.escape(id)}"]`)?.remove();renderNotificationCount();const list=document.querySelector("#notification-popover .notification-list");if(list&&!list.querySelector(".notification-item"))list.innerHTML='<div class="notification-empty"><span>✓</span><b>Her şey yolunda</b><small>İlgilenmeniz gereken yeni bildirim yok.</small></div>';}
+$("btn-notifications").addEventListener("click",event=>{event.stopPropagation();if(document.querySelector("#notification-popover"))return closeNotificationPopover();const items=importantNotifications(),read=storedNotificationIds(NOTIFICATION_READ_KEY);items.forEach(item=>read.add(item.id));saveNotificationIds(NOTIFICATION_READ_KEY,read);renderNotificationCount();const button=$("btn-notifications"),rect=button.getBoundingClientRect(),panel=document.createElement("section");panel.id="notification-popover";panel.innerHTML=`<header><div><b>Bildirimler</b><small>Yalnız önemli olaylar</small></div><button type="button" data-notification-close aria-label="Bildirimleri kapat">×</button></header><div class="notification-list">${items.map(item=>`<article class="notification-item" data-notification-id="${esc(item.id)}" ${item.runId?`data-notification-run="${item.runId}"`:""}><span class="n-${item.kind}"></span><div><b>${esc(item.title)}</b><small>${esc(item.detail||"")}</small></div><time>${item.at?esc(new Date(item.at).toLocaleString("tr-TR",{hour:"2-digit",minute:"2-digit",day:"2-digit",month:"short"})):""}</time><button type="button" class="notification-delete" data-notification-delete aria-label="Bildirimi sil">×</button></article>`).join("")||'<div class="notification-empty"><span>✓</span><b>Her şey yolunda</b><small>İlgilenmeniz gereken yeni bildirim yok.</small></div>'}</div>`;document.body.append(panel);const width=Math.min(410,innerWidth-24);panel.style.width=`${width}px`;panel.style.top=`${Math.min(rect.bottom+10,innerHeight-panel.offsetHeight-12)}px`;panel.style.left=`${Math.max(12,Math.min(rect.right-width,innerWidth-width-12))}px`;button.setAttribute("aria-expanded","true");panel.querySelectorAll(".notification-item").forEach(row=>{let startX=0;row.addEventListener("pointerdown",e=>{startX=e.clientX;row.setPointerCapture?.(e.pointerId);});row.addEventListener("pointermove",e=>{if(!startX)return;const dx=e.clientX-startX;row.style.transform=`translateX(${Math.max(-110,Math.min(110,dx))}px)`;row.classList.toggle("swiping",Math.abs(dx)>12);});row.addEventListener("pointerup",e=>{const dx=e.clientX-startX;startX=0;if(Math.abs(dx)>70){row.classList.add(dx<0?"dismiss-left":"dismiss-right");setTimeout(()=>dismissNotification(row.dataset.notificationId),150);}else{row.style.transform="";setTimeout(()=>row.classList.remove("swiping"),0);}});});});
+document.addEventListener("click",event=>{const panel=event.target.closest("#notification-popover");if(!panel)return closeNotificationPopover();if(event.target.closest("[data-notification-close]"))return closeNotificationPopover();const row=event.target.closest(".notification-item");if(event.target.closest("[data-notification-delete]")&&row){event.stopPropagation();return dismissNotification(row.dataset.notificationId);}if(row?.dataset.notificationRun&&!row.classList.contains("swiping")){selectRun(row.dataset.notificationRun);closeNotificationPopover();}});
+
+function usageProvider(name){return (state.config.members||[]).find(member=>member.id===name)?.provider||PROVIDERS.find(provider=>String(name).toLowerCase().includes(provider))||name;}
+let openQuotaProvider="";
+function quotaWindowLabel(minutes){if(minutes>=10080)return"Haftalık kota";if(minutes>=1440)return`${Math.round(minutes/1440)} günlük kota`;if(minutes>=60)return minutes===300?"5 saatlik kota":`${Math.round(minutes/60)} saatlik kota`;return"Kullanım kotası";}
+function providerQuotaLogo(provider){
+  if(provider==="claude")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3v26M5.7 8.8l20.6 14.4M3.5 19.5l25-7M9.2 27l13.6-22M4 13.2l24 5.6M10.6 4l10.8 24"/></svg>`;
+  if(provider==="codex")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4.2a7.3 7.3 0 0 1 12.3 5.3 7.3 7.3 0 0 1-1.1 12.3A7.3 7.3 0 0 1 16 28a7.3 7.3 0 0 1-12.3-5.3A7.3 7.3 0 0 1 4.8 10.4 7.3 7.3 0 0 1 16 4.2Z"/><path d="m10.4 11.1 5.6-3.2 5.6 3.2v9.8L16 24.1l-5.6-3.2v-6.5l8.5-4.9"/></svg>`;
+  if(provider==="antigravity")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c1.4 7.4 5.6 11.6 13 13-7.4 1.4-11.6 5.6-13 13-1.4-7.4-5.6-11.6-13-13C10.4 14.6 14.6 10.4 16 3Z"/><path d="M25 3.5c.5 2.4 2.1 4 4.5 4.5-2.4.5-4 2.1-4.5 4.5-.5-2.4-2.1-4-4.5-4.5 2.4-.5 4-2.1 4.5-4.5Z"/></svg>`;
+  if(provider==="openrouter")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 10h9c4 0 5 6 9 6h6M4 22h9c4 0 5-6 9-6"/><path d="m24 12 4 4-4 4"/></svg>`;
+  if(provider==="koordinator")return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="8" r="3.5"/><circle cx="8" cy="23" r="3.5"/><circle cx="24" cy="23" r="3.5"/><path d="m14.4 11.1-4.8 8.8m8-8.8 4.8 8.8M11.5 23h9"/></svg>`;
+  if(provider==="sistem")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="m16 3 10 5.6v7.2c0 6.3-4 10.5-10 13.2-6-2.7-10-6.9-10-13.2V8.6L16 3Z"/><path d="M11 16h2.5l1.7-4 2.4 8 1.7-4H22"/></svg>`;
+  if(provider==="kullanici")return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="11" r="5"/><path d="M7 28c.8-6 4-9 9-9s8.2 3 9 9"/></svg>`;
+  return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="10"/><path d="M16 10v6l4 3"/></svg>`;
+}
+function agentLogo(provider){return `<span class="agent-glyph">${providerQuotaLogo(provider)}</span>`;}
+const PROVIDER_API_RATES={codex:{input:2.5,cached:.25,output:15},claude:{input:3,cached:.3,output:15},antigravity:{input:.5,cached:.05,output:3}};
+function providerUsage(provider){const now=Date.now(),totals={calls:0,input:0,cachedInput:0,output:0},recorded=new Map(),rate=PROVIDER_API_RATES[provider],price=usage=>((Math.max(0,Number(usage.input||0)-Number(usage.cachedInput||0))*rate.input)+(Number(usage.cachedInput||0)*rate.cached)+(Number(usage.output||0)*rate.output))/1e6;for(const run of Object.values(state.runs||{})){const stamp=Date.parse(run.updatedAt||run.createdAt||0);if(now-stamp>30*864e5)continue;const day=new Date(stamp).toISOString().slice(0,10),daily=recorded.get(day)||{day,calls:0,tokens:0,cost:0};for(const [member,usage] of Object.entries(run.usage||{})){if(usageProvider(member)!==provider)continue;for(const key of Object.keys(totals))totals[key]+=Number(usage[key]||0);daily.calls+=Number(usage.calls||0);daily.tokens+=Number(usage.input||0)+Number(usage.output||0);daily.cost+=price(usage);}recorded.set(day,daily);}const days=Array.from({length:30},(_,index)=>{const date=new Date();date.setHours(12,0,0,0);date.setDate(date.getDate()-(29-index));const day=date.toISOString().slice(0,10);return recorded.get(day)||{day,calls:0,tokens:0,cost:0};}),monthKey=new Date().toLocaleDateString("en-CA",{timeZone:"Europe/Istanbul"}).slice(0,7),monthRows=[...recorded.values()].filter(item=>item.day.startsWith(`${monthKey}-`));return {...totals,cost:price(totals),days,month:monthKey,monthCost:monthRows.reduce((sum,item)=>sum+item.cost,0),monthTokens:monthRows.reduce((sum,item)=>sum+item.tokens,0),monthCalls:monthRows.reduce((sum,item)=>sum+item.calls,0)};}
+function usageChart(usage){const source=usage.days||[],max=Math.max(.001,...source.map(item=>Number(item.cost||0))),todayCost=Number(usage.todayCost??source.at(-1)?.cost??0),monthCost=Number(usage.monthCost??0),thirtyDayCost=Number(usage.thirtyDayCost??usage.cost??0);return `<div class="quota-daily"><div><span><small>Bugün</small><b>$${todayCost.toFixed(2)}</b></span><span><small>Bu ay · API eşdeğeri</small><b>$${monthCost.toFixed(2)}</b></span><span><small>Son 30 gün</small><b>$${thirtyDayCost.toFixed(2)}</b></span></div><div class="quota-bars" aria-label="Son 30 günlük kullanım">${source.map(item=>`<i class="${item.cost>0?"used":"empty"}" style="height:${item.cost>0?Math.max(6,item.cost/max*100):3}%"><span><b>${esc(new Date(`${item.day}T12:00:00`).toLocaleDateString("tr-TR",{day:"numeric",month:"short"}))}</b><em>$${Number(item.cost||0).toFixed(2)}${item.calls==null?"":` · ${Number(item.calls).toLocaleString("tr-TR")} çağrı`}</em><small>${Number(item.tokens||0).toLocaleString("tr-TR")} token</small></span></i>`).join("")}</div>${usage.mostUsedModel?`<small class="quota-model">En çok kullanılan model: ${esc(usage.mostUsedModel)}</small>`:""}</div>`;}
+function quotaWindowHtml(window){const remaining=Math.round(window.remainingPercent),reset=window.resetsAt?new Date(window.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,resetText=reset?`${reset} tarihinde sıfırlanır`:window.refreshText?`${esc(window.refreshText)} sonra tamamen yenilenir`:"Sıfırlanma zamanı paylaşılmadı",bars=(window.history||[]).slice(-16);return `<div class="quota-remaining${window.stale?" stale":""}"><span><b>${quotaWindowLabel(window.windowMinutes)}</b><em>${resetText}${window.stale?" · güncel değil":""}</em></span><strong>%${remaining}</strong><i><b style="width:${remaining}%"></b></i>${bars.length>1?`<div class="quota-history" aria-label="Son kota ölçümleri">${bars.map(point=>`<i style="height:${Math.max(8,Number(point.usedPercent))}%"></i>`).join("")}</div>`:""}</div>`;}
+function renderQuotaOverview(){const host=$("quota-overview");if(!host)return;host.innerHTML=SUBSCRIPTION_PROVIDERS.map(provider=>{const members=(state.config.members||[]).filter(member=>member.provider===provider&&member.enabled),models=[...new Set(members.map(member=>member.model||"Otomatik model"))].join(", ")||"Bağlı üye yok",health=state.health?.[provider],status=health?.ok!==false?"Hazır":"Bağlantı gerekli",quota=state.providerQuotas?.[provider],remaining=quota?.available?Math.round(quota.remainingPercent):null,secondary=quota?.secondary,secondaryRemaining=secondary?Math.round(secondary.remainingPercent):null,reset=quota?.resetsAt?new Date(quota.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,secondaryReset=secondary?.resetsAt?new Date(secondary.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,quotaText=remaining===null?"Kota verisi yok":`%${remaining} kaldı`,isOpen=openQuotaProvider===provider,updated=quota?.updatedAt?new Date(quota.updatedAt).toLocaleString("tr-TR",{hour:"2-digit",minute:"2-digit"}):null;return `<article class="quota-card quota-${provider}${isOpen?" open":""}" data-provider="${provider}" tabindex="0" role="button" aria-expanded="${isOpen}" style="--remaining:${remaining??0}"><span class="quota-avatar">${providerQuotaLogo(provider)}</span><div><b>${PROVIDER_LABELS[provider]}</b><small>${quotaText}</small></div><i class="${health?.ok===false?"offline":""}"></i><section class="quota-tooltip"><button class="quota-close" type="button" aria-label="Kota ayrıntısını kapat">×</button><header><span><b>${PROVIDER_LABELS[provider]}</b><small>${esc(status)} · ${esc(models)}</small></span><strong>${remaining===null?"Kesin veri yok":`%${remaining} kaldı`}</strong></header>${remaining!==null?`<div class="quota-remaining"><span><b>${quotaWindowLabel(quota.windowMinutes)}</b><em>${reset?`${reset} tarihinde sıfırlanır`:"Sıfırlanma zamanı paylaşılmadı"}</em></span><strong>%${remaining}</strong><i><b style="width:${remaining}%"></b></i></div>${secondaryRemaining!==null?`<div class="quota-remaining"><span><b>${quotaWindowLabel(secondary.windowMinutes)}</b><em>${secondaryReset?`${secondaryReset} tarihinde sıfırlanır`:"Sıfırlanma zamanı paylaşılmadı"}</em></span><strong>%${secondaryRemaining}</strong><i><b style="width:${secondaryRemaining}%"></b></i></div>`:""}`:""}<p>${remaining===null?"Bu sağlayıcı kesin kalan kotayı yerel oturumunda paylaşmıyor; bu yüzden tahmini bir yüzde veya ücret gösterilmiyor.":`${esc(quota.limitName||"Genel abonelik kotası")} doğrudan sağlayıcının yerel oturum kaydından okundu${updated?`; son kayıt ${updated}`:""}. Model-özel kotalar genel kotaya karıştırılmaz.`}</p></section></article>`;}).join("");host.onclick=event=>{const card=event.target.closest(".quota-card");if(!card)return;const close=event.target.closest(".quota-close"),provider=card.dataset.provider,opening=openQuotaProvider!==provider&&!close;openQuotaProvider=opening?provider:"";host.querySelectorAll(".quota-card").forEach(item=>{const isOpen=item.dataset.provider===openQuotaProvider;item.classList.toggle("open",isOpen);item.setAttribute("aria-expanded",String(isOpen))});event.stopPropagation()};host.onkeydown=event=>{if(!["Enter"," "].includes(event.key)||event.target.closest(".quota-close"))return;event.preventDefault();event.target.click()};}
+function renderQuotaOverviewDetailed(){const host=$("quota-overview");if(!host)return;host.innerHTML=SUBSCRIPTION_PROVIDERS.map(provider=>{const members=(state.config.members||[]).filter(member=>member.provider===provider&&member.enabled),models=[...new Set(members.map(member=>member.model||"Otomatik model"))].join(", ")||"Bağlı üye yok",health=state.health?.[provider],status=health?.ok!==false?"Hazır":"Bağlantı gerekli",quota=state.providerQuotas?.[provider]||{},windows=quota.windows?.length?quota.windows:quota.available?[quota,quota.secondary].filter(Boolean):[],remaining=windows.length?Math.round(windows[0].remainingPercent):null,quotaText=remaining===null?"Kota verisi yok":`%${remaining} kaldı`,isOpen=openQuotaProvider===provider,updated=quota.updatedAt?new Date(quota.updatedAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,localUsage=providerUsage(provider),usage=quota.accountUsage||localUsage,identity=[quota.accountEmail,quota.accountPlan||quota.plan].filter(Boolean).join(" · ")||"Hesap kimliği paylaşılmadı",usageCalls=Number(usage.calls??localUsage.calls??0),usageTokens=Number(usage.thirtyDayTokens??(localUsage.input+localUsage.output)),usageCost=Number(usage.thirtyDayCost??localUsage.cost);return `<article class="quota-card quota-${provider}${isOpen?" open":""}" data-provider="${provider}" tabindex="0" role="button" aria-expanded="${isOpen}" style="--remaining:${remaining??0}"><span class="quota-avatar">${providerQuotaLogo(provider)}</span><div><b>${PROVIDER_LABELS[provider]}</b><small>${quotaText}</small></div><i class="${health?.ok===false?"offline":""}"></i><section class="quota-tooltip"><button class="quota-close" type="button" aria-label="Kota ayrıntısını kapat">×</button><header><span><b>${PROVIDER_LABELS[provider]}</b><small>${esc(identity)}</small><small>${esc(status)} · ${esc(models)}</small></span><strong>${remaining===null?"Kesin veri yok":`%${remaining} kaldı`}</strong></header>${windows.map(quotaWindowHtml).join("")}${usageChart(usage)}<div class="quota-grid"><span><small>Son 30 gün</small><b>${usageCalls.toLocaleString("tr-TR")} çağrı</b><em>${usageTokens.toLocaleString("tr-TR")} token</em></span><span><small>Tahmini API karşılığı</small><b>$${usageCost.toFixed(2)}</b><em>Abonelik faturası değil</em></span></div><p>${esc(usage.source||quota.source||"Yerel oturum")} kaydından okundu${updated?`; son kota ölçümü ${updated}`:""}. Günlük değerler ayrı günlerden toplanır; 30 günlük değer bugünün tekrarı değildir.</p></section></article>`;}).join("");host.onclick=event=>{const card=event.target.closest(".quota-card");if(!card)return;const close=event.target.closest(".quota-close"),provider=card.dataset.provider,opening=openQuotaProvider!==provider&&!close;openQuotaProvider=opening?provider:"";host.querySelectorAll(".quota-card").forEach(item=>{const isOpen=item.dataset.provider===openQuotaProvider;item.classList.toggle("open",isOpen);item.setAttribute("aria-expanded",String(isOpen))});event.stopPropagation()};host.onkeydown=event=>{if(!["Enter"," "].includes(event.key)||event.target.closest(".quota-close"))return;event.preventDefault();event.target.click()};}
+document.addEventListener("click",event=>{if(event.target.closest("#quota-overview"))return;openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
+document.addEventListener("keydown",event=>{if(event.key!=="Escape")return;openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
+$("quota-overview")?.addEventListener("mouseleave",()=>{openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
+window.addEventListener("blur",()=>{openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
 
 // ================= MODALLAR =================
 // Eski proje araçları `showModal` adını kullanıyor. Tek modal uygulamasına
@@ -972,6 +1085,7 @@ document.addEventListener("click", async (e) => {
     if(projectMenuAction.dataset.projectMenu==="preview"){await startProjectPreview(id);return;}
     if(projectMenuAction.dataset.projectMenu==="settings"){openProjectSettings(id);return;}
     if(projectMenuAction.dataset.projectMenu==="memory"){await openProjectMemory(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="health"){const health=await fetch(`/api/projects/${id}/health`).then(response=>response.json());openModal(`<div class="modal-title"><div><span class="section-kicker">PROJE SAĞLIĞI</span><h2>${health.score}/100 · ${esc(health.grade)}</h2><p>Puanın hangi kontrollerden oluştuğu aşağıda açıklanır.</p></div><button data-modal-close>×</button></div><div class="health-score"><i style="--score:${health.score}%"><b>${health.score}</b></i><div>${(health.checks||[]).map(check=>`<div class="health-check ${check.ok?"ok":"missing"}"><span>${check.ok?"✓":"!"}</span><div><b>${esc(check.label)}</b><small>${check.ok?`+${check.points} puan`:esc(check.advice)}</small></div></div>`).join("")}</div></div>`);return;}
     if(projectMenuAction.dataset.projectMenu==="security"){await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:id})});await fetchState();openToolPanel("security");return;}
     if(projectMenuAction.dataset.projectMenu==="checkpoint"){await openCheckpoints(id);return;}
     if(projectMenuAction.dataset.projectMenu==="archives"){showArchivedChats=!showArchivedChats;renderProjects();renderConversations();return;}
@@ -987,6 +1101,7 @@ document.addEventListener("click", async (e) => {
     if(runMenuAction.dataset.runMenu==="transfer"){const target=prompt("Hangi ajana veya konseye devredilsin?","konsey");if(target){const response=await fetch(`/api/runs/${id}/transfer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target,projectId:run.projectId})});const result=await response.json();if(result.runId){selectRun(result.runId);await fetchState();}}}
     if(runMenuAction.dataset.runMenu==="tags"){const value=prompt("Etiketler (virgülle ayırın)",(run.tags||[]).join(", "));if(value!==null)await patchRun(id,{tags:value.split(",")});}
     if(runMenuAction.dataset.runMenu==="export"){const a=document.createElement("a");a.href=`/api/runs/${id}/export`;a.download=`${id}.json`;a.click();}
+    if(runMenuAction.dataset.runMenu==="replay"){const events=[...(run.messages||[]).map(message=>({at:message.ts||message.createdAt,kind:message.kind||"message",title:message.fromLabel||message.from,detail:message.content,messageId:message.from==="kullanici"?message.id:null})),...(run.tasks||[]).flatMap(task=>[{at:task.startedAt,kind:"task",title:`Başladı · ${task.title}`,detail:task.assigneeName},{at:task.endedAt,kind:task.status,title:`Bitti · ${task.title}`,detail:task.status}]).filter(event=>event.at),...(run.tests||[]).map(test=>({at:test.ts,kind:test.ok?"done":"error",title:`Test ${test.ok?"geçti":"kaldı"}`,detail:test.command}))].sort((a,b)=>+new Date(a.at||0)-+new Date(b.at||0));openModal(`<div class="modal-title"><div><span class="section-kicker">OTURUM KAYDI</span><h2>${esc(run.title||run.request)}</h2><p>${events.length} kayıt · baştan sona çalışma izi</p></div><button data-modal-close>×</button></div><div class="replay-timeline">${events.map((event,index)=>`<article class="r-${esc(event.kind)}"><i></i><time>${event.at?esc(new Date(event.at).toLocaleTimeString("tr-TR")):""}</time><div><b>${esc(event.title||event.kind)}</b><p>${esc(String(event.detail||"").slice(0,500))}</p>${event.messageId?`<button data-replay-branch="${event.messageId}" data-replay-run="${id}">Buradan yeni dal aç</button>`:""}</div></article>`).join("")}</div>`);}
     if(runMenuAction.dataset.runMenu==="trash")await patchRun(id,{deletedAt:true});
     return;
   }
@@ -1125,6 +1240,8 @@ document.addEventListener("click", async (e) => {
     const t = TEMPLATES[Number(tpl.dataset.template)];
     if (t) {
       $("f-request").value = t.text;
+      if(t.testCommand)$("f-test").value=t.testCommand;
+      if(t.budget){$("f-budget-enabled").checked=t.budget.enabled===true;$("f-budget-calls").value=t.budget.maxCalls||24;$("f-budget-tokens").value=t.budget.maxTokens||250000;}
       if (t.mode) {
         currentMode = t.mode;
         document.querySelectorAll("#mode-seg button").forEach((x) => x.classList.toggle("active", x.dataset.mode === t.mode));
@@ -1154,6 +1271,7 @@ const TEMPLATES = [
   { name: "⚡ Performans", mode: "split", text: "Bu projenin performans analizini yapın: gereksiz döngüler, N+1 sorgular, bellek sızıntısı riskleri, büyük paket boyutu, gereksiz yeniden hesaplama. En etkili 5 iyileştirmeyi maliyet/kazanç değerlendirmesiyle önerin." },
   { name: "📝 Kod inceleme", mode: "discussion", text: "Bu projedeki son değişiklikleri (git log ve diff'lere bakarak) kod inceleme gözüyle değerlendirin: doğruluk, tasarım, test kapsamı, kenar durumlar. Onaylanabilir mi, değişiklik mi istenmeli? Gerekçeli görüş bildirin." },
   { name: "📚 Dokümantasyon", mode: "code", text: "Bu projenin eksik dokümantasyonunu tamamlayın: README'yi güncelleyin, kurulum/kullanım adımlarını netleştirin, karmaşık fonksiyonlara açıklama ekleyin. Kod davranışını değiştirmeyin." },
+  ...JSON.parse(localStorage.getItem("ajan.workflows")||"[]"),
 ];
 
 function openTemplates() {
@@ -1163,8 +1281,10 @@ function openTemplates() {
     <div class="m-list">
       ${TEMPLATES.map((t, i) => `<button class="m-item" data-template="${i}">${t.name.split(" ")[0]} <span style="flex:1"><div>${esc(t.name.slice(t.name.indexOf(" ") + 1))}</div><small>${esc(t.text.slice(0, 80))}…</small></span></button>`).join("")}
     </div>
-    <div class="m-foot"><button class="btn-ghost small" data-modal-close>Kapat</button></div>`);
+    <div class="m-foot"><button class="btn-ghost small" data-modal-close>Kapat</button><button class="btn-gradient small" id="save-workflow">Mevcut ayarları iş akışı olarak kaydet</button></div>`);
 }
+
+document.addEventListener("click",event=>{if(event.target.id!=="save-workflow")return;const name=prompt("İş akışının adı");if(!name)return;const item={name:`◇ ${name.trim()}`,mode:currentMode,text:$("f-request").value,testCommand:$("f-test").value,budget:{enabled:$("f-budget-enabled").checked,maxCalls:Number($("f-budget-calls").value),maxTokens:Number($("f-budget-tokens").value)},custom:true};const saved=JSON.parse(localStorage.getItem("ajan.workflows")||"[]");saved.push(item);localStorage.setItem("ajan.workflows",JSON.stringify(saved.slice(-30)));TEMPLATES.push(item);openTemplates();});
 
 // Üye/koordinatör ayarları değişince kaydet
 document.addEventListener("change", async (e) => {
@@ -1323,10 +1443,30 @@ $("conversation-search").addEventListener("input", (e) => {
 });
 $("chat-import-file").addEventListener("change",async e=>{const file=e.target.files[0];if(!file)return;try{const body=JSON.parse(await file.text());body.projectId=e.target.dataset.projectId;const response=await fetch("/api/runs/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),result=await response.json();if(!response.ok)throw new Error(result.error);selectRun(result.runId);await fetchState();}catch(error){alert(error.message);}e.target.value="";});
 $("btn-details").addEventListener("click", () => $("details").classList.toggle("closed"));
+$("open-output-center").addEventListener("click",async()=>{const project=activeProject();if(!project)return alert("Önce proje seçin");const data=await fetch(`/api/projects/${project.id}/artifacts`).then(response=>response.json());const groups={};for(const file of data.artifacts||[]){const ext=(file.name.split(".").pop()||"dosya").toUpperCase();(groups[ext]??=[]).push(file);}openModal(`<div class="modal-title"><div><span class="section-kicker">ÇIKTI MERKEZİ</span><h2>${esc(project.name)} çıktıları</h2><p>${(data.artifacts||[]).length} üretim ve proje dosyası</p></div><button data-modal-close>×</button></div><div class="output-center">${Object.entries(groups).map(([type,files])=>`<section><h3>${esc(type)} <span>${files.length}</span></h3>${files.map(file=>`<button class="artifact-link" data-artifact-path="${esc(file.path)}"><b>${esc(file.relative)}</b><small>${(file.size/1024).toFixed(1)} KB · ${esc(new Date(file.mtimeMs).toLocaleString("tr-TR"))}</small></button>`).join("")}</section>`).join("")||'<div class="muted">Henüz çıktı yok.</div>'}</div>`);$("tool-menu").hidden=true;});
 
+const toolBodyIds=["tool-terminal","tool-browser","tool-preview","tool-editor","tool-tasks","tool-security","tool-git"];
+const toolIconIds={terminal:"i-terminal",browser:"i-browser",preview:"i-inspect",editor:"i-files",tasks:"i-tasks",security:"i-sliders",git:"i-git",menu:"i-apps"};
+function setToolCurrentIcon(kind){$("tool-current-icon").innerHTML=`<svg class="ui-icon" aria-hidden="true"><use href="#${toolIconIds[kind]||toolIconIds.menu}"></use></svg>`;}
+function closeToolPanel(){
+  $("tool-panel").classList.add("closed");
+  $("btn-tools").setAttribute("aria-expanded","false");
+}
+function showToolPicker(){
+  $("tool-panel").classList.remove("closed");
+  toolBodyIds.forEach(id=>$(id).hidden=true);
+  $("tool-menu").hidden=false;
+  setToolCurrentIcon("menu");
+  $("tool-current-title").textContent="Araçlar";
+  $("btn-tools").setAttribute("aria-expanded","true");
+}
 function openToolPanel(tab) {
   $("tool-panel").classList.remove("closed");
   $("tool-menu").hidden = true;
+  $("btn-tools").setAttribute("aria-expanded", "true");
+  const toolMeta={terminal:"Terminal",browser:"Tarayıcı",preview:"İncele",editor:"Dosyalar",tasks:"Görevler",security:"Proje ayarları",git:"Git ve test"}[tab]||"Araç";
+  setToolCurrentIcon(tab);
+  $("tool-current-title").textContent=toolMeta;
   document.querySelectorAll("[data-tool-tab]").forEach((b) => b.classList.toggle("active", b.dataset.toolTab === tab));
   $("tool-terminal").hidden = tab !== "terminal";
   $("tool-browser").hidden = tab !== "browser";
@@ -1347,10 +1487,24 @@ async function renderGitCenter(){const project=activeProject(),actions=[$("git-r
 const securityCapabilities={files:{label:"Proje dosyaları",description:"Dosyaları okuma, oluşturma ve düzenleme"},terminal:{label:"Terminal",description:"Proje klasöründe komut çalıştırma"},browser:{label:"Tarayıcı",description:"Sayfalarda gezinme, tıklama ve yazma"},publish:{label:"GitHub yayını",description:"Commitleri uzak depoya gönderme"},externalServices:{label:"Harici servisler",description:"Bağlı servis ve hesapları kullanma"}};
 const auditLabels={"permissions.update":"Proje izinleri güncellendi","skill.save":"Yetenek paketi kaydedildi","skill.toggle":"Yetenek durumu değiştirildi","skill.delete":"Yetenek paketi silindi","file.write":"Dosya kaydedildi","test.run":"Test çalıştırıldı","git.commit":"Commit oluşturuldu","chat.update":"Sohbet güncellendi"};
 function auditSummary(item){const detail=item.detail||{};if(item.action==="permissions.update"){const [key,value]=Object.entries(detail)[0]||[];return `${securityCapabilities[key]?.label||key}: ${value==="allow"?"İzin verildi":value==="deny"?"Engellendi":"Her seferinde sor"}`;}if(detail.name)return detail.name;if(detail.message)return detail.message;if(detail.command)return detail.command;if(detail.path)return detail.path;return "İşlem başarıyla uygulandı";}
+function openSkillModal(){openModal(`<div class="skill-modal"><div class="modal-title"><div><span class="section-kicker">YENİ YETENEK</span><h2>Yetenek paketi oluştur</h2><p>Ajanların tekrar kullanabileceği talimatı ve isteğe bağlı komutu tanımlayın.</p></div><button type="button" data-modal-close>×</button></div><form id="skill-form"><label><b>Yetenek adı</b><input name="name" required autofocus placeholder="Örn. Kod kalite kontrolü"></label><label><b>Sürüm</b><input name="version" value="1.0.0" required></label><label class="skill-modal-wide"><b>Ajan talimatları</b><small>Bu yetenek etkin olduğunda ajanların izleyeceği açık kurallar.</small><textarea name="instructions" placeholder="Değişiklikleri incele, testleri çalıştır ve bulguları önem sırasına göre raporla."></textarea></label><label class="skill-modal-wide"><b>Güvenli komut <small>(isteğe bağlı)</small></b><input name="command" placeholder="npm test"></label><div class="form-error skill-modal-wide" hidden></div><div class="modal-actions skill-modal-wide"><button type="button" data-modal-close>Vazgeç</button><button type="submit" class="primary-action">Yeteneği kaydet</button></div></form></div>`);requestAnimationFrame(()=>$('skill-form')?.elements.name.focus());}
+const skillCatalog=[
+  {id:"quality",name:"Kod kalite denetimi",version:"1.0.0",permissions:["Dosya okuma","Terminal"],instructions:"Değişiklikleri doğruluk, güvenlik, performans ve test kapsamı açısından incele. Bulguları önem sırasıyla dosya:satır kanıtıyla raporla.",command:"npm test"},
+  {id:"ui-audit",name:"Görsel arayüz denetimi",version:"1.0.0",permissions:["Tarayıcı","Ekran görüntüsü"],instructions:"Masaüstü, tablet ve telefon görünümlerini denetle; taşma, örtüşme, okunabilirlik ve etkileşim hatalarını kanıtlarıyla raporla."},
+  {id:"release",name:"Güvenli sürüm hazırlama",version:"1.0.0",permissions:["Git","Terminal","Yayın için onay"],instructions:"Testleri çalıştır, değişiklikleri özetle, sürüm notu hazırla ve yalnız açık kullanıcı onayından sonra yayınla."},
+  {id:"research",name:"Kaynaklı araştırma",version:"1.0.0",permissions:["Tarayıcı"],instructions:"Güncel iddiaları birincil kaynaklardan doğrula, bağlantıları ekle ve gerçeklerle çıkarımları ayır."},
+  {id:"bug-repair",name:"Otomatik hata onarma",version:"1.0.0",permissions:["Dosya okuma","Terminal"],instructions:"Hatayı yeniden üret, kök nedeni bul, en küçük güvenli düzeltmeyi uygula ve regresyon testiyle doğrula."},
+  {id:"performance",name:"Performans denetimi",version:"1.0.0",permissions:["Tarayıcı","Terminal"],instructions:"Yavaş açılışları, ağır sorguları ve gereksiz kaynak kullanımını ölç; ölçüm öncesi ve sonrası kanıtlarla iyileştir."},
+  {id:"accessibility",name:"Erişilebilirlik kontrolü",version:"1.0.0",permissions:["Tarayıcı"],instructions:"Klavye kullanımı, odak sırası, kontrast, etiketler ve ekran okuyucu uyumluluğunu denetle."},
+  {id:"dependency",name:"Bağımlılık sağlığı",version:"1.0.0",permissions:["Dosya okuma","Terminal"],instructions:"Eski, çakışan veya riskli bağımlılıkları saptayıp güvenli yükseltme planı ve doğrulama komutları hazırla."},
+  {id:"handoff",name:"Belge ve devir paketi",version:"1.0.0",permissions:["Dosya okuma"],instructions:"Yapılan değişiklikleri, kararları, test kanıtlarını ve sonraki adımları kısa ve yeniden kullanılabilir bir devir belgesinde topla."},
+  {id:"data-safety",name:"Veri güvenliği kontrolü",version:"1.0.0",permissions:["Dosya okuma"],instructions:"Gizli bilgiler, kişisel veriler, günlük sızıntıları ve güvensiz saklama kalıplarını inceleyip güvenli düzeltmeler öner."}
+];
+async function openSkillMarket(){const data=await fetch("/api/workspace").then(r=>r.json()),installed=new Set((data.skills||[]).flatMap(skill=>[skill.id,String(skill.name||"").trim().toLocaleLowerCase("tr-TR")]));openModal(`<div class="skill-modal skill-market-modal"><div class="modal-title"><div><span class="section-kicker">YETENEK MAĞAZASI</span><h2>Hazır yetenekler</h2><p>İş akışınıza uygun, güvenli ve tekrar kullanılabilir paketler.</p></div><button data-modal-close>×</button></div><div class="skill-market-list">${skillCatalog.map((skill,index)=>{const ready=installed.has(skill.id)||installed.has(skill.name.toLocaleLowerCase("tr-TR"));return`<article class="${ready?"installed":""}"><span class="skill-market-icon c${index%6}">${esc(skill.name.slice(0,1))}</span><div><b>${esc(skill.name)}</b><small>v${skill.version} · ${esc(skill.permissions.join(" · "))}</small><p>${esc(skill.instructions)}</p></div><button data-install-skill="${skill.id}" ${ready?"disabled":""}>${ready?"Kurulu ✓":"Kur"}</button></article>`;}).join("")}</div></div>`);}
 async function renderSecurityCenter(){
   const project=activeProject(),projectId=project?.id||"global",data=await fetch("/api/workspace").then(r=>r.json()),permissions=data.permissions?.[projectId]||{};
   $("security-permissions").innerHTML=Object.entries(securityCapabilities).map(([key,cap])=>{const value=permissions[key]||"ask";return`<label class="permission-row" data-state="${value}"><span class="permission-copy"><b>${esc(cap.label)}</b><small>${esc(cap.description)}</small></span><select data-security-permission="${key}"><option value="ask" ${value==="ask"?"selected":""}>Her seferinde sor</option><option value="allow" ${value==="allow"?"selected":""}>İzin ver</option><option value="deny" ${value==="deny"?"selected":""}>Engelle</option></select></label>`;}).join("");
-  $("security-skills").innerHTML=(data.skills||[]).length?(data.skills||[]).map(skill=>`<div class="skill-row"><input type="checkbox" data-security-skill="${skill.id}" ${(skill.enabledProjects||[]).includes(projectId)?"checked":""}><div class="skill-copy"><b>${esc(skill.name)}</b><small>v${esc(skill.version||"1.0.0")} · ${esc(skill.instructions||skill.command||"Talimat yok")}</small></div><button data-delete-skill="${skill.id}" title="Yetenek paketini sil">Sil</button></div>`).join(""):'<div class="skill-empty"><div><span>⌾</span><b>Henüz yetenek paketi yok</b><small>Sık kullandığınız talimatları paketleyip projelerde tek tıkla etkinleştirin.</small></div></div>';
+  $("security-skills").innerHTML=(data.skills||[]).length?(data.skills||[]).map((skill,index)=>{const enabled=(skill.enabledProjects||[]).includes(projectId);return`<article class="skill-row ${enabled?"enabled":""}"><span class="skill-card-icon c${index%6}">${esc(String(skill.name||"Y").slice(0,1))}</span><div class="skill-copy"><b>${esc(skill.name)}</b><small>v${esc(skill.version||"1.0.0")}</small><p>${esc(skill.instructions||skill.command||"Talimat yok")}</p></div><label class="skill-switch" title="Bu projede etkinleştir"><input type="checkbox" data-security-skill="${skill.id}" ${enabled?"checked":""}><i></i></label><button class="skill-delete" data-delete-skill="${skill.id}" title="Yetenek paketini sil">×</button></article>`;}).join(""):'<div class="skill-empty"><div><span>⌾</span><b>Henüz yetenek paketi yok</b><small>Sık kullandığınız talimatları paketleyip projelerde tek tıkla etkinleştirin.</small></div></div>';
   $("security-audit").innerHTML=[...(data.audit||[])].reverse().slice(0,30).map(item=>`<div class="audit-row"><span class="audit-icon">${item.action.startsWith("skill")?"⌾":item.action.startsWith("permission")?"✓":"·"}</span><span class="audit-copy"><b>${esc(auditLabels[item.action]||"Çalışma alanı güncellendi")}</b><small>${esc(auditSummary(item))}</small></span><time>${esc(new Date(item.ts).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}))}</time></div>`).join("")||'<div class="audit-empty">Henüz etkinlik kaydı yok.</div>';
 }
 async function checkApplicationUpdate(){if(!window.desktopAPI?.updateStatus){$("update-status").textContent="Güncelleme denetimi masaüstü uygulamasında kullanılabilir.";return;}$("update-status").textContent="GitHub sürümü denetleniyor…";const result=await window.desktopAPI.updateStatus();if(result.error){$("update-status").textContent=`Denetim başarısız: ${result.error}`;$("update-download").hidden=true;return;}$("update-status").textContent=result.available?`${result.current} yüklü · ${result.latest} indirilebilir`:`${result.current} güncel · ${result.message||result.latest||""}`;$("update-download").hidden=!(result.available&&result.asset);$("update-notes").hidden=!result.notes;$("update-notes").textContent=result.notes||"";}
@@ -1358,12 +1512,30 @@ async function renderTaskCenter(){const data=await fetch("/api/workspace").then(
 function contractLines(value){return (value||[]).join("\n");}
 async function openTaskContract(taskId){const response=await fetch(`/api/workspace/tasks/${taskId}/contract`),contract=await response.json();if(!response.ok)return alert(contract.error);openModal(`<div class="contract-modal"><div class="modal-title"><div><span class="section-kicker">GÖREV SINIRLARI</span><h2>Görev sözleşmesi</h2><p>Ajanın hedefini, erişebileceği alanları ve tamamlanma ölçütlerini belirleyin.</p></div><button data-close-modal>×</button></div><form id="task-contract-form" data-task-id="${taskId}"><label class="contract-wide"><b>Hedef</b><small>Bu görev sonunda ortaya çıkması gereken sonuç.</small><textarea name="goal" required>${esc(contract.goal||"")}</textarea></label><label><b>Kapsam dışı</b><small>Her satıra yapılmaması gereken bir iş.</small><textarea name="nonGoals">${esc(contractLines(contract.nonGoals))}</textarea></label><label><b>Kabul kriterleri</b><small>Her satır doğrulanabilir bir sonuç olmalı.</small><textarea name="acceptanceCriteria" required>${esc(contractLines(contract.acceptanceCriteria))}</textarea></label><label><b>İzin verilen yollar</b><small>Projeye göre yollar; ör. src/**</small><textarea name="allowedPaths" required>${esc(contractLines(contract.allowedPaths))}</textarea></label><label><b>Yasak yollar</b><small>Ajanın değiştirmemesi gereken alanlar.</small><textarea name="forbiddenPaths">${esc(contractLines(contract.forbiddenPaths))}</textarea></label><label><b>Test komutları</b><small>Her satıra bir doğrulama komutu.</small><textarea name="testCommands">${esc(contractLines(contract.testCommands))}</textarea></label><label><b>Onay sınırları</b><small>İnsan onayı gerektiren işlemler.</small><textarea name="approvalBoundaries">${esc(contractLines(contract.approvalBoundaries))}</textarea></label><label class="contract-risk"><b>Risk seviyesi</b><select name="risk">${[["low","Düşük"],["medium","Orta"],["high","Yüksek"],["critical","Kritik"]].map(([value,label])=>`<option value="${value}" ${contract.risk===value?"selected":""}>${label}</option>`).join("")}</select></label><div class="contract-errors" ${contract.errors?.length?"":"hidden"}>${esc((contract.errors||[]).join(" · "))}</div><div class="modal-actions"><button type="button" data-close-modal>Vazgeç</button><button type="submit" class="primary-action">Sözleşmeyi kaydet</button></div></form></div>`);}
 $("task-refresh").addEventListener("click",renderTaskCenter);
+$("task-schedule").addEventListener("click",async()=>{const request=prompt("Zamanlanacak görev");if(!request)return;const at=prompt("Başlangıç zamanı (YYYY-MM-DD HH:mm)",new Date(Date.now()+3600000).toISOString().slice(0,16).replace("T"," "));if(!at)return;const response=await fetch("/api/workspace/schedules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({request,at,projectId:activeProject()?.id||null})}),result=await response.json();if(!response.ok)return alert(result.error);alert(`Görev zamanlandı: ${new Date(result.at).toLocaleString("tr-TR")}`);await renderTaskCenter();});
 $("task-center-list").addEventListener("click",async e=>{const contractButton=e.target.closest("[data-task-contract]");if(contractButton)return openTaskContract(contractButton.dataset.taskContract);const b=e.target.closest("[data-task-action]");if(!b)return;const r=await fetch(`/api/workspace/tasks/${b.dataset.taskId}/${b.dataset.taskAction}`,{method:"POST"});if(!r.ok)alert((await r.json()).error);await renderTaskCenter();await fetchState();});
-$("modal-card").addEventListener("submit",async e=>{if(e.target.id!=="task-contract-form")return;e.preventDefault();const form=e.target,data=Object.fromEntries(new FormData(form));for(const key of ["nonGoals","allowedPaths","forbiddenPaths","acceptanceCriteria","testCommands","approvalBoundaries"])data[key]=String(data[key]||"").split("\n");const button=form.querySelector('[type="submit"]');button.disabled=true;const response=await fetch(`/api/workspace/tasks/${form.dataset.taskId}/contract`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),result=await response.json();button.disabled=false;if(!response.ok)return alert(result.error);closeModal();await renderTaskCenter();});
+$("modal-card").addEventListener("submit",async e=>{
+  if(e.target.id==="skill-form"){
+    e.preventDefault();
+    const form=e.target,button=form.querySelector('[type="submit"]'),error=form.querySelector(".form-error"),data=Object.fromEntries(new FormData(form));
+    button.disabled=true;error.hidden=true;
+    try{
+      const response=await fetch("/api/workspace/skills",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),result=await response.json();
+      if(!response.ok)throw new Error(result.error||"Yetenek kaydedilemedi.");
+      closeModal();await renderSecurityCenter();
+    }catch(reason){error.textContent=reason.message;error.hidden=false;}finally{button.disabled=false;}
+    return;
+  }
+  if(e.target.id!=="task-contract-form")return;
+  e.preventDefault();const form=e.target,data=Object.fromEntries(new FormData(form));for(const key of ["nonGoals","allowedPaths","forbiddenPaths","acceptanceCriteria","testCommands","approvalBoundaries"])data[key]=String(data[key]||"").split("\n");const button=form.querySelector('[type="submit"]');button.disabled=true;const response=await fetch(`/api/workspace/tasks/${form.dataset.taskId}/contract`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),result=await response.json();button.disabled=false;if(!response.ok)return alert(result.error);closeModal();await renderTaskCenter();
+});
 $("security-refresh").addEventListener("click",renderSecurityCenter);
 $("update-check").addEventListener("click",checkApplicationUpdate);
 $("update-download").addEventListener("click",async()=>{if(!window.desktopAPI?.downloadUpdate)return;$("update-status").textContent="Güncelleme paketi indiriliyor…";$("update-download").disabled=true;const result=await window.desktopAPI.downloadUpdate();$("update-download").disabled=false;if(result.error){$("update-status").textContent=`İndirme başarısız: ${result.error}`;return;}$("update-status").textContent=`Paket doğrulandı ve Finder’da gösterildi · SHA-256: ${result.sha256.slice(0,12)}…`;});
-$("security-new-skill").addEventListener("click",async()=>{const name=prompt("Yetenek adı","Kod kalite kontrolü");if(!name)return;const version=prompt("Sürüm","1.0.0")||"1.0.0",instructions=prompt("Ajanlara verilecek talimat","")||"",command=prompt("İsteğe bağlı güvenli komut","")||"";const response=await fetch("/api/workspace/skills",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,version,instructions,command})});if(!response.ok)return alert((await response.json()).error);await renderSecurityCenter();});
+$("security-new-skill").addEventListener("click",openSkillModal);
+$("security-market").addEventListener("click",openSkillMarket);
+$("modal-card").addEventListener("click",async event=>{const button=event.target.closest("[data-install-skill]");if(!button)return;const skill=skillCatalog.find(item=>item.id===button.dataset.installSkill);if(!skill)return;button.disabled=true;const response=await fetch("/api/workspace/skills",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(skill)});if(!response.ok){button.disabled=false;return alert((await response.json()).error||"Yetenek kurulamadı");}button.textContent="Kuruldu";await renderSecurityCenter();});
+$("modal-card").addEventListener("click",async event=>{const button=event.target.closest("[data-replay-branch]");if(!button)return;const response=await fetch(`/api/runs/${button.dataset.replayRun}/branch`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messageId:button.dataset.replayBranch})}),result=await response.json();if(!response.ok)return alert(result.error);closeModal();selectRun(result.runId);await fetchState();});
 $("security-permissions").addEventListener("change",async e=>{const input=e.target.closest("[data-security-permission]");if(!input)return;const projectId=activeProject()?.id||"global";input.disabled=true;try{const response=await fetch("/api/workspace/permissions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId,permissions:{[input.dataset.securityPermission]:input.value}})});if(!response.ok)throw new Error((await response.json()).error||"İzin kaydedilemedi");await renderSecurityCenter();}catch(error){alert(error.message);await renderSecurityCenter();}finally{input.disabled=false;}});
 $("security-skills").addEventListener("change",async e=>{const input=e.target.closest("[data-security-skill]");if(!input)return;await fetch(`/api/workspace/skills/${input.dataset.securitySkill}/enable`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId:activeProject()?.id||"global",enabled:input.checked})});await renderSecurityCenter();});
 $("security-skills").addEventListener("click",async e=>{const button=e.target.closest("[data-delete-skill]");if(!button||!confirm("Yetenek paketi silinsin mi?"))return;await fetch(`/api/workspace/skills/${button.dataset.deleteSkill}`,{method:"DELETE"});await renderSecurityCenter();});
@@ -1423,23 +1595,72 @@ function navigateBrowser(value) {
 }
 
 if(window.desktopAPI?.isDesktop){$("browser-surface").replaceChildren();createBrowserTab("https://www.google.com/");}
-$("btn-tools").addEventListener("click", (e) => { e.stopPropagation(); $("tool-menu").hidden = !$("tool-menu").hidden; });
+$("btn-tools").addEventListener("click", (e) => { e.stopPropagation(); if($("tool-panel").classList.contains("closed"))showToolPicker();else closeToolPanel(); });
+const settingsMeta={
+  general:["Genel","Konseyin temel çalışma biçimini yönetin."],
+  notifications:["Bildirimler","Hangi önemli sonuçlarda macOS bildirimi alacağınızı seçin."],
+  agents:["Ajanlar ve modeller","Konsey üyelerini, modelleri ve çalışma çabasını yönetin."],
+  capabilities:["Yetenekler ve bağlantılar","Ajanların kullanabildiği yerel araçları ve hizmetleri inceleyin."],
+  applications:["Harici uygulamalar","Projelerin hangi masaüstü uygulamalarında açılacağını yönetin."],
+  api:["Yapay zeka API","Harici modelleri güvenli API anahtarlarıyla konseye bağlayın."],
+  updates:["Güncellemeler","Sürümü denetleyin; eski indirme paketleri otomatik temizlensin."]
+};
+function selectSettingsPage(page){
+  if(!settingsMeta[page])page="general";
+  document.querySelectorAll("[data-settings-page]").forEach(button=>button.classList.toggle("active",button.dataset.settingsPage===page));
+  document.querySelectorAll("[data-settings-content]").forEach(content=>{const active=content.dataset.settingsContent===page;content.hidden=!active;content.classList.toggle("active",active);});
+  $("settings-title").textContent=settingsMeta[page][0];$("settings-description").textContent=settingsMeta[page][1];
+  if(page==="agents")renderAgentConfig();
+  if(page==="api")refreshOpenRouterSettings();
+  if(page==="capabilities")renderCapabilities();
+  if(page==="applications")renderExternalApps();
+  if(page==="updates"&&window.desktopAPI?.updateStatus)checkApplicationUpdate();
+}
+async function refreshOpenRouterSettings(){
+  const status=await fetch("/api/api-providers/openrouter").then(response=>response.json()).catch(()=>({configured:false}));
+  const stateEl=$("openrouter-state"),remove=$("openrouter-remove"),save=$("openrouter-save");
+  const logo=document.querySelector("#openrouter-card .api-provider-logo");if(logo)logo.innerHTML=agentLogo("openrouter");
+  stateEl.textContent=status.configured?"Bağlı · kullanıma hazır":"Bağlı değil";
+  stateEl.classList.toggle("connected",!!status.configured);remove.hidden=!status.configured;
+  save.textContent=status.configured?"Anahtarı yenile":"Bağla ve doğrula";
+}
+async function saveOpenRouterSettings(){
+  const key=$("openrouter-key").value.trim(),error=$("openrouter-error"),button=$("openrouter-save");
+  error.hidden=true;if(!key){error.textContent="OpenRouter API anahtarını girin.";error.hidden=false;return;}
+  button.disabled=true;button.textContent="Doğrulanıyor…";
+  const response=await fetch("/api/api-providers/openrouter",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({apiKey:key})});
+  const result=await response.json().catch(()=>({}));button.disabled=false;
+  if(!response.ok){error.textContent=result.error||"Bağlantı kurulamadı";error.hidden=false;button.textContent="Tekrar dene";return;}
+  $("openrouter-key").value="";await fetchState();await refreshOpenRouterSettings();
+}
+async function removeOpenRouterSettings(){if(!confirm("Ox Alpha bağlantısı ve güvenli anahtarı kaldırılsın mı?"))return;await fetch("/api/api-providers/openrouter",{method:"DELETE"});await fetchState();await refreshOpenRouterSettings();}
+function openSettingsScreen(page="general"){$("settings-screen").hidden=false;document.body.classList.add("settings-open");selectSettingsPage(page);requestAnimationFrame(()=>$('settings-search')?.focus());}
+function closeSettingsScreen(){$("settings-screen").hidden=true;document.body.classList.remove("settings-open");}
+$("btn-settings").addEventListener("click",()=>openSettingsScreen());
+$("settings-back").addEventListener("click",closeSettingsScreen);$("settings-close").addEventListener("click",closeSettingsScreen);
+document.querySelectorAll("[data-settings-page]").forEach(button=>button.addEventListener("click",()=>selectSettingsPage(button.dataset.settingsPage)));
+$("settings-search").addEventListener("input",event=>{const query=event.target.value.trim().toLocaleLowerCase("tr-TR");document.querySelectorAll("[data-settings-page]").forEach(button=>button.hidden=!!query&&!button.textContent.toLocaleLowerCase("tr-TR").includes(query));});
+$("openrouter-save")?.addEventListener("click",saveOpenRouterSettings);
+$("openrouter-remove")?.addEventListener("click",removeOpenRouterSettings);
+$("btn-open-project-app").addEventListener("click",event=>{event.stopPropagation();const menu=$("project-app-menu"),open=menu.hidden;menu.hidden=!open;$("btn-open-project-app").setAttribute("aria-expanded",String(open));});
+$("project-app-menu").addEventListener("click",async event=>{const button=event.target.closest("[data-project-app]");if(!button)return;$("project-app-menu").hidden=true;$("btn-open-project-app").setAttribute("aria-expanded","false");if(button.dataset.projectApp==="custom"){const selected=await chooseExternalApp();if(selected)await openProjectWith("custom",selected.path);return;}await openProjectWith(button.dataset.projectApp);});
+document.addEventListener("click",event=>{if(!event.target.closest(".project-app-wrap")){$("project-app-menu").hidden=true;$("btn-open-project-app").setAttribute("aria-expanded","false");}});
+document.addEventListener("click",async event=>{const remove=event.target.closest("[data-remove-external-app]");if(remove){const items=externalApps();items.splice(Number(remove.dataset.removeExternalApp),1);localStorage.setItem("ajan.externalApps",JSON.stringify(items));renderExternalApps();return;}if(event.target.closest("#btn-add-external-app"))await chooseExternalApp();});
 document.querySelectorAll("[data-open-tool]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.openTool)));
 document.querySelectorAll("[data-open-details]").forEach((b) => b.addEventListener("click", () => {
   $("tool-menu").hidden = true;
   $("details").classList.remove("closed");
   document.querySelector(`#tabs button[data-tab="${b.dataset.openDetails}"]`)?.click();
 }));
-document.addEventListener("click", (e) => { if (!e.target.closest(".tool-menu-wrap")) $("tool-menu").hidden = true; });
-$("btn-open-terminal").addEventListener("click", () => { openToolPanel("terminal"); autoCloseSidebar(); });
-$("btn-open-browser").addEventListener("click", () => { openToolPanel("browser"); autoCloseSidebar(); });
-$("btn-tool-close").addEventListener("click",()=>$("tool-panel").classList.add("closed"));
+document.addEventListener("keydown",event=>{if(event.key==="Escape"&&!$("tool-panel").classList.contains("closed")){closeToolPanel();$("btn-tools").focus();}});
+$("btn-tool-close").addEventListener("click",closeToolPanel);
 document.querySelectorAll("[data-tool-tab]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.toolTab)));
 $("browser-bar").addEventListener("submit", (e) => { e.preventDefault(); navigateBrowser($("browser-url").value); });
 $("browser-new-tab").addEventListener("click",()=>createBrowserTab("https://www.google.com/"));
 $("browser-device").addEventListener("change",e=>{$("browser-surface").classList.remove("device-tablet","device-phone");if(e.target.value!=="desktop")$("browser-surface").classList.add(`device-${e.target.value}`);});
 $("browser-debug-clear").addEventListener("click",()=>{browserDebugEntries=[];$("browser-debug-log").textContent="";$("browser-debug-count").textContent="0";});
 $("browser-capture").addEventListener("click",async()=>{const view=activeBrowserView();if(!view?.capturePage)return alert("Aktif önizleme yok");const image=await view.capturePage();const a=document.createElement("a");a.href=image.toDataURL();a.download=`onizleme-${Date.now()}.png`;a.click();addBrowserDebug("info","Önizleme ekran görüntüsü kaydedildi",browserDisplayUrl(view));});
+$("browser-visual-test").addEventListener("click",async()=>{const view=activeBrowserView();if(!view)return alert("Aktif önizleme yok");const select=$("browser-device"),original=select.value,results=[];for(const device of ["desktop","tablet","phone"]){select.value=device;select.dispatchEvent(new Event("change"));await new Promise(resolve=>setTimeout(resolve,450));let overflow=false;try{overflow=await view.executeJavaScript("document.documentElement.scrollWidth>document.documentElement.clientWidth");}catch{}const image=await view.capturePage?.();results.push({device,overflow,image});addBrowserDebug(overflow?"error":"info",`${device}: ${overflow?"yatay taşma bulundu":"yerleşim temiz"}`,browserDisplayUrl(view));}select.value=original;select.dispatchEvent(new Event("change"));const failed=results.filter(item=>item.overflow).length;alert(`Görsel arayüz testi tamamlandı: ${results.length-failed}/3 görünüm temiz${failed?`, ${failed} görünümde yatay taşma var`:""}. Ayrıntılar Hata ayıklama bölümünde.`);});
 $("browser-server-restart").addEventListener("click",async()=>{const p=activeProject();if(!p)return alert("Proje seçin");await fetch(`/api/projects/${p.id}/dev/stop`,{method:"POST"});await new Promise(r=>setTimeout(r,500));const response=await fetch(`/api/projects/${p.id}/dev/start`,{method:"POST"}),result=await response.json();if(!response.ok)return alert(result.error);addBrowserDebug("info",`${result.command} yeniden başlatıldı`);setTimeout(()=>activeBrowserView()?.reload?.(),1200);});
 $("browser-back").addEventListener("click",()=>{try{activeBrowserView()?.goBack();}catch{}});
 $("browser-forward").addEventListener("click",()=>{try{activeBrowserView()?.goForward();}catch{}});
@@ -1508,6 +1729,7 @@ $("f-smart").addEventListener("change", () =>
 $("f-notify").addEventListener("change", () =>
   fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ notifications: $("f-notify").checked }) })
 );
+[$("f-notify-done"),$("f-notify-error"),$("f-notify-approval")].forEach(input=>input.addEventListener("change",()=>fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({notificationEvents:{done:$("f-notify-done").checked,error:$("f-notify-error").checked,approval:$("f-notify-approval").checked}})})));
 
 document.querySelectorAll("#mode-seg button").forEach((b) =>
   b.addEventListener("click", () => {
@@ -1688,6 +1910,7 @@ async function send() {
       projectId: activeProjectId(),
       testCommand: $("f-test").value,
       maxDebateRounds: $("f-rounds").value,
+      budget: {enabled:$("f-budget-enabled").checked,maxCalls:Number($("f-budget-calls").value)||24,maxTokens:Number($("f-budget-tokens").value)||250000},
       testFirst: $("f-testfirst").checked,
       attachments: pendingAttachments,
     };
@@ -1729,10 +1952,38 @@ document.querySelectorAll("#tabs button").forEach((b) =>
   })
 );
 
+function initializeSplitLayout(){
+  const root=document.documentElement,sidebar=$("sidebar"),tool=$("tool-panel");
+  const savedSidebar=Number(localStorage.getItem("ajan.sidebar.width"));
+  const savedTool=Number(localStorage.getItem("ajan.tool.width"));
+  if(savedSidebar)root.style.setProperty("--sidebar-width",`${Math.min(430,Math.max(220,savedSidebar))}px`);
+  if(savedTool)root.style.setProperty("--tool-width",`${Math.min(980,Math.max(380,savedTool))}px`);
+  const bind=(handle,type)=>{
+    let startX=0,startWidth=0;
+    const apply=(value,persist=true)=>{
+      if(type==="sidebar"){
+        const width=Math.min(430,Math.max(220,value));root.style.setProperty("--sidebar-width",`${width}px`);handle.setAttribute("aria-valuenow",String(Math.round(width)));if(persist)localStorage.setItem("ajan.sidebar.width",String(width));
+      }else{
+        const sidebarWidth=sidebar.classList.contains("hidden")?0:sidebar.getBoundingClientRect().width;
+        const maximum=Math.max(380,window.innerWidth-sidebarWidth-360),width=Math.min(Math.min(980,maximum),Math.max(380,value));root.style.setProperty("--tool-width",`${width}px`);handle.setAttribute("aria-valuenow",String(Math.round(width)));if(persist)localStorage.setItem("ajan.tool.width",String(width));
+      }
+    };
+    handle.addEventListener("pointerdown",event=>{startX=event.clientX;startWidth=(type==="sidebar"?sidebar:tool).getBoundingClientRect().width;handle.setPointerCapture(event.pointerId);document.body.classList.add("split-resizing");event.preventDefault();});
+    handle.addEventListener("pointermove",event=>{if(!handle.hasPointerCapture(event.pointerId))return;apply(startWidth+(type==="sidebar"?event.clientX-startX:startX-event.clientX),false);});
+    const finish=event=>{if(!handle.hasPointerCapture(event.pointerId))return;handle.releasePointerCapture(event.pointerId);document.body.classList.remove("split-resizing");apply((type==="sidebar"?sidebar:tool).getBoundingClientRect().width,true);};
+    handle.addEventListener("pointerup",finish);handle.addEventListener("pointercancel",finish);
+    handle.addEventListener("dblclick",()=>apply(type==="sidebar"?276:620,true));
+    handle.addEventListener("keydown",event=>{if(!["ArrowLeft","ArrowRight"].includes(event.key))return;const current=(type==="sidebar"?sidebar:tool).getBoundingClientRect().width,direction=event.key==="ArrowRight"?1:-1;apply(current+(type==="sidebar"?direction:-direction)*16,true);event.preventDefault();});
+  };
+  bind($("sidebar-resizer"),"sidebar");bind($("tool-resizer"),"tool");
+}
+initializeSplitLayout();
+
 // Dar ekranda kenar çubuğu varsayılan gizli: çalışma alanı ferah kalsın
 if (window.innerWidth < 1100) $("sidebar").classList.add("hidden");
 
 connectSSE();
 fetchState();
 fetchCapabilities();
+if(window.desktopAPI?.updateStatus)setTimeout(checkApplicationUpdate,2500);
 setInterval(fetchState, 15000);

@@ -85,3 +85,47 @@ export function cleanEnv() {
 export function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+export const USAGE_TIME_ZONE = "Europe/Istanbul";
+
+export function usageDayKey(stamp, timeZone = USAGE_TIME_ZONE) {
+  const date = stamp instanceof Date ? stamp : new Date(stamp ?? Date.now());
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(date);
+}
+
+// Kayan 30 günlük pencere ile takvim ayını birbirine karıştırma.
+export function summarizeCalendarMonth(records = [], stamp = Date.now(), timeZone = USAGE_TIME_ZONE) {
+  const key = usageDayKey(stamp, timeZone);
+  if (!key) return { month: null, cost: 0, tokens: 0, calls: 0 };
+  const month = key.slice(0, 7);
+  return records.filter((item) => String(item?.day || "").startsWith(`${month}-`)).reduce(
+    (sum, item) => ({ month, cost: sum.cost + Number(item.cost || 0), tokens: sum.tokens + Number(item.tokens || 0), calls: sum.calls + Number(item.calls || 0) }),
+    { month, cost: 0, tokens: 0, calls: 0 },
+  );
+}
+
+// Bir koşunun kullanımını günlere dağıtır.
+// `exact`: usageDaily'den gelen kesin günlük kayıtlar (düzeltme sonrası çağrılar).
+// `fallbackDays`: kesin kaydı olmayan tarihsel bakiyenin yayılacağı mesaj günleri.
+// Kesin kayıtlarla kümülatif toplam arasındaki FARK dağıtılır; böylece bir koşu
+// hem eski (kayıtsız) hem yeni (kayıtlı) kullanım içerdiğinde tarihsel bakiye
+// grafikten düşmez.
+export function distributeRunUsage(total = {}, exact = [], fallbackDays = []) {
+  const fields = ["input", "cachedInput", "output", "calls"];
+  const residual = {};
+  let residualSum = 0;
+  for (const field of fields) {
+    const covered = exact.reduce((sum, item) => sum + Number(item.usage?.[field] || 0), 0);
+    residual[field] = Math.max(0, Number(total[field] || 0) - covered);
+    residualSum += residual[field];
+  }
+  if (residualSum <= 0 || !fallbackDays.length) return [...exact];
+  const share = fallbackDays.map((day) => ({
+    day,
+    usage: Object.fromEntries(fields.map((f) => [f, residual[f] / fallbackDays.length])),
+  }));
+  return [...exact, ...share];
+}

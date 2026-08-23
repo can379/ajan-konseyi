@@ -46,8 +46,12 @@ export class Store extends EventEmitter {
           run.directActive = false;
         }
         // Eski kayıtlarda olmayan alanları tamamla
-        run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null; run.evidenceGate ??= null;
+        run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.usageDaily ??= {}; run.verify ??= null; run.evidenceGate ??= null;
         run.pinned ??= false; run.archived ??= false; run.tags ??= []; run.deletedAt ??= null; run.diffComments ??= []; run.autoResume ??= run.kind!=="chat";
+        run.budget ??= {enabled:false,maxCalls:24,maxTokens:250000,stopped:false};
+        // Eski sürümlerde varsayılan 250 bin token sınırı abonelik kotası gibi
+        // sunuluyordu. Açıkça etkinleştirilmemiş eski sınırları devre dışı bırak.
+        if(run.budget.enabled!==true){run.budget.enabled=false;run.budget.stopped=false;run.budget.reason=null;}
         if (run.kind === "chat" && (!run.title || run.title.startsWith("@") || run.title === String(run.request || "").slice(0, 80))) {
           const firstUser = (run.messages || []).find((message) => message.from === "kullanici")?.content || run.request;
           run.title = conversationTitle(firstUser);
@@ -71,6 +75,10 @@ export class Store extends EventEmitter {
   // ---- Canlı akış: ajanın o anki kısmi çıktısı (kalıcı değil, yalnız SSE) ----
   streamProgress(agent, label, text) {
     this.emit("event", { type: "stream", agent, label, text: String(text).slice(-2000) });
+  }
+
+  clearStream(agent) {
+    this.emit("event", { type:"stream_end", agent });
   }
 
   // ---- Sağlık durumu ----
@@ -104,6 +112,7 @@ export class Store extends EventEmitter {
       tests: [],               // {ts, command, ok, output}
       diffs: [],               // {agent, branch, diff}
       usage: {},               // agent -> {input, cachedInput, output, calls, costUsd}
+      usageDaily: {},          // "YYYY-MM-DD" -> agent -> {input,cachedInput,output,calls,costUsd}
       verify: null,            // doğrulayıcı turu sonucu
       evidenceGate: null,      // son merge/publish/done kanıt kapısı sonucu
       report: null,
@@ -180,6 +189,8 @@ export class Store extends EventEmitter {
       id,
       runId: run.id,
       kind,
+      risk:["publish","delete","remove","gitinit"].includes(kind)?"yüksek":["testfix","merge","restore"].includes(kind)?"orta":"düşük",
+      reversible:!["publish","delete","remove"].includes(kind),
       title,
       detail: truncate(detail || "", 12000),
       status: "pending", // pending | approved | rejected | cancelled

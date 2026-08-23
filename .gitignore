@@ -12,5 +12,6 @@ bridge/antigravity/inbox/
 bridge/antigravity/outbox/
 bridge/antigravity/done/
 config.json
+workspace-state.json
 *.log
 .DS_Store

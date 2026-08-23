@@ -14,4 +14,6 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   onFlowVideoStatus(callback) { const handler=(_event,detail)=>callback(detail); ipcRenderer.on("flow-video-status",handler); return ()=>ipcRenderer.removeListener("flow-video-status",handler); },
   updateStatus() { return ipcRenderer.invoke("app-update-status"); },
   downloadUpdate() { return ipcRenderer.invoke("app-update-download"); },
+  openProjectWith(detail) { return ipcRenderer.invoke("project-open-with",detail); },
+  chooseExternalApp() { return ipcRenderer.invoke("external-app-choose"); },
 }));
