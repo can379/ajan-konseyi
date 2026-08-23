@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import os from "node:os";
 
 const run = promisify(execFile);
 
@@ -66,6 +67,22 @@ export async function commitAll(wtDir, message) {
     env: { ...process.env, GIT_AUTHOR_NAME: "ajan-konseyi", GIT_AUTHOR_EMAIL: "ajan@local", GIT_COMMITTER_NAME: "ajan-konseyi", GIT_COMMITTER_EMAIL: "ajan@local" },
   });
 }
+
+export async function createImmutableSnapshot(wtDir, message="ajan: review snapshot") {
+  const indexFile=path.join(os.tmpdir(),`ajan-review-index-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const env={...process.env,GIT_INDEX_FILE:indexFile,GIT_AUTHOR_NAME:"ajan-konseyi",GIT_AUTHOR_EMAIL:"ajan@local",GIT_COMMITTER_NAME:"ajan-konseyi",GIT_COMMITTER_EMAIL:"ajan@local"};
+  try {
+    const {stdout:parent}=await run("git",["-C",wtDir,"rev-parse","HEAD"]);
+    await run("git",["-C",wtDir,"read-tree","HEAD"],{env});
+    await run("git",["-C",wtDir,"add","-A"],{env});
+    const {stdout:tree}=await run("git",["-C",wtDir,"write-tree"],{env});
+    const {stdout:commit}=await run("git",["-C",wtDir,"commit-tree",tree.trim(),"-p",parent.trim(),"-m",message],{env});
+    const {stdout:diff}=await run("git",["-C",wtDir,"diff","--binary","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:50*1024*1024});
+    return {commit:commit.trim(),parentCommit:parent.trim(),tree:tree.trim(),diff};
+  } finally { fs.rmSync(indexFile,{force:true}); }
+}
+
+export async function currentTree(dir){const {stdout}=await run("git",["-C",dir,"write-tree"]);return stdout.trim();}
 
 // Birleştirme yalnızca kullanıcı onayından sonra çağrılır.
 // Çakışma olursa merge iptal edilir ve çakışan dosyalar raporlanır.

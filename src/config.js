@@ -25,7 +25,7 @@ const DEFAULTS = {
   projects: [],      // {id, name, path, createdAt}
   activeProject: null,
   smartModels: true,   // koordinatör alt görev zorluğuna göre model kademesi seçer
-  notifications: true, // onay/bitiş anında macOS bildirimi
+      notifications: true, // onay/bitiş anında macOS bildirimi
 };
 
 export const ROLES = {
@@ -64,6 +64,7 @@ export class Config {
       }
       this.data.members = this.sanitizeMembers(this.data.members);
       this.data.coordinator = this.sanitizeCoordinator(this.data.coordinator);
+      this.data.projects=(this.data.projects||[]).map((p)=>({...p,instructions:String(p.instructions||""),skills:Array.isArray(p.skills)?p.skills:[],devCommand:String(p.devCommand||""),artifactExport:p.artifactExport===true}));
       delete this.data.agents; // eski alan artık kullanılmıyor
     } catch {
       // dosya yoksa varsayılanlar geçerli
@@ -115,6 +116,15 @@ export class Config {
     return this.data;
   }
 
+  updateProject(id, patch) {
+    const project=this.getProject(id); if(!project) throw new Error("Proje bulunamadı");
+    if("instructions" in patch) project.instructions=String(patch.instructions||"").slice(0,12000);
+    if(Array.isArray(patch.skills)) project.skills=patch.skills.map((v)=>String(v||"").trim()).filter(Boolean).slice(0,30);
+    if("devCommand" in patch) project.devCommand=String(patch.devCommand||"").trim().slice(0,300);
+    if("artifactExport" in patch) project.artifactExport=patch.artifactExport===true;
+    this.save(); return project;
+  }
+
   addProject({ name, path: projPath }) {
     projPath = path.resolve(String(projPath || "").trim());
     if (!fs.existsSync(projPath) || !fs.statSync(projPath).isDirectory()) {
@@ -127,6 +137,7 @@ export class Config {
       name: (name || path.basename(projPath)).slice(0, 60),
       path: projPath,
       createdAt: now(),
+      instructions:"", skills:[], devCommand:"", artifactExport:false,
     };
     this.data.projects.push(proj);
     this.data.activeProject = proj.id;

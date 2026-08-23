@@ -46,7 +46,8 @@ export class Store extends EventEmitter {
           run.directActive = false;
         }
         // Eski kayıtlarda olmayan alanları tamamla
-        run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null;
+        run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.verify ??= null; run.evidenceGate ??= null;
+        run.pinned ??= false; run.archived ??= false; run.tags ??= []; run.deletedAt ??= null; run.diffComments ??= []; run.autoResume ??= run.kind!=="chat";
         if (run.kind === "chat" && (!run.title || run.title.startsWith("@") || run.title === String(run.request || "").slice(0, 80))) {
           const firstUser = (run.messages || []).find((message) => message.from === "kullanici")?.content || run.request;
           run.title = conversationTitle(firstUser);
@@ -104,9 +105,11 @@ export class Store extends EventEmitter {
       diffs: [],               // {agent, branch, diff}
       usage: {},               // agent -> {input, cachedInput, output, calls, costUsd}
       verify: null,            // doğrulayıcı turu sonucu
+      evidenceGate: null,      // son merge/publish/done kanıt kapısı sonucu
       report: null,
       error: null,
       stopRequested: false,
+      pinned:false, archived:false, tags:[], deletedAt:null, diffComments:[], autoResume:kind!=="chat",
       createdAt: now(),
     };
     this.runs[id] = run;

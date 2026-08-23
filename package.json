@@ -1,6 +1,6 @@
 {
   "name": "ajan-konseyi",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "API kullanmadan yerel abonelik oturumlariyla calisan coklu yapay zeka is birligi sistemi (Claude Code + Codex + Antigravity)",
   "productName": "Ajan Konseyi",
   "author": "Selim Can",
@@ -13,7 +13,7 @@
   "scripts": {
     "start": "node server.js",
     "desktop": "electron desktop/main.cjs",
-    "desktop:build": "electron-packager . 'Ajan Konseyi' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --extra-resource=scripts --ignore='^/(dist|release|runs|memory|uploads|generated|node_modules/.cache|.git|.agent|.claude)$' --icon=assets/AjanKonseyi-v2.icns --app-bundle-id=com.selim.ajankonseyi.desktop --app-version=0.2.4",
+    "desktop:build": "electron-packager . 'Ajan Konseyi' --platform=darwin --arch=arm64 --out=dist --overwrite --prune=true --extra-resource=scripts --ignore='^/(dist[^/]*|release|runs|memory|uploads|generated|node_modules/.cache|.git|.agent|.claude)$' --icon=assets/AjanKonseyi-v2.icns --app-bundle-id=com.selim.ajankonseyi.desktop --app-version=0.3.0",
     "release:mac": "mkdir -p release && npm run desktop:build && codesign --force --deep --sign - --identifier com.selim.ajankonseyi.desktop 'dist/Ajan Konseyi-darwin-arm64/Ajan Konseyi.app' && ditto -c -k --sequesterRsrc --keepParent 'dist/Ajan Konseyi-darwin-arm64/Ajan Konseyi.app' 'release/Ajan-Konseyi-macOS-arm64.zip'",
     "test": "node --test test/*.test.js"
   },

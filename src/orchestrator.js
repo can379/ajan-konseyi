@@ -1,5 +1,6 @@
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { ClaudeAgent } from "./agents/claudeAgent.js";
@@ -15,6 +16,9 @@ import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGen
 import { analyzeImagesLocally } from "./localVision.js";
 import { bridgePrompt, connectorRoute, CONNECTORS } from "./connectorBridge.js";
 import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
+import { normalizeTaskContract } from "./taskContract.js";
+import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
+import { assertEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
 
 const exec = promisify(execFile);
 const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
@@ -22,6 +26,29 @@ const HOST_ACTION_RE=/<<<AJAN_HOST_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
+
+// Her çıktıyı bütün üyelere tekrar okutmak çağrı sayısını görev×üye biçiminde
+// büyütür. Kalite kapısını korurken yalnız en uygun, mümkünse farklı sağlayıcıdan
+// inceleyicileri seç: normal görevde bir, güçlü/yüksek riskli görevde en çok iki.
+export function selectTaskReviewers(task, author, candidates, reviewRounds = 1) {
+  const wanted = task?.tier === "strong" && reviewRounds > 1 ? 2 : 1;
+  return [...candidates]
+    .filter((member) => member?.id && member.id !== task?.assignee)
+    .sort((a, b) => {
+      const score = (member) =>
+        (member.role === "denetci" ? 4 : 0) +
+        (author && member.provider !== author.provider ? 2 : 0) +
+        (member.role && member.role !== "auto" ? 1 : 0);
+      return score(b) - score(a) || String(a.id).localeCompare(String(b.id));
+    })
+    .slice(0, wanted);
+}
+
+export function studioEnhancementPrompt({ text, mediaKind="image", engine="openai-image", aspect="1:1", quality="standard", duration="auto", hasReferences=false }={}) {
+  const medium=mediaKind==="video"?"video":"görsel";
+  const timing=mediaKind==="video" ? ` Hedef süre: ${duration==="auto"?"modelin doğal kısa video süresi":duration+" saniye"}.` : "";
+  return `Kullanıcının kısa fikrini seçili üretim motoruna doğrudan verilebilecek profesyonel bir ${medium} promptuna dönüştür. Yalnız nihai promptu yaz; açıklama, başlık, Markdown veya tırnak kullanma. Kullanıcının niyetini değiştirme ve yeni ana konu uydurma. ${mediaKind==="video"?"Sahne akışı, özne hareketi, kamera hareketi, lens/kadraj, ışık, atmosfer, fiziksel tutarlılık, zamanlama ve ses tasarımını belirt.":"Kompozisyon, özne ayrıntıları, kamera/lens, ışık, renk, doku, mekân ve kalite ayrıntılarını belirt."} Motor: ${engine}. Oran: ${aspect}. Kalite: ${quality}.${timing}${hasReferences?" Ekli referansı doğrudan düzenleme girdisi kabul et; korunacak unsurları ve değişecek kısımları kesin biçimde ayır.":""}\n\nKISA FİKİR:\n${String(text||"").trim()}`;
+}
 
 // Orkestratör: konsey ÜYELERİNİ (kullanıcının tanımladığı, her biri bir
 // sağlayıcıya bağlı kişilikler) yönetir. Üye sayısı serbesttir: 3 Codex mimar,
@@ -70,6 +97,17 @@ export class Orchestrator {
     return list.filter((m) => unsupportedAttachments(m.provider, attachments).length === 0);
   }
 
+  async enhanceStudioPrompt(input={}) {
+    const providerName=input.engine==="openai-image"?"codex":"antigravity";
+    const member=this.availableMembers().find((m)=>m.provider===providerName);
+    if(!member) throw new Error(`${providerName==="codex"?"Codex":"Antigravity"} etkin değil`);
+    const run={id:uid("studio-prompt-"),kind:"studio_prompt",transient:true,messages:[],tasks:[],usage:{},attachments:input.attachments||[],agents:[member.id],stopRequested:false,projectDir:null,request:String(input.text||"")};
+    const images=(input.attachments||[]).filter((a)=>a.kind==="image"&&a.path).map((a)=>a.path);
+    const res=await this.callMember(run,member,studioEnhancementPrompt({...input,hasReferences:images.length>0}),{fresh:true,images,media:input.attachments||[],label:"prompt güçlendiriliyor",timeoutMs:90_000});
+    if(!res.ok) throw new Error(res.error||"Prompt güçlendirilemedi");
+    return String(res.text||"").replace(/^```(?:text|markdown)?\s*/i,"").replace(/```$/," ").trim();
+  }
+
   // Antigravity ajanı şu anda fiilen izleme yapıyor mu? (taze kalp atışı)
   antigravitySleeping() {
     // Native agy CLI kalıcı bir GUI/daemon kalp atışına ihtiyaç duymaz; ilk
@@ -106,6 +144,13 @@ export class Orchestrator {
     return `${run.id}#${member.id}`;
   }
 
+  acquireAgentLease(run,member,type,resource,label,ttlMs=15*60_000){
+    if(!this.resourceLeases)return null;
+    return this.resourceLeases.acquireLease({type,resource,owner:{runId:run.id,taskId:String(label||""),agentId:member?.id||"system",label:member?.name||label||"Ajan Konseyi"},ttlMs,metadata:{provider:member?.provider||"system"}});
+  }
+  releaseAgentLease(lease){if(!lease||!this.resourceLeases)return;try{this.resourceLeases.releaseLease(lease.id,lease.token);}catch{}}
+  exportArtifacts(run,stage="snapshot"){if(!this.artifactExporter)return null;try{return this.artifactExporter(run,stage);}catch(error){this.log(`artifact export başarısız: ${String(error.message||error)}`);return null;}}
+
   sharedConversationContext(run, maxChars = 24_000) {
     const messages = run.messages || [];
     const lines = messages.map((m) => {
@@ -132,19 +177,22 @@ export class Orchestrator {
   async callMember(run, member, prompt, opts = {}) {
     const route = connectorRoute(member.provider, prompt);
     const provider = this.providers[route?.mode === "shared" ? route.provider : member.provider];
+    let connectorLease=null;
+    if(route?.connector&&!opts.isolated){try{connectorLease=this.acquireAgentLease(run,member,"external-service",route.connector,opts.label||"connector");}catch(error){this.store.setAgentStatus(member.id,"error",String(error.message).slice(0,80));return{ok:false,error:error.message};}}
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
-    const history = this.sharedConversationContext(run);
-    const images = this.referencedImages(run, prompt, opts.images || []);
+    const history = opts.isolated ? "" : this.sharedConversationContext(run);
+    const images = opts.isolated ? [] : this.referencedImages(run, prompt, opts.images || []);
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları bağlı proje ya da ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
 Çalışırken yalnız anlamlı aşamalarda kısa durum bildir; her araç çağrısını, düşünceyi veya ham JSON'u kullanıcıya dökme. Nihai yanıtta sonuçla başla, yapılanları kısa ve doğal biçimde özetle, doğrulamayı belirt ve gereksiz başlık/listeler kullanma. Ajan Konseyi arayüzündeki üslup tüm sağlayıcılarda aynı, sade ve profesyonel olmalıdır.
 --- SÖZLEŞME SONU ---`;
-    const browserToken=this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
+    const browserToken=opts.isolated?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
     const hostHelp=`\n\n--- ANA UYGULAMA YAYIN ARACI ---\nKullanıcı açıkça seçili projenin son sürümünü GitHub'a yayınlamanı veya push etmeni isterse sağlayıcı terminalinden git/ssh/gh/curl kullanma ve .command dosyası hazırlama. Yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_HOST_ACTION>>>{"action":"publish","payload":{}}<<<END>>>\nAna uygulama açık dalı kayıtlı deploy key ile yayınlar; force-push yapmaz ve sonucu sana geri verir.\n--- YAYIN ARACI SONU ---`;
     let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}${hostHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
-    if (route?.mode === "shared") {
+    if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
+    if (route?.mode === "shared" && !opts.isolated) {
       const label = CONNECTORS[route.connector]?.label || route.connector;
       this.store.setAgentStatus(member.id, "busy", `${label} · ortak Codex köprüsü`);
       this.store.streamProgress(member.id, `${label} bağlayıcısı kullanılıyor`, "");
@@ -193,7 +241,10 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
           if(!isExplicitPublishRequest(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
           const projectDir=run.projectDir||process.env.AJAN_KONSEYI_SOURCE_DIR;
           const deployKey=path.join(this.rootDir,"generated","ajan-konseyi-deploy");
-          result=await gitops.publishCurrentBranch(projectDir,deployKey,String(hostAction.payload.branch||""));
+          const gate=this.enforceEvidenceGate(run,"publish");
+          const publishLease=this.acquireAgentLease(run,member,"external-service",`github:${path.resolve(projectDir)}`,"publish",30*60_000);
+          try{result={...await gitops.publishCurrentBranch(projectDir,deployKey,String(hostAction.payload.branch||"")),evidenceGate:gate};}
+          finally{this.releaseAgentLease(publishLease);}
         }
       }
       catch(error){result={error:String(error.message||error)};}
@@ -204,6 +255,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
     if (route && res?.raw) res.raw.connectorRoute = route;
+    this.releaseAgentLease(connectorLease);
     return res;
   }
 
@@ -291,9 +343,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const members = this.members().filter((m) => run.agents.includes(m.id));
     const advisers = members.filter((m) => ["claude", "codex", "antigravity"].includes(m.provider));
     run.tasks = work.map((prompt, index) => ({
-      id:uid("img-"), title:`Görsel ${index + 1}`, prompt,
+      id:uid("img-"), title:`${run.imageStudio?.mediaKind === "video" ? "Video" : "Görsel"} ${index + 1}`, prompt,
       assignee:(advisers[index % Math.max(1, advisers.length)] || members[0])?.id || "antigravity",
-      generator:"codex", status:"pending", result:null, error:null,
+      generator:run.imageStudio?.generatorId || "codex", status:"pending", result:null, error:null,
     }));
     this.store.updateRun(run);
     this.store.addMessage(run, { from:"koordinator", kind:"info", content:`${work.length} görsel görevi ${limit} eşzamanlı worker ile konseye dağıtıldı. Sanat yönetimini seçilen ajanlar, yüksek kaliteli raster üretimini ortak görsel motoru yapacak.` });
@@ -302,7 +354,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
   async runImageBatch(run, concurrency) {
     const members = this.members();
-    const generator = members.find((m) => m.provider === "codex") || members.find((m) => m.provider === "antigravity") || {
+    const generator = members.find((m) => m.id === run.imageStudio?.generatorId) || members.find((m) => m.provider === "codex") || members.find((m) => m.provider === "antigravity") || {
       id:"shared-image-generator", name:"Ortak Görsel Motoru", provider:"codex", role:"uygulayici", model:"", effort:"",
     };
     let cursor = 0;
@@ -314,7 +366,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         run.phase = "image_generating"; this.store.updateRun(run);
         const adviser = members.find((m) => m.id === task.assignee);
         try {
-          let productionPrompt = this.imageGenerationPrompt(`${task.prompt}\nGörsel oluştur.`);
+          const video=run.imageStudio?.mediaKind === "video";
+          const engine=run.imageStudio?.engine || "openai-image";
+          const duration=run.imageStudio?.duration;
+          const format=`En-boy oranı ${run.imageStudio?.aspect || "1:1"}; kalite ${run.imageStudio?.quality || "standard"}.${video&&duration&&duration!=="auto"?` Süre tam ${duration} saniye.`:""}`;
+          let productionPrompt = video ? `${task.prompt}\n${format}` : this.imageGenerationPrompt(`${task.prompt}\n${format}\nGörsel oluştur.`);
           // Görev sahibi kompozisyonu hazırlar; raster motoru ayrı çalışır.
           if (adviser && adviser.id !== generator.id) {
             const advised = await this.callMember(run, adviser,
@@ -322,15 +378,20 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
               { label:"görsel promptu hazırlıyor", timeoutMs:90_000, shouldStop:()=>run.stopRequested });
             if (advised.ok && advised.text?.trim()) productionPrompt = this.imageGenerationPrompt(`${advised.text.trim()}\nGörsel oluştur.`);
           }
+          const referenceNote=attachmentPrompt(run.attachments||[]);
+          const engineInstruction=video
+            ? `Yerleşik Gemini video aracını ${engine === "veo-3.1" ? "Veo 3.1" : "Gemini Omni Flash Video"} motoruyla kullan. Gerçek MP4/MOV/WebM video ve varsa yerel ses üret.`
+            : `Yerleşik görsel üretim aracını ${engine === "openai-image" ? "OpenAI GPT Image" : engine === "gemini-pro-image" ? "Gemini Nano Banana Pro (gemini-3-pro-image)" : "Gemini Nano Banana 2 (gemini-3.1-flash-image)"} motoruyla kullan. Referans varsa görseli yeniden tarif etmek yerine doğrudan düzenle.`;
           const generated = await this.callMember(run, generator,
-            `${productionPrompt}\n\nDosyayı ${this.rootDir}/generated içine benzersiz bir adla kaydet ve mutlak dosya yolunu yaz. Yerleşik görsel üretim aracını MUTLAKA kullan; gerçek PNG/JPEG/WebP olmadan görevi tamamlanmış sayma.`,
+            `${productionPrompt}${referenceNote}\n\n${engineInstruction} Dosyayı ${this.rootDir}/generated içine benzersiz bir adla kaydet ve mutlak dosya yolunu yaz. Gerçek medya dosyası olmadan görevi tamamlanmış sayma.`,
             { label:`${task.title} üretiliyor`, cwd:run.projectDir || this.rootDir,
+              images:(run.attachments||[]).filter((a)=>a.kind==="image").map((a)=>a.path), media:run.attachments||[],
               sessionKey:`${run.id}#image#${task.id}`, timeoutMs:5*60*1000,
               shouldStop:()=>run.stopRequested });
           if (!generated.ok) throw new Error(generated.error || "Ortak görsel motoru başarısız");
           const assets = collectGeneratedAssets(generated.text, this.rootDir)
-            .filter((a) => a.kind === "image" && a.mime !== "image/svg+xml" && a.path && fs.existsSync(a.path));
-          const accepted = await this.validatedImageAssets(task.prompt, assets);
+            .filter((a) => a.kind === (video ? "video" : "image") && (video || a.mime !== "image/svg+xml") && a.path && fs.existsSync(a.path));
+          const accepted = video ? assets.slice(0,1) : await this.validatedImageAssets(task.prompt, assets);
           if (!accepted.length) throw new Error("Native araç konuya uygun, açılabilir bir PNG/JPEG/WebP dosyası döndürmedi");
           const cleanResult = this.keepOnlyAssetPaths(generated.text, assets, accepted);
           task.status="done"; task.result=cleanResult; task.attachments=accepted; run.batch.completed++;
@@ -492,7 +553,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     cur.costUsd += u.costUsd || 0;
     cur.calls += 1;
     run.usage[name] = cur;
-    this.store.saveRun(run);
+    if (!run.transient) this.store.saveRun(run);
   }
 
   // ---- Oturum kalıcılığı (restart sonrası sohbet hafızası) ----
@@ -523,7 +584,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   }
 
   resumeRun(run) {
-    if (!["interrupted", "stopped", "failed"].includes(run.status)) {
+    if (!["interrupted", "stopped", "failed", "evidence_blocked"].includes(run.status)) {
       throw new Error("Bu koşu devam ettirilemez (durum: " + run.status + ")");
     }
     run.stopRequested = false;
@@ -556,12 +617,19 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       from: "sistem", kind: "error",
       content: "Koşu hatayla sonlandı: " + String(err.message || err),
     });
-    this.store.updateRun(run, { status: run.kind === "chat" ? "idle" : "failed", error: String(err.message || err) });
+    const evidenceBlocked=err instanceof EvidenceGateError;
+    this.store.updateRun(run, { status:evidenceBlocked?"evidence_blocked":(run.kind === "chat" ? "idle" : "failed"),phase:evidenceBlocked?"evidence_gate":run.phase,error:String(err.message || err) });
+    this.exportArtifacts(run,evidenceBlocked?"evidence-blocked":"failed");
     this.notify("Ajan Konseyi", "Koşu hatayla durdu");
   }
 
   checkStop(run) {
     if (run.stopRequested) throw new Error("Kullanıcı durdurdu");
+  }
+
+  enforceEvidenceGate(run,action,options){
+    try{const result=assertEvidenceGate(run,action,options);this.store.updateRun(run);return result;}
+    catch(error){this.store.updateRun(run);this.store.addMessage(run,{from:"sistem",kind:"error",content:`EvidenceGate ${action} işlemini engelledi:\n- ${(error.reasons||[error.message]).join("\n- ")}`});throw error;}
   }
 
   // Koordinatör çağrıları için koşuya özgü bağlam (durumsuz Coordinator)
@@ -681,6 +749,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       return `Sen "${mem.name}" adlı konsey üyesisin (${mem.provider}${mem.role !== "auto" ? ", rolün: " + mem.role : ""}); çok üyeli bir yapay zekâ konsey sohbetine katılıyorsun. ` +
         `Türkçe ve düzgün Markdown ile yanıtla.` +
         (run.projectDir ? ` Bağlı proje: ${run.projectDir}` : "") +
+        (this.config.getProject(run.projectId)?.instructions ? `\n\nProje talimatları:\n${this.config.getProject(run.projectId).instructions}` : "") +
+        (this.config.getProject(run.projectId)?.skills?.length ? `\n\nBu projede yeniden kullanılabilir çalışma yetenekleri:\n- ${this.config.getProject(run.projectId).skills.join("\n- ")}` : "") +
+        (this.projectHistory(run) ? `\n\nProjede önceki sohbetlerden devralınan bağlam:\n${this.projectHistory(run)}` : "") +
+        (this.projectContext.readMemory(run.projectId) ? `\n\nKalıcı proje hafızası:\n${truncate(this.projectContext.readMemory(run.projectId),4000)}` : "") +
         (history ? `\n\nSohbet geçmişi:\n${history}` : "") + "\n\n--- KULLANICININ MESAJI ---\n";
     };
     const generatingImage = this.isImageGenerationRequest(text) || this.isImageRevisionRequest(run, text);
@@ -783,6 +855,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           // Aynı yapılandırılmış üye birden fazla göreve atansa bile her görev
           // ayrı sağlayıcı konuşmasıdır; böylece koordinatör ajan çoğaltabilir.
           agentInstanceId: uid("agent-"),
+          contract: normalizeTaskContract({
+            goal:t.prompt||t.title, nonGoals:[], allowedPaths:["**"], forbiddenPaths:[],
+            risk:t.model_tier==="strong"?"high":"medium",
+            acceptanceCriteria:[`Görev sonucu doğrulanabilir biçimde tamamlandı: ${t.title}`],
+            testCommands:run.testCommand?[run.testCommand]:[], approvalBoundaries:[],
+          }),
         };
       });
       run.reviewRounds = Math.min(plan.review_rounds ?? 1, 2);
@@ -855,6 +933,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       S.setPhase(run, "review");
       await Promise.all(reviewPromises);
       await this.reconcilePeerFeedback(run, worktrees);
+      await this.revalidateChangedReviews(run,worktrees);
     }
 
     // ---- 3. ÇELİŞKİ / TARTIŞMA / OYLAMA ----
@@ -885,6 +964,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // ---- 4. DOĞRULAYICI TURU ----
     if (this.availableMembers().length > 1 && !run.stopRequested) {
       await this.verifyRound(run, worktrees);
+      await this.revalidateChangedReviews(run,worktrees);
     }
 
     // ---- 5. KOD BÜTÜNLEŞTİRME ----
@@ -902,7 +982,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.addMessage(run, { from: "koordinator", kind: "decision", content: `KARAR: ${fin.decision}\n\nGerekçe: ${fin.rationale}` });
     this.projectContext.appendMemory(run.projectId, run, fin.decision);
     if (!chatTurn) {
+      const doneGate=this.enforceEvidenceGate(run,"done",{requireTests:run.mode==="code"});
+      S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate tamamlanma için geçti · ${doneGate.evidence.reviews.length} review kanıtı`});
       S.updateRun(run, { status: "done", phase: "done" });
+      this.exportArtifacts(run,"done");
       this.notify("Ajan Konseyi ✓", "Koşu tamamlandı: " + truncate(run.request, 60));
     }
   }
@@ -1013,19 +1096,24 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   // ---- Puanlı çapraz inceleme ----
   async reviewTask(run, task, worktrees) {
     const S = this.store;
-    const reviewers = this.availableMembers().filter((m) => m.id !== task.assignee);
+    const author = this.memberById(task.assignee);
+    const reviewers = selectTaskReviewers(task, author, this.availableMembers(), run.reviewRounds ?? 1);
+    const authorWorktree=worktrees?.[task.assignee]?.wtDir;
+    let authorEvidence;
+    if(authorWorktree) authorEvidence=await gitops.createImmutableSnapshot(authorWorktree,`ajan review: ${task.id}`);
+    else {
+      const result=String(task.result||"");
+      const digest=crypto.createHash("sha256").update(result).digest("hex");
+      authorEvidence={commit:`artifact-sha256:${digest}`,parentCommit:"",tree:`artifact-tree:${digest}`,diff:result};
+    }
+    authorEvidence.tests=(run.tests||[]).filter((test)=>!test.taskId||test.taskId===task.id);
+    const packet=createReviewPacket({taskId:task.id,contract:task.contract,author:authorEvidence});
     await Promise.all(reviewers.map(async (reviewer) => {
-      const prompt = this.roleHeader(reviewer, run) +
-        `"${task.assigneeName}" üyesinin şu çıktısını eleştirel incele:\n\n### ${task.title}\n${truncate(task.result, 6000)}\n\n` +
-        (reviewer.provider === "antigravity" && requiresCodeAuthoring(task, run.mode)
-          ? `Bu bir kod görevidir. Kodu değiştirme; kullanıcı deneyimi, araştırma bulguları, görünür davranış, tarayıcı testi ve eksik gereksinimler açısından incele. Düzeltmeyi Claude/Codex'e tarif et.\n\n`
-          : "") +
-        `Değerlendirmeni YALNIZCA şu şemada tek bir JSON nesnesi olarak ver:\n` +
-        `{"agreement": 1-5 arası tam sayı (5=tamamen katılıyorum), "severity": "dusuk|orta|yuksek", ` +
-        `"points": ["somut eleştiri/iyileştirme maddeleri"], "evidence": ["varsa dosya:satır"], "suggestion": "tek cümlelik öneri"}`;
+      const prompt=isolatedReviewPrompt(packet,reviewer.name);
       const res = await this.callMember(run, reviewer, prompt, {
         label: `inceleme: ${task.id}`,
-        cwd: worktrees?.[reviewer.id]?.wtDir,
+        isolated:true, fresh:true,
+        sessionKey:`${run.id}#isolated-review#${task.id}#${reviewer.id}#${packet.fingerprint}`,
         shouldStop: () => run.stopRequested,
       });
       if (!res.ok) {
@@ -1038,6 +1126,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         agreement: Math.min(5, Math.max(1, Number(j.agreement) || 3)),
         severity: j.severity || "orta",
         points: j.points || [],
+        evidencePacket:packet.fingerprint,
+        reviewedCommit:packet.author.commit,
+        reviewedTree:packet.author.tree,
+        contractFingerprint:packet.contract.fingerprint,
       });
       this.memberMsg(run, reviewer, "review",
         `İnceleme [${task.id}] — katılım: ${j.agreement}/5, önem: ${j.severity}\n` +
@@ -1046,6 +1138,25 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         (j.suggestion ? `\nÖneri: ${j.suggestion}` : ""), task.id);
       S.updateRun(run);
     }));
+    this.exportArtifacts(run,"review");
+  }
+
+  async revalidateChangedReviews(run,worktrees){
+    const stale=[];
+    for(const task of (run.tasks||[]).filter((item)=>item.status==="done")){
+      const active=(run.reviews||[]).filter((review)=>review.taskId===task.id&&!review.invalidatedAt);
+      if(!active.length)continue;
+      const wtDir=worktrees?.[task.assignee]?.wtDir;
+      let tree;
+      if(wtDir)tree=(await gitops.createImmutableSnapshot(wtDir,`ajan revalidation: ${task.id}`)).tree;
+      else{const digest=crypto.createHash("sha256").update(String(task.result||"")).digest("hex");tree=`artifact-tree:${digest}`;}
+      if(!invalidateStaleReviews(run.reviews,task.id,tree).length)continue;
+      stale.push(task);
+      this.store.addMessage(run,{from:"sistem",kind:"info",taskId:task.id,content:`Review onayı geçersiz sayıldı: [${task.id}] içeriği incelemeden sonra değişti. Yeni commit tekrar incelenecek.`});
+    }
+    if(stale.length)this.store.updateRun(run);
+    for(const task of stale)await this.reviewTask(run,task,worktrees);
+    return stale;
   }
 
   // İnceleme yalnız raporda kalmaz: ciddi/somut itirazlar görev sahibine geri
@@ -1222,8 +1333,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.updateRun(run);
     if (diffs.length === 0) {
       S.addMessage(run, { from: "sistem", kind: "info", content: "Hiçbir üye dosya değişikliği yapmadı; birleştirme adımı atlandı." });
+      this.exportArtifacts(run,"integration");
       return;
     }
+
+    const mergeGate=this.enforceEvidenceGate(run,"merge",{requireTests:false});
+    S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate merge için geçti · ${mergeGate.evidence.reviews.length} review kanıtı`});
 
     const plan = await this.coordinator.mergePlan(run, diffs, this.coordCtx(run));
     S.addMessage(run, {
@@ -1299,8 +1414,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
               });
               if (fix.ok) {
                 this.memberMsg(run, fixer, "result", `Test düzeltmesi:\n${fix.text}`);
-                await gitops.commitAll(testDir, `ajan(${fixer.name}): test düzeltmesi`).catch(() => {});
                 testResult = await this.runTests(run, testDir);
+                const integrationTask={id:`${run.id}-integration-fix`,title:"Birleştirme sonrası test düzeltmesi",assignee:fixer.id,assigneeName:fixer.name,prompt:"Birleştirme sonrası testleri geçiren asgari düzeltme",status:"done",result:fix.text,tier:"strong",contract:normalizeTaskContract({goal:"Birleştirme sonrası test hatasını gider",nonGoals:["İlgisiz yeniden yapılandırma"],allowedPaths:["**"],forbiddenPaths:[],risk:"high",acceptanceCriteria:["Zorunlu test başarıyla geçer"],testCommands:[run.testCommand],approvalBoundaries:["Hedef dala uygulamadan önce kullanıcı onayı"]})};
+                run.tasks=run.tasks.filter((task)=>task.id!==integrationTask.id);run.tasks.push(integrationTask);S.updateRun(run);
+                await this.reviewTask(run,integrationTask,{[fixer.id]:{wtDir:testDir}});
+                await gitops.commitAll(testDir, `ajan(${fixer.name}): test düzeltmesi`).catch(() => {});
               }
             }
           }
@@ -1313,6 +1431,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
 
     if (merged && allMerged && testsPassed) {
+      const publishGate=this.enforceEvidenceGate(run,"publish");
+      S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate yayın için geçti · ${publishGate.requiredCommands.length} zorunlu test`});
       const publish = await S.requestApproval(run, {
         kind: "publish",
         title: `Test edilmiş kodu ${run.targetBranch} dalına uygula`,
@@ -1331,6 +1451,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     } else if (merged && !allMerged) {
       S.addMessage(run, { from: "sistem", kind: "error", content: "Bazı dallar birleştirilemediği için eksik integration dalı hedef dala uygulanmadı." });
     }
+    this.exportArtifacts(run,"integration");
   }
 
   async runTests(run, testDir) {
@@ -1356,12 +1477,17 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   projectHistory(run) {
     if (!run.projectDir) return "";
     const prev = Object.values(this.store.runs)
-      .filter((r) => r.projectDir === run.projectDir && r.id !== run.id && r.report)
+      .filter((r) => r.projectDir === run.projectDir && r.id !== run.id && (r.report || r.messages?.length || r.decisions?.length || r.files?.length))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, 2);
+      .slice(0, 6);
     if (!prev.length) return "";
     return prev
-      .map((r) => `### Önceki çalışma (${r.createdAt.slice(0, 10)}): ${truncate(r.request, 150)}\n${truncate(r.report, 1500)}`)
+      .map((r) => {
+        const recent=(r.messages||[]).filter((m)=>m.kind!=="task").slice(-6).map((m)=>`[${m.fromLabel||m.from}]: ${truncate(m.content,500)}`).join("\n");
+        const decisions=(r.decisions||[]).slice(-4).map((d)=>`- ${d.title}: ${d.rationale||d.detail||""}`).join("\n");
+        const files=(r.files||[]).slice(-12).map((f)=>`${f.change} ${f.path}`).join(", ");
+        return `### Önceki proje sohbeti (${r.createdAt.slice(0,10)}): ${truncate(r.title||r.request,150)}\n${truncate(r.report||recent,2200)}${decisions?`\nKararlar:\n${truncate(decisions,1000)}`:""}${files?`\nDosyalar: ${truncate(files,800)}`:""}`;
+      })
       .join("\n\n");
   }
 
@@ -1384,8 +1510,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const attachNote = attachments.length ? "\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n") : "";
       S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${content || "Ek dosyaları incele."}`, attachments });
       const imageNote = attachmentPrompt(attachments);
+      const inherited=this.projectHistory(run);
+      const memory=this.projectContext.readMemory(run.projectId);
       const res = await this.callMember(run, member,
-        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla):\n\n${content}${imageNote}`,
+        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}\n\n${content}${imageNote}`,
         { label: "doğrudan mesaj", images, media: attachments, timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
           shouldStop: () => run.stopRequested });
       if (res.ok) {

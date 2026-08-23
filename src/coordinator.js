@@ -142,7 +142,7 @@ Alt görev istemi o üyeye doğrudan gönderilecek şekilde eksiksiz yazılmalı
 - Gereksiz ajan oluşturma; fakat kapsam gerçekten paralelleşebiliyorsa gereken sayıda
   bağımsız görev/ajan örneği oluşturmaktan kaçınma.
 - Her görev için zorluk kademesi "model_tier" ver: fast|balanced|strong.
-- En az iki uygun üye varsa çözüm üreten görevlere çapraz inceleme yapılacağını varsay; review_rounds değerini risk ve kapsam büyüdükçe 1 veya 2 seç.
+- En az iki uygun üye varsa çözüm üreten görevlere seçilmiş bir uzman tarafından çapraz inceleme yapılacağını varsay. Yalnız yüksek riskli veya güçlü model kademeli işlerde ikinci bağımsız inceleme gerekiyorsa review_rounds=2 seç; diğer tüm durumlarda 1 seç. Aynı işi birden çok ajana tekrarlatma, alt görevleri birbirini tamamlayacak biçimde böl ve gereksiz bağlamı istemlere kopyalama.
 
 YALNIZCA şu şemada tek bir JSON nesnesi döndür:
 {

@@ -82,6 +82,8 @@ export class ProjectContext {
       return "";
     }
   }
+  writeMemory(projectId,content){if(!projectId)throw new Error("Proje gerekli");const text=String(content||"").slice(0,50000);fs.writeFileSync(this.memFile(projectId),text||"# Proje hafızası\n");return this.readMemory(projectId);}
+  forget(projectId,query){const q=String(query||"").trim().toLocaleLowerCase("tr-TR");if(!q)return this.readMemory(projectId);const blocks=this.readMemory(projectId).split(/(?=\n## )/);return this.writeMemory(projectId,blocks.filter(block=>!block.toLocaleLowerCase("tr-TR").includes(q)).join(""));}
 
   // Koşu bitince programatik olarak hafızaya özet eklenir (ekstra LLM maliyeti yok)
   appendMemory(projectId, run, decision) {

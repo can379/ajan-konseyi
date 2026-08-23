@@ -19,3 +19,9 @@ test("masaüstü tarayıcı sekme ve gezinme kontrollerini içerir",()=>{
   assert.match(ui,/setActiveBrowserGuest/);
   assert.match(ui,/createBrowserTab/);
 });
+
+test("sol kenar çubuğu yatay kaydırma üretmez",()=>{
+  const css=fs.readFileSync(new URL("../ui/style.css",import.meta.url),"utf8");
+  assert.match(css,/#sidebar[^}]*overflow-x:\s*hidden/s);
+  assert.match(css,/\.project-item \.p-name, \.run-item \.r-title[^}]*text-overflow:\s*ellipsis/s);
+});

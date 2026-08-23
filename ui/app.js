@@ -12,7 +12,12 @@ let liveStreams = {};     // agent -> {label, text} canlı akış
 let fullCapabilities = null;
 const projectRunLimits = new Map();
 let conversationSearch = "";
+let showArchivedChats = false;
 let activeMainView = "chat";
+let studioMediaKind = "image";
+let studioAttachments = [];
+let activeStudioRunId = null;
+let flowAccountConnected = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -37,9 +42,10 @@ function imageStudioMembers() {
 
 function updateImageStudioSummary() {
   const amount = Math.max(1, Math.min(30, Number($("image-count-number")?.value || 1)));
-  const count = $("image-agent-options")?.querySelectorAll("input:checked").length || 0;
   if ($("image-worker-count")) $("image-worker-count").textContent = `${amount} paralel görev`;
-  if ($("image-start-summary")) $("image-start-summary").textContent = `${count} ajan · ${amount} görsel`;
+  const engine=$("studio-engine")?.selectedOptions[0]?.textContent || "";
+  const duration=studioMediaKind==="video"&&$("studio-duration")?.value!=="auto"?` · ${$("studio-duration").value} sn`:"";
+  if ($("image-start-summary")) $("image-start-summary").textContent = `${engine}${duration} · ${studioMediaKind === "video" ? "1 video" : amount+" çıktı"}`;
 }
 
 function renderImageStudio() {
@@ -56,18 +62,18 @@ function renderImageStudio() {
 
 function renderImageBatchStatus() {
   const box = $("image-batch-status"); if (!box) return;
-  const batch = Object.values(state.runs || {}).filter((r) => r.kind === "image-batch" || r.kind === "image_batch").sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
-  box.hidden = !batch; if (!batch) return;
-  const imageMap = new Map();
-  for (const image of [...(batch.messages || []), ...(batch.tasks || [])].flatMap((item) => item.attachments || []).filter((a) => a.kind === "image")) {
-    imageMap.set(image.path || image.url || image.name, image);
-  }
-  const images = [...imageMap.values()];
-  const target = Number(batch.batch?.total || batch.imageCount || batch.metadata?.imageCount || images.length || 1);
-  const done = Math.min(target, Number(batch.batch?.completed ?? batch.completedCount ?? images.length));
-  const failed = Number(batch.batch?.failed || 0);
-  const percent = Math.round(done / target * 100);
-  box.innerHTML = `<div class="image-batch-head"><span><b>${batch.status === "running" ? "Görseller üretiliyor" : "Son görsel grubu"}</b><small>${done}/${target} tamamlandı${failed ? ` · ${failed} hatalı` : ""}</small></span><strong>${percent}%</strong></div><div class="image-batch-progress"><i style="width:${percent}%"></i></div>${images.length ? `<div class="image-batch-thumbs">${images.slice(0,8).map((a) => `<button type="button" data-media-src="${esc(a.url)}" data-media-name="${esc(a.name || "Üretilen görsel")}"><img src="${esc(a.url)}" alt=""></button>`).join("")}</div>` : ""}`;
+  const batches=Object.values(state.runs || {}).filter((r) => r.kind === "image-batch" || r.kind === "image_batch").sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  box.hidden = !batches.length; if (!batches.length) return;
+  box.innerHTML=`<div class="studio-history-head"><div><span>STÜDYO GEÇMİŞİ</span><b>Tüm üretimler</b></div><small>${batches.length} üretim grubu</small></div>`+batches.map((batch)=>{
+    const media=[...new Map([...(batch.tasks||[]),...(batch.messages||[])].flatMap((item)=>item.attachments||[]).filter((a)=>["image","video"].includes(a.kind)).map((a)=>[a.path||a.url||a.name,a])).values()];
+    const target=Number(batch.batch?.total||batch.imageCount||batch.metadata?.imageCount||media.length||1);
+    const done=Math.min(target,Number(batch.batch?.completed??batch.completedCount??media.length)); const failed=Number(batch.batch?.failed||0); const percent=Math.round(done/target*100);
+    const created=batch.createdAt?new Date(batch.createdAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+    const engine=batch.imageStudio?.engine?.replace("openai-image","GPT Image").replace("gemini-flash-image","Nano Banana 2").replace("gemini-pro-image","Nano Banana Pro").replace("gemini-omni-video","Omni Flash Video").replace("veo-3.1","Veo 3.1").replace("google-flow-subscription","Google Flow · PRO")||"Medya";
+    const flowWaiting=batch.imageStudio?.engine==="google-flow-subscription"&&batch.status==="running";
+    return `<section class="studio-output-group ${batch.status} ${batch.id===activeStudioRunId?"active":""}"><div class="image-batch-head"><span><b>${esc(batch.title||batch.request||"Stüdyo üretimi")}</b><small>${esc(engine)} · ${created} · ${done}/${target} tamamlandı${failed?` · ${failed} hatalı`:""}</small></span><strong>${batch.status==="running"?(flowWaiting?"Flow":""+percent+"%") :"✓"}</strong></div>${batch.status==="running"&&!flowWaiting?`<div class="image-batch-progress"><i style="width:${percent}%"></i></div>`:""}${media.length?`<div class="studio-gallery">${media.map((a)=>a.kind==="video"?`<button type="button" data-media-src="${esc(a.url)}" data-media-kind="video" data-media-name="${esc(a.name)}"><video src="${esc(a.url)}" muted></video><span>▶</span></button>`:`<button type="button" data-media-src="${esc(a.url)}" data-media-kind="image" data-media-name="${esc(a.name||"Görsel")}"><img src="${esc(a.url)}" alt=""></button>`).join("")}</div>`:flowWaiting?`<div class="flow-waiting"><b>Arka planda üretiliyor</b><span>Flow görünmeden çalışıyor. Video tamamlanınca otomatik olarak burada görünecek.</span><button type="button" data-flow-import="${esc(batch.id)}">Videoyu seç</button></div>`:`<div class="studio-output-empty">Bu üretimde görüntülenebilir çıktı oluşmadı.</div>`}</section>`;
+  }).join("");
+  box.querySelectorAll('[data-flow-import]').forEach((button)=>button.onclick=async()=>{const result=await window.desktopAPI?.selectFlowVideo?.(button.dataset.flowImport);if(result?.error){$('image-studio-error').textContent=result.error;$('image-studio-error').hidden=false;}else if(!result?.canceled){await fetchState();renderImageBatchStatus();}});
 }
 
 function showMainView(view) {
@@ -121,6 +127,7 @@ function md(src) {
   t = t.replace(/!\[([^\]]*)\]\((\/uploads\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
   t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
   t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  t = t.replace(/\[([^\]]+)\]\((\/(?:Users|private|tmp)\/[^)]+)\)/g, '<button type="button" class="artifact-link" data-artifact-path="$2">◇ $1</button>');
   t = t.replace(/📎 (\/uploads\/\S+)/g, '<img class="chat-img" src="$1" alt="görsel" data-media-src="$1" data-media-name="görsel">');
   // 3) Blok düzeyi: satır satır işle
   const lines = t.split("\n");
@@ -305,12 +312,13 @@ function renderConversations() {
   if (!el) return;
   const query = conversationSearch.trim().toLocaleLowerCase("tr-TR");
   const runs = Object.values(state.runs)
-    .filter((run) => run.kind === "chat" && !run.projectId && (!query || runSearchText(run).includes(query)))
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
+    .filter((run) => run.kind === "chat" && !run.projectId && !run.deletedAt && (showArchivedChats||!run.archived) && (!query || runSearchText(run).includes(query)))
+    .sort((a, b) => (Number(b.pinned)-Number(a.pinned))||String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
     <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
     <div class="r-meta"><span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
   </div>`).join("") : `<div class="conversation-empty">${query ? "Eşleşen sohbet bulunamadı." : "Henüz sohbet yok."}</div>`;
+  bindRunContextMenu();
 }
 
 function renderCapabilities() {
@@ -374,24 +382,24 @@ function syncToggles() {
 
 function renderProjects() {
   const list = state.config.projects;
-  const sortedRunIds = Object.keys(state.runs)
-    .sort((a, b) => state.runs[b].createdAt.localeCompare(state.runs[a].createdAt));
+  const sortedRunIds = Object.keys(state.runs).filter((id)=>!state.runs[id].deletedAt&&(showArchivedChats||!state.runs[id].archived))
+    .sort((a, b) => (Number(state.runs[b].pinned)-Number(state.runs[a].pinned))||state.runs[b].createdAt.localeCompare(state.runs[a].createdAt));
   const runHTML = (id) => {
     const r=state.runs[id];
-    return `<div class="run-item ${id === selectedRun ? "selected" : ""}" data-run="${id}" title="${esc(r.title || r.request)}">
+    return `<div class="run-item ${id === selectedRun ? "selected" : ""} ${r.pinned?"pinned":""} ${r.archived?"archived":""}" data-run="${id}" title="${esc(r.title || r.request)}">
       <div class="r-title">${esc(r.title || r.request)}</div>
       <div class="r-meta"><span class="status-dot ${r.status === "idle" ? "done" : r.status}"></span>${r.status === "running" ? esc(PHASE_TR[r.phase] || r.phase) : esc(PHASE_TR[r.status] || r.status)}</div>
     </div>`;
   };
   const projectHTML = (p) => {
-    const ids=sortedRunIds.filter((id)=>state.runs[id].projectId===p.id);
+    const query=conversationSearch.trim().toLocaleLowerCase("tr-TR");
+    const ids=sortedRunIds.filter((id)=>state.runs[id].projectId===p.id&&(!query||runSearchText(state.runs[id]).includes(query)));
     const limit=projectRunLimits.get(p.id)||5;
     const selectedBelongs=selectedRun&&state.runs[selectedRun]?.projectId===p.id;
     return `<div class="project-group ${selectedBelongs?"has-selected":""}">
       <div class="project-item ${p.id === activeProjectId() ? "active" : ""}" data-proj="${p.id}">
-        <span class="p-ico">▱</span>
+        <span class="p-ico" aria-hidden="true"></span>
         <span class="p-info"><div class="p-name">${esc(p.name)}</div><div class="p-path">${esc(p.path)}</div></span>
-        <button class="p-del" data-del-proj="${p.id}" title="Projeyi listeden kaldır">✕</button>
       </div>
       <div class="project-runs">${ids.slice(0,limit).map(runHTML).join("")}
         ${ids.length>limit?`<button class="project-more" data-more-project="${p.id}">Daha fazla göster <span>${ids.length-limit}</span></button>`:""}
@@ -401,6 +409,26 @@ function renderProjects() {
   $("project-list").innerHTML = list.length
     ? list.map(projectHTML).join("")
     : `<div class="muted">Proje ekleyin; koşular projeye bağlanır ve konsey kaldığı yerden devam eder.</div>`;
+  bindProjectContextMenu();
+  bindRunContextMenu();
+}
+function bindRunContextMenu(){const menu=$("run-context-menu");let timer;const close=()=>{clearTimeout(timer);timer=setTimeout(()=>menu.hidden=true,140);};for(const row of document.querySelectorAll(".run-item[data-run]")){row.addEventListener("mouseenter",()=>{clearTimeout(timer);const rect=row.getBoundingClientRect(),run=state.runs[row.dataset.run];menu.dataset.runId=row.dataset.run;menu.querySelector('[data-run-menu="pin"]').textContent=run?.pinned?"Sabitlemeyi kaldır":"Sabitle";menu.querySelector('[data-run-menu="archive"]').textContent=run?.archived?"Arşivden çıkar":"Arşivle";menu.hidden=false;requestAnimationFrame(()=>{menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;});});row.addEventListener("mouseleave",close);}menu.onmouseenter=()=>clearTimeout(timer);menu.onmouseleave=close;}
+async function patchRun(id,patch){await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});await fetchState();}
+async function startProjectPreview(id){await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:id})});const response=await fetch(`/api/projects/${id}/dev/start`,{method:"POST"}),result=await response.json();if(!response.ok)return alert(result.error);openToolPanel("browser");$("browser-notice").hidden=false;$("browser-notice").textContent=`${result.command} başlatılıyor…`;for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,500));const status=await fetch(`/api/projects/${id}/dev`).then(r=>r.json());if(status.url){createBrowserTab(status.url);$("browser-notice").hidden=true;return;}if(status.alive===false)return alert(`Sunucu kapandı.\n${status.output||""}`);}alert("Sunucu çalışıyor ancak port henüz algılanamadı.");}
+function openProjectSettings(id){const p=state.config.projects.find(x=>x.id===id);if(!p)return;showModal(`<div class="m-head"><h2>${esc(p.name)} · Proje ayarları</h2><button data-modal-close>×</button></div><label class="field">Kalıcı proje talimatları<textarea id="project-instructions" rows="7">${esc(p.instructions||"")}</textarea></label><label class="field">Yeniden kullanılabilir yetenekler <small>Her satıra bir çalışma kuralı veya yetenek yazın.</small><textarea id="project-skills" rows="5">${esc((p.skills||[]).join("\n"))}</textarea></label><label class="field">Geliştirme komutu<input id="project-dev-command" value="${esc(p.devCommand||"")}" placeholder="npm run dev"></label><label class="field artifact-export-setting"><span><input type="checkbox" id="project-artifact-export" ${p.artifactExport?"checked":""}> Konsey kanıtlarını repoya aktar</span><small>Task, handoff, review ve integration sonuçlarını .ajan-konseyi/ altında saklar. Varsayılan olarak kapalıdır.</small></label><div class="m-foot"><button data-modal-close>Vazgeç</button><button class="btn-gradient" data-save-project-settings="${id}">Kaydet</button></div>`);}
+async function openCheckpoints(id){const data=await fetch(`/api/projects/${id}/checkpoints`).then(r=>r.json());showModal(`<div class="m-head"><h2>Kontrol noktaları</h2><button data-modal-close>×</button></div><div class="m-list">${(data.checkpoints||[]).map(c=>`<div class="m-item"><span>${esc(c.name)}<small>${new Date(c.createdAt).toLocaleString("tr-TR")}</small></span><button data-restore-checkpoint="${c.id}" data-project-id="${id}">Geri dön</button></div>`).join("")||'<div class="muted">Henüz kontrol noktası yok.</div>'}</div><div class="m-foot"><button data-modal-close>Kapat</button><button class="btn-gradient" data-create-checkpoint="${id}">Yeni kontrol noktası</button></div>`);}
+async function openProjectMemory(id){const data=await fetch(`/api/projects/${id}/memory`).then(r=>r.json());showModal(`<div class="m-head"><h2>Proje hafızası</h2><button data-modal-close>×</button></div><textarea id="project-memory-content" rows="14">${esc(data.content||"")}</textarea><h3>Önemli ve işaretli bilgiler</h3><div class="m-list">${(data.pins||[]).map(p=>`<div class="m-item"><span>${esc(p.text)}${p.flag?`<small>${esc(p.flag)}</small>`:""}</span></div>`).join("")||'<div class="muted">Sabit bilgi yok.</div>'}</div><div class="m-foot"><button data-memory-forget="${id}">Bilgi unuttur</button><button data-memory-pin="${id}">Önemli bilgi sabitle</button><button data-memory-flag="${id}">Çelişki işaretle</button><button class="btn-gradient" data-memory-save="${id}">Kaydet</button></div>`);}
+function openChatManager(projectId,{trash=false}={}){const runs=Object.values(state.runs).filter(r=>r.kind==="chat"&&r.projectId===projectId&&Boolean(r.deletedAt)===trash);showModal(`<div class="m-head"><h2>${trash?"Çöp kutusu":"Sohbetleri yönet"}</h2><button data-modal-close>×</button></div><div class="m-list chat-manage-list">${runs.map(r=>`<label class="m-item"><input type="checkbox" data-manage-run="${r.id}"><span>${esc(r.title||r.request)}<small>${esc((r.tags||[]).join(", "))}</small></span></label>`).join("")||'<div class="muted">Sohbet yok.</div>'}</div><div class="m-foot"><button data-modal-close>Kapat</button>${trash?'<button data-bulk-chat="restore">Geri yükle</button>':'<button data-bulk-chat="archive">Arşivle</button><button data-bulk-chat="move">Projeye taşı</button><button data-bulk-chat="trash">Çöpe taşı</button>'}</div>`);}
+
+let projectMenuTimer=null;
+function bindProjectContextMenu(){
+  const menu=$("project-context-menu");
+  const close=()=>{clearTimeout(projectMenuTimer);projectMenuTimer=setTimeout(()=>menu.hidden=true,140);};
+  for(const row of document.querySelectorAll(".project-item")){
+    row.addEventListener("mouseenter",()=>{clearTimeout(projectMenuTimer);const rect=row.getBoundingClientRect();menu.dataset.projectId=row.dataset.proj;menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;menu.hidden=false;requestAnimationFrame(()=>{menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;});});
+    row.addEventListener("mouseleave",close);
+  }
+  menu.onmouseenter=()=>clearTimeout(projectMenuTimer);menu.onmouseleave=close;
 }
 
 // ---- Üye kartları: kullanıcı istediği kadar üye ekler (3 Codex mimar vb.) ----
@@ -796,6 +824,7 @@ function renderDetails(run) {
     }
   }
   $("tab-files").innerHTML = filesHtml;
+  if(run?.projectId)renderProjectArtifacts(run.projectId,run);
 
   $("tab-tests").innerHTML = run?.tests?.length
     ? run.tests.map((t) => `<h3>${t.ok ? "✓" : "✗"} ${esc(t.command)}</h3><pre>${esc(t.output)}</pre>`).join("")
@@ -840,13 +869,14 @@ function renderDiff(diffText) {
     const fname = nameMatch ? nameMatch[1] : firstLine.slice(0, 60);
     const adds = (chunk.match(/^\+[^+]/gm) || []).length;
     const dels = (chunk.match(/^-[^-]/gm) || []).length;
-    const body = chunk.split("\n").slice(1, 400).map((l) => {
+    const body = chunk.split("\n").slice(1, 400).map((l,index) => {
       const cls = l.startsWith("+") ? "add" : l.startsWith("-") ? "del" : l.startsWith("@@") ? "hunk" : "";
-      return `<div class="dl ${cls}">${esc(l) || " "}</div>`;
+      return `<div class="dl ${cls} diff-commentable" data-diff-file="${esc(fname)}" data-diff-line="${index+1}" title="Yorum eklemek için tıklayın">${esc(l) || " "}</div>`;
     }).join("");
     return `<details class="diff-file"><summary>${esc(fname)} <span class="muted">+${adds} −${dels}</span></summary><div class="diff-body">${body}</div></details>`;
   }).join("");
 }
+async function renderProjectArtifacts(projectId,run){try{const data=await fetch(`/api/projects/${projectId}/artifacts`).then(r=>r.json());const files=(data.artifacts||[]).slice(0,30);if(files.length)$("tab-files").insertAdjacentHTML("afterbegin",`<h3>Proje çıktıları</h3><div class="artifact-catalog">${files.map(f=>`<button class="artifact-link" data-artifact-path="${esc(f.path)}">${esc(f.relative)}</button>`).join("")}</div>`);if(run.diffComments?.length)$("tab-files").insertAdjacentHTML("beforeend",`<h3>Diff yorumları</h3>${run.diffComments.map(c=>`<div class="diff-comment-list"><b>${esc(c.file)}:${c.line}</b><br>${esc(c.body)}</div>`).join("")}`);}catch{} }
 
 function renderToasts() {
   const pending = state.approvals.filter((a) => a.status === "pending");
@@ -862,6 +892,13 @@ function renderToasts() {
 }
 
 // ================= MODALLAR =================
+// Eski proje araçları `showModal` adını kullanıyor. Tek modal uygulamasına
+// yönlendirerek proje ayarları, hafıza ve kontrol noktalarının gerçek UI'da
+// güvenle açılmasını sağla.
+function showModal(html) {
+  openModal(html);
+}
+
 function openModal(html) {
   $("modal-card").innerHTML = html;
   $("modal-overlay").hidden = false;
@@ -926,6 +963,34 @@ document.addEventListener("click", async (e) => {
   const t = e.target;
   const closest = (sel) => t.closest(sel);
 
+  const projectMenuAction=closest("[data-project-menu]");
+  if(projectMenuAction){
+    const id=$("project-context-menu").dataset.projectId;$("project-context-menu").hidden=true;
+    if(projectMenuAction.dataset.projectMenu==="chat")projectMenuAction.dataset.newProjectChat=id;
+    if(projectMenuAction.dataset.projectMenu==="terminal")projectMenuAction.dataset.projectTerminal=id;
+    if(projectMenuAction.dataset.projectMenu==="remove")projectMenuAction.dataset.delProj=id;
+    if(projectMenuAction.dataset.projectMenu==="preview"){await startProjectPreview(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="settings"){openProjectSettings(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="memory"){await openProjectMemory(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="security"){await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:id})});await fetchState();openToolPanel("security");return;}
+    if(projectMenuAction.dataset.projectMenu==="checkpoint"){await openCheckpoints(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="archives"){showArchivedChats=!showArchivedChats;renderProjects();renderConversations();return;}
+    if(projectMenuAction.dataset.projectMenu==="manage"){openChatManager(id);return;}
+    if(projectMenuAction.dataset.projectMenu==="import"){$("chat-import-file").dataset.projectId=id;$("chat-import-file").click();return;}
+    if(projectMenuAction.dataset.projectMenu==="trash"){openChatManager(id,{trash:true});return;}
+  }
+  const runMenuAction=closest("[data-run-menu]");
+  if(runMenuAction){const menu=$("run-context-menu"),id=menu.dataset.runId,run=state.runs[id];menu.hidden=true;if(!run)return;
+    if(runMenuAction.dataset.runMenu==="rename"){const title=prompt("Sohbet adı",run.title||run.request);if(title)await patchRun(id,{title});}
+    if(runMenuAction.dataset.runMenu==="pin")await patchRun(id,{pinned:!run.pinned});
+    if(runMenuAction.dataset.runMenu==="archive")await patchRun(id,{archived:!run.archived});
+    if(runMenuAction.dataset.runMenu==="transfer"){const target=prompt("Hangi ajana veya konseye devredilsin?","konsey");if(target){const response=await fetch(`/api/runs/${id}/transfer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target,projectId:run.projectId})});const result=await response.json();if(result.runId){selectRun(result.runId);await fetchState();}}}
+    if(runMenuAction.dataset.runMenu==="tags"){const value=prompt("Etiketler (virgülle ayırın)",(run.tags||[]).join(", "));if(value!==null)await patchRun(id,{tags:value.split(",")});}
+    if(runMenuAction.dataset.runMenu==="export"){const a=document.createElement("a");a.href=`/api/runs/${id}/export`;a.download=`${id}.json`;a.click();}
+    if(runMenuAction.dataset.runMenu==="trash")await patchRun(id,{deletedAt:true});
+    return;
+  }
+
   // koşu seç
   const runEl = closest("[data-run]");
   if (runEl) {
@@ -942,6 +1007,16 @@ document.addEventListener("click", async (e) => {
     projectRunLimits.set(id,(projectRunLimits.get(id)||5)+10);
     renderProjects();
     return;
+  }
+  const newProjectChat=closest("[data-new-project-chat]");
+  if(newProjectChat){
+    await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:newProjectChat.dataset.newProjectChat})});
+    selectRun(null);showMainView("chat");autoCloseSidebar();await fetchState();$("f-request").focus();return;
+  }
+  const projectTerminal=closest("[data-project-terminal]");
+  if(projectTerminal){
+    await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:projectTerminal.dataset.projectTerminal})});
+    await fetchState();openToolPanel("terminal");autoCloseSidebar();return;
   }
 
   // proje seç / kaldır (kenar çubuğu)
@@ -993,6 +1068,14 @@ document.addEventListener("click", async (e) => {
   }
 
   // modallar
+  const saveProjectSettings=closest("[data-save-project-settings]");if(saveProjectSettings){await fetch(`/api/projects/${saveProjectSettings.dataset.saveProjectSettings}/settings`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({instructions:$("project-instructions").value,skills:$("project-skills").value.split("\n"),devCommand:$("project-dev-command").value,artifactExport:$("project-artifact-export").checked})});closeModal();await fetchState();return;}
+  const memorySave=closest("[data-memory-save]");if(memorySave){await fetch(`/api/projects/${memorySave.dataset.memorySave}/memory`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:$("project-memory-content").value})});closeModal();return;}
+  const memoryForget=closest("[data-memory-forget]");if(memoryForget){const query=prompt("Hafızadan çıkarılacak bilgi veya ifade");if(query){await fetch(`/api/projects/${memoryForget.dataset.memoryForget}/memory/forget`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query})});await openProjectMemory(memoryForget.dataset.memoryForget);}return;}
+  const memoryPin=closest("[data-memory-pin]");if(memoryPin){const text=prompt("Sabitlenecek önemli bilgi");if(text){await fetch(`/api/projects/${memoryPin.dataset.memoryPin}/memory/pin`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});await openProjectMemory(memoryPin.dataset.memoryPin);}return;}
+  const memoryFlag=closest("[data-memory-flag]");if(memoryFlag){const text=prompt("Eski veya çelişkili bilgi");if(text){await fetch(`/api/projects/${memoryFlag.dataset.memoryFlag}/memory/flag`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,flag:"çelişkili veya eski"})});await openProjectMemory(memoryFlag.dataset.memoryFlag);}return;}
+  const bulkChat=closest("[data-bulk-chat]");if(bulkChat){const ids=[...document.querySelectorAll("[data-manage-run]:checked")].map(x=>x.dataset.manageRun),action=bulkChat.dataset.bulkChat;if(!ids.length)return;let projectId=null;if(action==="move"){const name=prompt("Hedef proje adı");projectId=state.config.projects.find(p=>p.name===name)?.id;if(!projectId)return alert("Proje bulunamadı");}for(const id of ids)await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(action==="archive"?{archived:true}:action==="trash"?{deletedAt:true}:action==="restore"?{deletedAt:false}:{projectId})});closeModal();await fetchState();return;}
+  const createCheckpoint=closest("[data-create-checkpoint]");if(createCheckpoint){const name=prompt("Kontrol noktası adı","Çalışan sürüm");if(name){await fetch(`/api/projects/${createCheckpoint.dataset.createCheckpoint}/checkpoints`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});await openCheckpoints(createCheckpoint.dataset.createCheckpoint);}return;}
+  const restoreCheckpoint=closest("[data-restore-checkpoint]");if(restoreCheckpoint){if(confirm("Proje dosyaları bu kontrol noktasındaki hâle döndürülsün mü?")){await fetch(`/api/projects/${restoreCheckpoint.dataset.projectId}/checkpoints/${restoreCheckpoint.dataset.restoreCheckpoint}/restore`,{method:"POST"});closeModal();}return;}
   if (closest("[data-modal-close]")) { closeModal(); return; }
   if (t.id === "modal-overlay") { closeModal(); return; }
   const pickProj = closest("[data-pick-project]");
@@ -1152,6 +1235,59 @@ $("btn-new").addEventListener("click", async () => {
 $('btn-image-studio').addEventListener('click', () => { showMainView('images'); autoCloseSidebar(); });
 $('image-prompt').addEventListener('input', (e) => { $('image-prompt-count').textContent = `${e.target.value.length} karakter`; });
 $('image-agent-options').addEventListener('change', updateImageStudioSummary);
+function configureStudioEngine(){
+  const video=studioMediaKind==='video', veo=$('studio-engine').value==='veo-3.1', flow=$('studio-engine').value==='google-flow-subscription';
+  const forcedEight=veo&&(studioAttachments.length>0||['high','4k'].includes($('studio-quality').value));
+  $('studio-duration-wrap').hidden=!video; $('studio-duration').innerHTML=flow?'<option value="4">4 saniye</option><option value="6">6 saniye</option><option value="8" selected>8 saniye</option><option value="10">10 saniye · Omni</option>':veo?(forcedEight?'<option value="8">8 saniye · bu ayarda zorunlu</option>':'<option value="4">4 saniye</option><option value="6">6 saniye</option><option value="8" selected>8 saniye</option>'):'<option value="auto">Otomatik · Omni belirler</option>';
+  if(video){ const aspect=$('studio-aspect'); aspect.innerHTML='<option>16:9</option><option>9:16</option>'; }
+  $('flow-account-card').hidden=!flow;
+  if(flow){refreshFlowAccountStatus();setTimeout(refreshFlowAccountStatus,2500);}
+  updateImageStudioSummary();
+}
+async function refreshFlowAccountStatus(){if(!window.desktopAPI?.flowAccountStatus)return;const text=$('flow-account-text');const button=$('btn-flow-connect');text.textContent='Hesap durumu kontrol ediliyor…';try{const result=await window.desktopAPI.flowAccountStatus();flowAccountConnected=Boolean(result?.connected);$('flow-account-card').classList.toggle('connected',flowAccountConnected);text.textContent=flowAccountConnected?'Bağlı · üretimler görünmeden arka planda çalışır':'Bağlı değil · yalnız ilk seferde giriş penceresi açılır';button.textContent=flowAccountConnected?'Bağlı':'Hesabı bağla';button.dataset.verifying='0';}catch(error){flowAccountConnected=false;text.textContent=error.message||'Flow durumu alınamadı';}}
+$('btn-flow-connect').addEventListener('click',async()=>{const button=$('btn-flow-connect');button.disabled=true;const verifying=button.dataset.verifying==='1';$('flow-account-text').textContent=verifying?'Flow oturumu doğrulanıyor…':'Google Chrome giriş penceresi açılıyor…';try{const result=await window.desktopAPI?.connectFlowAccount?.(verifying);if(result?.error)throw new Error(result.error);if(result?.connected){flowAccountConnected=true;$('flow-account-card').classList.add('connected');$('flow-account-text').textContent='Bağlı · üretimler görünmeden arka planda çalışır';button.dataset.verifying='0';button.textContent='Bağlı';}else{button.dataset.verifying='1';button.textContent='Bağlantıyı doğrula';$('flow-account-text').textContent='Chrome’da giriş yapın; Flow açılınca buraya dönüp “Bağlantıyı doğrula”ya basın.';}}catch(error){$('flow-account-text').textContent=error.message;}finally{button.disabled=false;}});
+window.desktopAPI?.onFlowVideoStatus?.((detail)=>{if(detail?.type==='account-check'){setTimeout(refreshFlowAccountStatus,800);return;}if(detail?.type==='account'){flowAccountConnected=true;$('flow-account-card').classList.add('connected');$('flow-account-text').textContent='Bağlı · üretimler görünmeden arka planda çalışır';return;}if(detail?.runId){const error=$('image-studio-error');if(detail.type==='error'){error.textContent=detail.error;error.hidden=false;}else{error.hidden=true;}fetchState().then(renderImageBatchStatus);}});
+$('studio-engine').addEventListener('change', configureStudioEngine);
+$('studio-quality').addEventListener('change',configureStudioEngine); $('studio-duration').addEventListener('change',updateImageStudioSummary);
+document.querySelectorAll('[data-media-kind]').forEach((button)=>button.addEventListener('click',()=>{
+  studioMediaKind=button.dataset.mediaKind;
+  document.querySelectorAll('.media-kind-tabs [data-media-kind]').forEach((b)=>b.classList.toggle('active',b===button));
+  const engine=$('studio-engine');
+  engine.innerHTML=studioMediaKind==='video'
+    ? '<option value="google-flow-subscription">Google Flow · PRO aboneliği</option>'
+    : '<option value="openai-image">OpenAI · GPT Image</option><option value="gemini-flash-image">Gemini · Nano Banana 2</option><option value="gemini-pro-image">Gemini · Nano Banana Pro</option>';
+  $('studio-count-wrap').hidden=studioMediaKind==='video'; $('image-count-number').value=studioMediaKind==='video'?1:$('image-count-number').value;
+  $('studio-submit-label').textContent=studioMediaKind==='video'?'Video oluştur':'Görsel oluştur';
+  $('studio-prompt-help').textContent=studioMediaKind==='video'?'Sahneyi, kamera hareketini, süreyi ve sesi tarif edin.':'Üretmek veya düzenlemek istediğinizi doğal dille yazın.';
+  configureStudioEngine();
+}));
+document.querySelectorAll('[data-studio-prompt]').forEach((b)=>b.addEventListener('click',()=>{ $('image-prompt').value=b.dataset.studioPrompt; $('image-prompt').dispatchEvent(new Event('input')); $('image-prompt').focus(); }));
+function renderStudioReferences(){ const box=$('studio-reference-list'); box.hidden=!studioAttachments.length; box.innerHTML=studioAttachments.map((a,i)=>`<span><img src="${esc(a.previewUrl||a.url)}" alt=""><button type="button" data-studio-rm="${i}">×</button></span>`).join(''); box.querySelectorAll('[data-studio-rm]').forEach((b)=>b.onclick=()=>{studioAttachments.splice(Number(b.dataset.studioRm),1);renderStudioReferences();}); if(studioMediaKind==='video')configureStudioEngine(); }
+async function uploadStudioReference(file){
+  const previewUrl=URL.createObjectURL(file), data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});
+  const response=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:file.name||'referans.png',data})}); const item=await response.json(); if(!response.ok||item.error){URL.revokeObjectURL(previewUrl);throw new Error(item.error||'Referans yüklenemedi');} studioAttachments.push({...item,previewUrl}); renderStudioReferences();
+}
+$('btn-studio-reference').addEventListener('click',()=>$('studio-reference-file').click());
+$('studio-reference-file').addEventListener('change',async(e)=>{try{for(const file of e.target.files)await uploadStudioReference(file);}catch(err){$('image-studio-error').textContent=err.message;$('image-studio-error').hidden=false;}e.target.value='';});
+document.addEventListener('paste',async(e)=>{
+  if(activeMainView!=="images")return;
+  const files=[...(e.clipboardData?.items||[])].filter((item)=>item.kind==="file"&&item.type.startsWith("image/")).map((item)=>item.getAsFile()).filter(Boolean);
+  if(!files.length)return;
+  e.preventDefault(); const drop=$('btn-studio-reference'); drop.classList.add('receiving');
+  try{for(const file of files)await uploadStudioReference(file);$('image-studio-error').hidden=true;}
+  catch(err){$('image-studio-error').textContent=err.message;$('image-studio-error').hidden=false;}
+  finally{drop.classList.remove('receiving');}
+});
+$('btn-studio-reference').addEventListener('dragover',(e)=>{e.preventDefault();e.currentTarget.classList.add('receiving');});
+$('btn-studio-reference').addEventListener('dragleave',(e)=>e.currentTarget.classList.remove('receiving'));
+$('btn-studio-reference').addEventListener('drop',async(e)=>{e.preventDefault();e.currentTarget.classList.remove('receiving');try{for(const file of [...(e.dataTransfer?.files||[])].filter((f)=>f.type.startsWith('image/')))await uploadStudioReference(file);}catch(err){$('image-studio-error').textContent=err.message;$('image-studio-error').hidden=false;}});
+$('btn-enhance-prompt').addEventListener('click',async()=>{
+  const text=$('image-prompt').value.trim(), button=$('btn-enhance-prompt'), error=$('image-studio-error');
+  if(!text){error.textContent='Önce kısa fikrinizi yazın.';error.hidden=false;$('image-prompt').focus();return;}
+  error.hidden=true; button.disabled=true; button.classList.add('busy');
+  try{const response=await fetch('/api/studio/enhance-prompt',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,mediaKind:studioMediaKind,engine:$('studio-engine').value,aspect:$('studio-aspect').value,quality:$('studio-quality').value,duration:$('studio-duration').value,attachments:studioAttachments})});const result=await response.json();if(!response.ok||result.error)throw new Error(result.error||'Prompt güçlendirilemedi');$('image-prompt').value=result.prompt;$('image-prompt').dispatchEvent(new Event('input'));}
+  catch(err){error.textContent=err.message;error.hidden=false;}finally{button.disabled=false;button.classList.remove('busy');}
+});
 function syncImageCount(value) {
   const n = Math.max(1, Math.min(30, Number(value) || 1));
   $('image-count').value = n; $('image-count-number').value = n; updateImageStudioSummary();
@@ -1161,16 +1297,21 @@ $('image-count-number').addEventListener('input', (e) => syncImageCount(e.target
 $('image-studio-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const prompt = $('image-prompt').value.trim();
-  const agents = [...$('image-agent-options').querySelectorAll('input:checked')].map((x) => x.value);
+  const flowSubscription=studioMediaKind==='video'&&$('studio-engine').value==='google-flow-subscription';
+  const provider=$('studio-engine').value==='openai-image'?'codex':'antigravity';
+  const agent=imageStudioMembers().find((m)=>m.provider===provider)?.id;
+  const agents = flowSubscription ? [] : (agent ? [agent] : []);
   const error = $('image-studio-error');
-  if (!prompt || !agents.length) { error.textContent = !prompt ? 'Görsel istemini yazın.' : 'En az bir ajan seçin.'; error.hidden = false; return; }
+  if (!prompt || (!flowSubscription&&!agents.length)) { error.textContent = !prompt ? 'Üretim talimatını yazın.' : `${provider==='codex'?'Codex':'Antigravity'} etkin değil.`; error.hidden = false; return; }
   error.hidden = true;
   const button = $('btn-start-image-batch'); button.disabled = true; button.classList.add('busy');
   try {
-    const response = await fetch('/api/image-batches', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ prompt, agents, coordinator:$('image-coordinator').value, count:Number($('image-count-number').value), style:$('image-style').value }) });
+    const payload={ prompt, agents, mediaKind:studioMediaKind, engine:$('studio-engine').value, aspect:$('studio-aspect').value, quality:$('studio-quality').value, duration:$('studio-duration').value, count:studioMediaKind==='video'?1:Number($('image-count-number').value), attachments:studioAttachments };
+    const response = await fetch(flowSubscription?'/api/flow-video-runs':'/api/image-batches', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
     const result = await response.json();
     if (!response.ok || result.error) throw new Error(result.error || 'Görsel grubu başlatılamadı.');
-    if (result.runId) selectRun(result.runId);
+    if (result.runId) activeStudioRunId=result.runId;
+    if(flowSubscription&&result.runId){const started=await window.desktopAPI?.runFlowVideo?.({runId:result.runId,prompt:result.prompt||prompt,aspect:payload.aspect,quality:payload.quality,duration:payload.duration,attachments:studioAttachments});if(started?.error)throw new Error(started.error);}
     await fetchState(); renderImageBatchStatus();
   } catch (err) { error.textContent = err.message; error.hidden = false; }
   finally { button.disabled = false; button.classList.remove('busy'); }
@@ -1178,7 +1319,9 @@ $('image-studio-form').addEventListener('submit', async (e) => {
 $("conversation-search").addEventListener("input", (e) => {
   conversationSearch = e.target.value;
   renderConversations();
+  renderProjects();
 });
+$("chat-import-file").addEventListener("change",async e=>{const file=e.target.files[0];if(!file)return;try{const body=JSON.parse(await file.text());body.projectId=e.target.dataset.projectId;const response=await fetch("/api/runs/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),result=await response.json();if(!response.ok)throw new Error(result.error);selectRun(result.runId);await fetchState();}catch(error){alert(error.message);}e.target.value="";});
 $("btn-details").addEventListener("click", () => $("details").classList.toggle("closed"));
 
 function openToolPanel(tab) {
@@ -1187,9 +1330,58 @@ function openToolPanel(tab) {
   document.querySelectorAll("[data-tool-tab]").forEach((b) => b.classList.toggle("active", b.dataset.toolTab === tab));
   $("tool-terminal").hidden = tab !== "terminal";
   $("tool-browser").hidden = tab !== "browser";
+  $("tool-preview").hidden = tab !== "preview";
+  $("tool-editor").hidden = tab !== "editor";
+  $("tool-tasks").hidden = tab !== "tasks";
+  $("tool-security").hidden = tab !== "security";
+  $("tool-git").hidden = tab !== "git";
   if (tab === "terminal") $("terminal-command").focus();
   if (tab === "browser" && !activeBrowserView()) createBrowserTab($("browser-url").value);
+  if(tab==="editor")loadEditorTree();
+  if(tab==="tasks")renderTaskCenter();
+  if(tab==="security")renderSecurityCenter();
+  if(tab==="git")renderGitCenter();
 }
+let gitDiffMode="working";
+async function renderGitCenter(){const project=activeProject(),actions=[$("git-run-test"),$("git-commit")];$("git-empty").hidden=!!project;$("git-content").hidden=!project;actions.forEach(button=>button.disabled=!project);if(!project){$("git-summary").textContent="Başlamak için bir proje seçin.";return;}$("git-summary").textContent="Git durumu okunuyor…";try{const [status,log,diff]=await Promise.all([fetch(`/api/projects/${project.id}/git/status`).then(r=>r.json()),fetch(`/api/projects/${project.id}/git/log`).then(r=>r.json()),fetch(`/api/projects/${project.id}/git/diff?staged=${gitDiffMode==="staged"?1:0}`).then(r=>r.json())]);if(status.error)throw new Error(status.error);$("git-summary").textContent=`${project.name} · ${status.branch} · ${status.ahead} ileri · ${status.behind} geri · ${(status.files||[]).length} değişiklik`;$("git-files").innerHTML=(status.files||[]).map(file=>`<div class="git-file"><code>${esc(file.code)}</code><span>${esc(file.path)}</span></div>`).join("")||'<div class="skill-empty"><div><span>✓</span><b>Çalışma ağacı temiz</b><small>Commit edilmemiş değişiklik bulunmuyor.</small></div></div>';$("git-log").innerHTML=(log.commits||[]).map(commit=>`<div class="git-commit"><b>${esc(commit.subject)}</b><small>${esc(commit.short)} · ${esc(new Date(commit.date).toLocaleString("tr-TR"))}</small></div>`).join("")||'<div class="muted">Henüz commit yok.</div>';$("git-diff").textContent=diff.diff||"Bu bölümde değişiklik yok.";}catch(error){$("git-summary").textContent=`${project.name} · Git kullanılamıyor`;$("git-files").innerHTML=`<div class="skill-empty"><div><span>!</span><b>Git bilgisi okunamadı</b><small>${esc(error.message)}</small></div></div>`;$("git-log").innerHTML="";$("git-diff").textContent="Proje bir Git deposu olmayabilir.";}}
+const securityCapabilities={files:{label:"Proje dosyaları",description:"Dosyaları okuma, oluşturma ve düzenleme"},terminal:{label:"Terminal",description:"Proje klasöründe komut çalıştırma"},browser:{label:"Tarayıcı",description:"Sayfalarda gezinme, tıklama ve yazma"},publish:{label:"GitHub yayını",description:"Commitleri uzak depoya gönderme"},externalServices:{label:"Harici servisler",description:"Bağlı servis ve hesapları kullanma"}};
+const auditLabels={"permissions.update":"Proje izinleri güncellendi","skill.save":"Yetenek paketi kaydedildi","skill.toggle":"Yetenek durumu değiştirildi","skill.delete":"Yetenek paketi silindi","file.write":"Dosya kaydedildi","test.run":"Test çalıştırıldı","git.commit":"Commit oluşturuldu","chat.update":"Sohbet güncellendi"};
+function auditSummary(item){const detail=item.detail||{};if(item.action==="permissions.update"){const [key,value]=Object.entries(detail)[0]||[];return `${securityCapabilities[key]?.label||key}: ${value==="allow"?"İzin verildi":value==="deny"?"Engellendi":"Her seferinde sor"}`;}if(detail.name)return detail.name;if(detail.message)return detail.message;if(detail.command)return detail.command;if(detail.path)return detail.path;return "İşlem başarıyla uygulandı";}
+async function renderSecurityCenter(){
+  const project=activeProject(),projectId=project?.id||"global",data=await fetch("/api/workspace").then(r=>r.json()),permissions=data.permissions?.[projectId]||{};
+  $("security-permissions").innerHTML=Object.entries(securityCapabilities).map(([key,cap])=>{const value=permissions[key]||"ask";return`<label class="permission-row" data-state="${value}"><span class="permission-copy"><b>${esc(cap.label)}</b><small>${esc(cap.description)}</small></span><select data-security-permission="${key}"><option value="ask" ${value==="ask"?"selected":""}>Her seferinde sor</option><option value="allow" ${value==="allow"?"selected":""}>İzin ver</option><option value="deny" ${value==="deny"?"selected":""}>Engelle</option></select></label>`;}).join("");
+  $("security-skills").innerHTML=(data.skills||[]).length?(data.skills||[]).map(skill=>`<div class="skill-row"><input type="checkbox" data-security-skill="${skill.id}" ${(skill.enabledProjects||[]).includes(projectId)?"checked":""}><div class="skill-copy"><b>${esc(skill.name)}</b><small>v${esc(skill.version||"1.0.0")} · ${esc(skill.instructions||skill.command||"Talimat yok")}</small></div><button data-delete-skill="${skill.id}" title="Yetenek paketini sil">Sil</button></div>`).join(""):'<div class="skill-empty"><div><span>⌾</span><b>Henüz yetenek paketi yok</b><small>Sık kullandığınız talimatları paketleyip projelerde tek tıkla etkinleştirin.</small></div></div>';
+  $("security-audit").innerHTML=[...(data.audit||[])].reverse().slice(0,30).map(item=>`<div class="audit-row"><span class="audit-icon">${item.action.startsWith("skill")?"⌾":item.action.startsWith("permission")?"✓":"·"}</span><span class="audit-copy"><b>${esc(auditLabels[item.action]||"Çalışma alanı güncellendi")}</b><small>${esc(auditSummary(item))}</small></span><time>${esc(new Date(item.ts).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}))}</time></div>`).join("")||'<div class="audit-empty">Henüz etkinlik kaydı yok.</div>';
+}
+async function checkApplicationUpdate(){if(!window.desktopAPI?.updateStatus){$("update-status").textContent="Güncelleme denetimi masaüstü uygulamasında kullanılabilir.";return;}$("update-status").textContent="GitHub sürümü denetleniyor…";const result=await window.desktopAPI.updateStatus();if(result.error){$("update-status").textContent=`Denetim başarısız: ${result.error}`;$("update-download").hidden=true;return;}$("update-status").textContent=result.available?`${result.current} yüklü · ${result.latest} indirilebilir`:`${result.current} güncel · ${result.message||result.latest||""}`;$("update-download").hidden=!(result.available&&result.asset);$("update-notes").hidden=!result.notes;$("update-notes").textContent=result.notes||"";}
+async function renderTaskCenter(){const data=await fetch("/api/workspace").then(r=>r.json()),tasks=data.tasks||[],leases=data.leases||[];$("resource-lease-list").innerHTML=leases.length?leases.map(lease=>`<div class="resource-lease-row"><span>${lease.type==="port"?"⇄":lease.type==="external-service"?"↗":"◇"}</span><div><b>${esc(lease.key)}</b><small>${esc(lease.owner?.label||lease.owner?.agentId||lease.owner?.runId||"Bilinmeyen sahip")}</small></div><time>${esc(new Date(lease.expiresAt).toLocaleTimeString("tr-TR",{hour:"2-digit",minute:"2-digit"}))}</time></div>`).join(""):'<div class="resource-lease-empty">Şu anda ayrılmış kaynak yok.</div>';$("task-center-list").innerHTML=tasks.length?tasks.map(t=>{const contract=t.contract||{},ready=contract.status==="ready";return`<article class="task-card"><div class="task-card-head"><b>${esc(t.title)}</b><span class="task-status">${esc(t.status)}</span></div><small>${esc(t.phase||t.kind||"")}</small><div class="task-contract-summary ${ready?"ready":"draft"}"><span>${ready?"✓":"!"}</span><div><b>Görev sözleşmesi · ${ready?"Hazır":"Taslak"}</b><small>${esc(contract.goal||"Hedef henüz tanımlanmadı")}</small></div></div><div class="task-progress"><i style="width:${Number(t.progress)||0}%"></i></div><div class="task-actions"><button data-task-contract="${t.id}">Sözleşmeyi düzenle</button>${["running","queued"].includes(t.status)?`<button data-task-action="pause" data-task-id="${t.id}">Duraklat</button>`:""}${["paused","failed","interrupted","stopped","evidence_blocked"].includes(t.status)?`<button data-task-action="resume" data-task-id="${t.id}">Sürdür</button><button data-task-action="retry" data-task-id="${t.id}">Yeniden dene</button>`:""}${!["done","cancelled"].includes(t.status)?`<button data-task-action="cancel" data-task-id="${t.id}">İptal</button>`:""}</div></article>`;}).join(""):'<div class="muted" style="padding:20px">Henüz görev yok.</div>';}
+function contractLines(value){return (value||[]).join("\n");}
+async function openTaskContract(taskId){const response=await fetch(`/api/workspace/tasks/${taskId}/contract`),contract=await response.json();if(!response.ok)return alert(contract.error);openModal(`<div class="contract-modal"><div class="modal-title"><div><span class="section-kicker">GÖREV SINIRLARI</span><h2>Görev sözleşmesi</h2><p>Ajanın hedefini, erişebileceği alanları ve tamamlanma ölçütlerini belirleyin.</p></div><button data-close-modal>×</button></div><form id="task-contract-form" data-task-id="${taskId}"><label class="contract-wide"><b>Hedef</b><small>Bu görev sonunda ortaya çıkması gereken sonuç.</small><textarea name="goal" required>${esc(contract.goal||"")}</textarea></label><label><b>Kapsam dışı</b><small>Her satıra yapılmaması gereken bir iş.</small><textarea name="nonGoals">${esc(contractLines(contract.nonGoals))}</textarea></label><label><b>Kabul kriterleri</b><small>Her satır doğrulanabilir bir sonuç olmalı.</small><textarea name="acceptanceCriteria" required>${esc(contractLines(contract.acceptanceCriteria))}</textarea></label><label><b>İzin verilen yollar</b><small>Projeye göre yollar; ör. src/**</small><textarea name="allowedPaths" required>${esc(contractLines(contract.allowedPaths))}</textarea></label><label><b>Yasak yollar</b><small>Ajanın değiştirmemesi gereken alanlar.</small><textarea name="forbiddenPaths">${esc(contractLines(contract.forbiddenPaths))}</textarea></label><label><b>Test komutları</b><small>Her satıra bir doğrulama komutu.</small><textarea name="testCommands">${esc(contractLines(contract.testCommands))}</textarea></label><label><b>Onay sınırları</b><small>İnsan onayı gerektiren işlemler.</small><textarea name="approvalBoundaries">${esc(contractLines(contract.approvalBoundaries))}</textarea></label><label class="contract-risk"><b>Risk seviyesi</b><select name="risk">${[["low","Düşük"],["medium","Orta"],["high","Yüksek"],["critical","Kritik"]].map(([value,label])=>`<option value="${value}" ${contract.risk===value?"selected":""}>${label}</option>`).join("")}</select></label><div class="contract-errors" ${contract.errors?.length?"":"hidden"}>${esc((contract.errors||[]).join(" · "))}</div><div class="modal-actions"><button type="button" data-close-modal>Vazgeç</button><button type="submit" class="primary-action">Sözleşmeyi kaydet</button></div></form></div>`);}
+$("task-refresh").addEventListener("click",renderTaskCenter);
+$("task-center-list").addEventListener("click",async e=>{const contractButton=e.target.closest("[data-task-contract]");if(contractButton)return openTaskContract(contractButton.dataset.taskContract);const b=e.target.closest("[data-task-action]");if(!b)return;const r=await fetch(`/api/workspace/tasks/${b.dataset.taskId}/${b.dataset.taskAction}`,{method:"POST"});if(!r.ok)alert((await r.json()).error);await renderTaskCenter();await fetchState();});
+$("modal-card").addEventListener("submit",async e=>{if(e.target.id!=="task-contract-form")return;e.preventDefault();const form=e.target,data=Object.fromEntries(new FormData(form));for(const key of ["nonGoals","allowedPaths","forbiddenPaths","acceptanceCriteria","testCommands","approvalBoundaries"])data[key]=String(data[key]||"").split("\n");const button=form.querySelector('[type="submit"]');button.disabled=true;const response=await fetch(`/api/workspace/tasks/${form.dataset.taskId}/contract`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),result=await response.json();button.disabled=false;if(!response.ok)return alert(result.error);closeModal();await renderTaskCenter();});
+$("security-refresh").addEventListener("click",renderSecurityCenter);
+$("update-check").addEventListener("click",checkApplicationUpdate);
+$("update-download").addEventListener("click",async()=>{if(!window.desktopAPI?.downloadUpdate)return;$("update-status").textContent="Güncelleme paketi indiriliyor…";$("update-download").disabled=true;const result=await window.desktopAPI.downloadUpdate();$("update-download").disabled=false;if(result.error){$("update-status").textContent=`İndirme başarısız: ${result.error}`;return;}$("update-status").textContent=`Paket doğrulandı ve Finder’da gösterildi · SHA-256: ${result.sha256.slice(0,12)}…`;});
+$("security-new-skill").addEventListener("click",async()=>{const name=prompt("Yetenek adı","Kod kalite kontrolü");if(!name)return;const version=prompt("Sürüm","1.0.0")||"1.0.0",instructions=prompt("Ajanlara verilecek talimat","")||"",command=prompt("İsteğe bağlı güvenli komut","")||"";const response=await fetch("/api/workspace/skills",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,version,instructions,command})});if(!response.ok)return alert((await response.json()).error);await renderSecurityCenter();});
+$("security-permissions").addEventListener("change",async e=>{const input=e.target.closest("[data-security-permission]");if(!input)return;const projectId=activeProject()?.id||"global";input.disabled=true;try{const response=await fetch("/api/workspace/permissions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId,permissions:{[input.dataset.securityPermission]:input.value}})});if(!response.ok)throw new Error((await response.json()).error||"İzin kaydedilemedi");await renderSecurityCenter();}catch(error){alert(error.message);await renderSecurityCenter();}finally{input.disabled=false;}});
+$("security-skills").addEventListener("change",async e=>{const input=e.target.closest("[data-security-skill]");if(!input)return;await fetch(`/api/workspace/skills/${input.dataset.securitySkill}/enable`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId:activeProject()?.id||"global",enabled:input.checked})});await renderSecurityCenter();});
+$("security-skills").addEventListener("click",async e=>{const button=e.target.closest("[data-delete-skill]");if(!button||!confirm("Yetenek paketi silinsin mi?"))return;await fetch(`/api/workspace/skills/${button.dataset.deleteSkill}`,{method:"DELETE"});await renderSecurityCenter();});
+$("git-refresh").addEventListener("click",renderGitCenter);
+document.querySelectorAll("[data-git-diff]").forEach(button=>button.addEventListener("click",()=>{gitDiffMode=button.dataset.gitDiff;document.querySelectorAll("[data-git-diff]").forEach(x=>x.classList.toggle("active",x===button));renderGitCenter();}));
+$("git-run-test").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const command=prompt("Test komutu",project.testCommand||"npm test");if(!command)return;$("git-test-output").textContent=`$ ${command}\n\nÇalışıyor…`;const response=await fetch(`/api/projects/${project.id}/git/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command})}),result=await response.json();$("git-test-output").textContent=`$ ${command}\n\n${result.output||result.error||"Çıktı yok"}`;await renderTaskCenter();});
+$("git-commit").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const message=prompt("Commit mesajı");if(!message)return;const response=await fetch(`/api/projects/${project.id}/git/commit`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})}),result=await response.json();if(!response.ok)return alert(result.error);await renderGitCenter();});
+let editorFile="";
+function editorProject(){return activeProject();}
+function renderEditorTree(items,depth=0){return(items||[]).map(x=>x.kind==="dir"?`<div class="editor-dir" style="padding-left:${depth*9}px"><small>${esc(x.name)}</small>${renderEditorTree(x.children,depth+1)}</div>`:`<button class="editor-file" style="padding-left:${7+depth*9}px" data-editor-file="${esc(x.path)}">${esc(x.name)}</button>`).join("");}
+async function loadEditorTree(){const p=editorProject();$("editor-new").disabled=!p;$("editor-save").disabled=!p||!editorFile;$("editor-search").disabled=!p;if(!p){$("editor-tree").innerHTML='<div class="skill-empty"><div><span>⌘</span><b>Proje seçin</b><small>Dosya ağacı burada görünecek.</small></div></div>';$("editor-path").textContent="Proje seçilmedi";$("editor-content").value="";$("editor-content").disabled=true;return;}$("editor-content").disabled=false;const data=await fetch(`/api/projects/${p.id}/files/tree`).then(r=>r.json());$("editor-tree").innerHTML=renderEditorTree(data.tree);}
+async function openEditorFile(file){const p=editorProject(),data=await fetch(`/api/projects/${p.id}/files/read?path=${encodeURIComponent(file)}`).then(r=>r.json());if(data.error)return alert(data.error);editorFile=data.path;$("editor-path").textContent=data.path;$("editor-content").value=data.content;$("editor-save").disabled=false;}
+$("editor-tree").addEventListener("click",e=>{const b=e.target.closest("[data-editor-file]");if(b)openEditorFile(b.dataset.editorFile);});
+$("editor-save").addEventListener("click",async()=>{const p=editorProject();if(!p||!editorFile)return;const r=await fetch(`/api/projects/${p.id}/files/write`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:editorFile,content:$("editor-content").value})});if(!r.ok)alert((await r.json()).error);});
+$("editor-new").addEventListener("click",async()=>{const p=editorProject(),name=prompt("Yeni dosya yolu","src/yeni-dosya.js");if(!p||!name)return;const r=await fetch(`/api/projects/${p.id}/files/create`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:name,kind:"file"})});if(!r.ok)return alert((await r.json()).error);await loadEditorTree();openEditorFile(name);});
+$("editor-search").addEventListener("input",async e=>{const p=editorProject(),q=e.target.value.trim();if(!p)return;if(q.length<2)return loadEditorTree();const data=await fetch(`/api/projects/${p.id}/files/search?q=${encodeURIComponent(q)}`).then(r=>r.json());$("editor-tree").innerHTML=(data.results||[]).map(x=>`<button class="editor-file" data-editor-file="${esc(x.path)}">${esc(x.path)}</button>`).join("");});
+function openArtifact(filePath){const project=activeProject();if(!project)return alert("Önce dosyanın bağlı olduğu projeyi seçin.");const src=`/api/project-file?projectId=${encodeURIComponent(project.id)}&path=${encodeURIComponent(filePath)}`;$("preview-title").textContent=filePath.split("/").pop();$("preview-frame").src=src;$("preview-external").href=src;$("preview-empty").hidden=true;openToolPanel("preview");}
+$("preview-refresh").addEventListener("click",()=>{const frame=$("preview-frame");if(frame.src)frame.src=frame.src;});
 function normalizeBrowserUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "http://localhost:4780";
@@ -1200,6 +1392,8 @@ function normalizeBrowserUrl(value) {
 }
 const browserTabs=[];
 let activeBrowserTabId=null;
+let browserDebugEntries=[];
+function addBrowserDebug(kind,text,url=""){browserDebugEntries.push({ts:new Date().toLocaleTimeString("tr-TR"),kind,text:String(text||"").slice(0,2000),url});browserDebugEntries=browserDebugEntries.slice(-300);$("browser-debug-count").textContent=browserDebugEntries.length;$("browser-debug-log").textContent=browserDebugEntries.map(x=>`[${x.ts}] ${x.kind.toUpperCase()} ${x.text}${x.url?`\n  ${x.url}`:""}`).join("\n");}
 const chromeUserAgent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 function activeBrowserTab(){return browserTabs.find((tab)=>tab.id===activeBrowserTabId)||null;}
 function activeBrowserView(){return activeBrowserTab()?.view||null;}
@@ -1208,7 +1402,8 @@ function updateBrowserControls(){const view=activeBrowserView();const url=browse
 function renderBrowserTabs(){const bar=$("browser-tabs");bar.querySelectorAll(".browser-tab").forEach((node)=>node.remove());for(const tab of browserTabs){const button=document.createElement("button");button.type="button";button.className=`browser-tab${tab.id===activeBrowserTabId?" active":""}`;button.dataset.browserTab=tab.id;const title=document.createElement("span");title.className="browser-tab-title";title.textContent=tab.title||"Yeni sekme";const close=document.createElement("span");close.className="browser-tab-close";close.textContent="×";close.title="Sekmeyi kapat";button.append(title,close);bar.insertBefore(button,$("browser-new-tab"));}bar.querySelectorAll("[data-browser-tab]").forEach((button)=>button.addEventListener("click",(event)=>{const id=button.dataset.browserTab;if(event.target.closest(".browser-tab-close"))closeBrowserTab(id);else activateBrowserTab(id);}));}
 function activateBrowserTab(id){const tab=browserTabs.find((item)=>item.id===id);if(!tab)return;activeBrowserTabId=id;for(const item of browserTabs)item.view.hidden=item.id!==id;renderBrowserTabs();updateBrowserControls();try{window.desktopAPI?.setActiveBrowserGuest?.(tab.view.getWebContentsId());}catch{}}
 function closeBrowserTab(id){const index=browserTabs.findIndex((item)=>item.id===id);if(index<0)return;const [tab]=browserTabs.splice(index,1);tab.view.remove();if(activeBrowserTabId===id){const next=browserTabs[Math.min(index,browserTabs.length-1)];activeBrowserTabId=next?.id||null;if(next)activateBrowserTab(next.id);else createBrowserTab("https://www.google.com/");}else renderBrowserTabs();}
-function createBrowserTab(value="https://www.google.com/",{activate=true}={}){const url=normalizeBrowserUrl(value);if(!window.desktopAPI?.isDesktop){navigateBrowser(url);return null;}const id=`tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;const view=document.createElement("webview");view.setAttribute("partition","persist:ajan-browser");view.setAttribute("allowpopups","");view.setAttribute("useragent",chromeUserAgent);view.src=url;view.hidden=true;const tab={id,title:"Yükleniyor…",url,view};browserTabs.push(tab);$("browser-surface").append(view);const sync=(nextUrl)=>{tab.url=nextUrl||browserDisplayUrl(view);if(tab.id===activeBrowserTabId)updateBrowserControls();};view.addEventListener("dom-ready",()=>{try{if(tab.id===activeBrowserTabId)window.desktopAPI?.setActiveBrowserGuest?.(view.getWebContentsId());}catch{}});view.addEventListener("did-start-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="×";});view.addEventListener("did-stop-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="↻";sync();});view.addEventListener("did-navigate",(event)=>sync(event.url));view.addEventListener("did-navigate-in-page",(event)=>sync(event.url));view.addEventListener("page-title-updated",(event)=>{tab.title=event.title||new URL(tab.url).hostname;renderBrowserTabs();});view.addEventListener("did-fail-load",(event)=>{if(event.errorCode===-3)return;$("browser-notice").hidden=false;$("browser-notice").textContent=`Sayfa yüklenemedi: ${event.errorDescription}`;});if(activate)activateBrowserTab(id);else renderBrowserTabs();return tab;}
+function createBrowserTab(value="https://www.google.com/",{activate=true}={}){const url=normalizeBrowserUrl(value);if(!window.desktopAPI?.isDesktop){navigateBrowser(url);return null;}const id=`tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;const view=document.createElement("webview");view.setAttribute("partition","persist:ajan-browser");view.setAttribute("allowpopups","");view.setAttribute("useragent",chromeUserAgent);view.src=url;view.hidden=true;const tab={id,title:"Yükleniyor…",url,view};browserTabs.push(tab);$("browser-surface").append(view);const sync=(nextUrl)=>{tab.url=nextUrl||browserDisplayUrl(view);if(tab.id===activeBrowserTabId)updateBrowserControls();};view.addEventListener("dom-ready",()=>{try{if(tab.id===activeBrowserTabId)window.desktopAPI?.setActiveBrowserGuest?.(view.getWebContentsId());}catch{}});view.addEventListener("console-message",e=>addBrowserDebug(e.level>=2?"error":"console",e.message,e.sourceId));view.addEventListener("render-process-gone",e=>addBrowserDebug("error",`Sayfa işlemi kapandı: ${e.reason}`,tab.url));view.addEventListener("did-start-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="×";});view.addEventListener("did-stop-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="↻";sync();});view.addEventListener("did-navigate",(event)=>sync(event.url));view.addEventListener("did-navigate-in-page",(event)=>sync(event.url));view.addEventListener("page-title-updated",(event)=>{tab.title=event.title||new URL(tab.url).hostname;renderBrowserTabs();});view.addEventListener("did-fail-load",(event)=>{if(event.errorCode===-3)return;addBrowserDebug("network",`${event.errorCode} ${event.errorDescription}`,event.validatedURL);$("browser-notice").hidden=false;$("browser-notice").textContent=`Sayfa yüklenemedi: ${event.errorDescription}`;});if(activate)activateBrowserTab(id);else renderBrowserTabs();return tab;}
+function openFlowBrowser(){openToolPanel('browser');const existing=browserTabs.find((tab)=>/labs\.google\/(?:fx\/[^/]+\/)?tools\/flow/i.test(tab.url||browserDisplayUrl(tab.view)));if(existing){activateBrowserTab(existing.id);return existing;}return createBrowserTab('https://labs.google/fx/tr/tools/flow');}
 function navigateBrowser(value) {
   const url = normalizeBrowserUrl(value);
   $("browser-url").value = url;
@@ -1242,6 +1437,10 @@ $("btn-tool-close").addEventListener("click",()=>$("tool-panel").classList.add("
 document.querySelectorAll("[data-tool-tab]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.toolTab)));
 $("browser-bar").addEventListener("submit", (e) => { e.preventDefault(); navigateBrowser($("browser-url").value); });
 $("browser-new-tab").addEventListener("click",()=>createBrowserTab("https://www.google.com/"));
+$("browser-device").addEventListener("change",e=>{$("browser-surface").classList.remove("device-tablet","device-phone");if(e.target.value!=="desktop")$("browser-surface").classList.add(`device-${e.target.value}`);});
+$("browser-debug-clear").addEventListener("click",()=>{browserDebugEntries=[];$("browser-debug-log").textContent="";$("browser-debug-count").textContent="0";});
+$("browser-capture").addEventListener("click",async()=>{const view=activeBrowserView();if(!view?.capturePage)return alert("Aktif önizleme yok");const image=await view.capturePage();const a=document.createElement("a");a.href=image.toDataURL();a.download=`onizleme-${Date.now()}.png`;a.click();addBrowserDebug("info","Önizleme ekran görüntüsü kaydedildi",browserDisplayUrl(view));});
+$("browser-server-restart").addEventListener("click",async()=>{const p=activeProject();if(!p)return alert("Proje seçin");await fetch(`/api/projects/${p.id}/dev/stop`,{method:"POST"});await new Promise(r=>setTimeout(r,500));const response=await fetch(`/api/projects/${p.id}/dev/start`,{method:"POST"}),result=await response.json();if(!response.ok)return alert(result.error);addBrowserDebug("info",`${result.command} yeniden başlatıldı`);setTimeout(()=>activeBrowserView()?.reload?.(),1200);});
 $("browser-back").addEventListener("click",()=>{try{activeBrowserView()?.goBack();}catch{}});
 $("browser-forward").addEventListener("click",()=>{try{activeBrowserView()?.goForward();}catch{}});
 $("browser-reload").addEventListener("click",()=>{const view=activeBrowserView();if(!view)return;try{view.isLoading()?view.stop():view.reload();}catch{}});
@@ -1353,6 +1552,8 @@ function renderAttachChips() {
   box.querySelectorAll("[data-retry-attach]").forEach((b) => b.addEventListener("click", () => uploadFile(pendingAttachments[Number(b.dataset.retryAttach)].file, Number(b.dataset.retryAttach))));
   renderTopbar();
   renderAttachmentWarning();
+  // Ek satırı kapanınca kompozörün aynı karede doğal yüksekliğine dönmesini sağla.
+  if (box.hidden) requestAnimationFrame(autoGrow);
 }
 
 function renderAttachmentWarning() {
@@ -1444,6 +1645,8 @@ $("viewer-minus").addEventListener("click", () => setViewerScale(viewerScale - .
 $("media-viewer").addEventListener("click", (e) => { if (e.target.id === "media-viewer" || e.target.id === "viewer-stage") closeMedia(); });
 
 document.addEventListener("click", async (e) => {
+  const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=prompt(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
+  const artifact=e.target.closest("[data-artifact-path]");if(artifact){e.preventDefault();openArtifact(artifact.dataset.artifactPath);return;}
   const media = e.target.closest("[data-media-src]");
   if (media) { e.preventDefault(); openMedia(media.dataset.mediaSrc || media.src, media.dataset.mediaName || media.alt, media.dataset.mediaKind || "image"); return; }
   const actions = e.target.closest(".msg-actions");
