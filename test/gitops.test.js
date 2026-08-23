@@ -43,4 +43,11 @@ test("ana uygulama güncel dalı sağlayıcı sandbox'ı olmadan yayınlar",asyn
   const result=await publishCurrentBranch(repo,key);
   assert.equal(result.published,true);assert.equal(result.commits,1);
   assert.equal(git(remote,"rev-parse","--short","main"),result.commit);
+
+  const other=path.join(base,"other");execFileSync("git",["clone","-b","main",remote,other]);
+  fs.writeFileSync(path.join(other,"remote.txt"),"uzak\n");git(other,"add","remote.txt");git(other,"commit","-m","uzak");git(other,"push","origin","main");
+  fs.writeFileSync(path.join(repo,"local.txt"),"yerel\n");git(repo,"add","local.txt");git(repo,"commit","-m","yerel");
+  const merged=await publishCurrentBranch(repo,key);
+  assert.equal(merged.published,true);assert.equal(merged.integratedRemote,true);
+  assert.equal(fs.readFileSync(path.join(repo,"remote.txt"),"utf8"),"uzak\n");
 });

@@ -256,14 +256,14 @@ function renderLive() {
       <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
       <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
     </div>`;
-    return `<div class="msg live-msg from-${esc(meta.cls)}">
+    const statusLabel=s.label ? String(s.label).replace(/\.{2,}$/g,"") : "yanıt hazırlanıyor";
+    return `<div class="msg live-msg live-status-only from-${esc(meta.cls)}">
       <div class="avatar bg-${esc(meta.cls)}">${esc(meta.short)}</div>
       <div class="m-body">
         <div class="m-head">
           <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
-          <span class="lb-live">yazıyor${s.label ? " · " + esc(s.label) : ""}…</span>
+          <span class="lb-live">${esc(statusLabel)}…</span>
         </div>
-        <div class="m-content live-content">${esc(s.text)}<span class="caret">▌</span></div>
       </div>
     </div>`;
   }).join("");

@@ -445,12 +445,13 @@ details.task-msg .task-prompt { margin-top: 8px; white-space: pre-wrap; }
   box-shadow: 0 4px 18px rgba(239,68,68,.4);
 }
 /* canlı yazım balonu */
-.live-msg .m-content { border-style: dashed; }
+.live-msg .m-content { border-style: solid; }
 .live-msg .caret { color: var(--acc2); animation: pulse .8s infinite; font-weight: 700; }
 .live-msg .lb-live {
-  font-size: 10px; color: var(--warn); border: 1px solid rgba(251,191,36,.4);
-  padding: 0 7px; border-radius: 8px;
+  font-size: 11px; color: var(--dim2); border: 0;
+  padding: 0; border-radius: 0;
 }
+.live-status-only{padding:5px 0;opacity:.82}.live-status-only .avatar{width:26px;height:26px;border-radius:8px;font-size:11px}.live-status-only .m-head{gap:8px}.live-status-only .m-body{padding-top:2px}
 
 /* ================= DETAY PANELİ ================= */
 #details {
@@ -741,7 +742,7 @@ body::before { display: none; }
   max-width: 78%; padding: 10px 14px; background: #282925;
   border: 1px solid #343530; border-radius: 15px;
 }
-.live-msg .m-content { padding: 10px 13px; border: 1px dashed #3b3c36; border-radius: 12px; }
+.live-msg .m-content { padding: 10px 13px; border: 0; border-radius: 0; }
 #typing { padding-left: 40px; }
 
 #composer-wrap { padding: 8px 24px 20px; background: linear-gradient(transparent, var(--bg) 30%); }

@@ -65,7 +65,7 @@ export class BaseAgent {
     return Date.now() >= this.cooldownUntil;
   }
 
-  // Canlı akış: kısmi çıktıyı en fazla ~600ms'de bir SSE'ye gönder
+  // Canlı akış: kullanıcıyı her tokenla boğmadan seyrek durum güncellemesi.
   progress(label, text, memberId = null) {
     this._streamBuf = { label, text, memberId };
     if (this._streamTimer) return;
@@ -73,7 +73,7 @@ export class BaseAgent {
       this._streamTimer = null;
       const b = this._streamBuf;
       this.store.streamProgress(b.memberId || this.name, b.label, b.text);
-    }, 600);
+    }, 1800);
   }
 
   _setBusy() {

@@ -154,11 +154,28 @@ export async function publishCurrentBranch(projectDir, deployKey, requestedBranc
   if (requestedBranch && requestedBranch !== branch) throw new Error(`Yalnız açık dal yayınlanabilir (açık: ${branch}, istenen: ${requestedBranch})`);
   const env = { ...process.env, GIT_TERMINAL_PROMPT:"0", GIT_SSH_COMMAND:`ssh -i ${shellQuote(deployKey)} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new` };
   await run("git", ["-C", projectDir, "fetch", "origin", branch], { env, timeout:120_000, maxBuffer:4*1024*1024 });
-  const { stdout:counts } = await run("git", ["-C", projectDir, "rev-list", "--left-right", "--count", `origin/${branch}...${branch}`], { env });
-  const [behind,ahead] = counts.trim().split(/\s+/).map(Number);
-  if (behind > 0) throw new Error(ahead > 0 ? `Yerel ve GitHub dalları ayrışmış (geride ${behind}, ileride ${ahead}); otomatik force-push yapılmadı` : `Yerel dal GitHub'dan ${behind} commit geride; önce güncelleme alınmalı`);
+  let { stdout:counts } = await run("git", ["-C", projectDir, "rev-list", "--left-right", "--count", `origin/${branch}...${branch}`], { env });
+  let [behind,ahead] = counts.trim().split(/\s+/).map(Number);
+  let integratedRemote=false;
+  if (behind > 0) {
+    // Untracked çıktı/yedekler yayını engellemez; yalnız izlenen dosyalardaki
+    // commit edilmemiş değişiklikler güvenli otomatik birleştirmeyi durdurur.
+    try {
+      await run("git",["-C",projectDir,"diff","--quiet"]);
+      await run("git",["-C",projectDir,"diff","--cached","--quiet"]);
+    } catch { throw new Error("GitHub'daki değişikliği birleştirmek için önce izlenen yerel dosyaları commit edin"); }
+    try {
+      await run("git",["-C",projectDir,"merge",ahead>0?"--no-ff":"--ff-only","--no-edit",`origin/${branch}`],{env:{...env,GIT_AUTHOR_NAME:"ajan-konseyi",GIT_AUTHOR_EMAIL:"ajan@local",GIT_COMMITTER_NAME:"ajan-konseyi",GIT_COMMITTER_EMAIL:"ajan@local"},timeout:120_000,maxBuffer:8*1024*1024});
+    } catch(error) {
+      await run("git",["-C",projectDir,"merge","--abort"]).catch(()=>{});
+      throw new Error(`GitHub değişikliği otomatik birleştirilemedi; çalışma ağacı geri alındı: ${String(error.message||error).slice(0,300)}`);
+    }
+    ({stdout:counts}=await run("git",["-C",projectDir,"rev-list","--left-right","--count",`origin/${branch}...${branch}`],{env}));
+    [behind,ahead]=counts.trim().split(/\s+/).map(Number);
+    integratedRemote=true;
+  }
   const { stdout:commit } = await run("git", ["-C", projectDir, "rev-parse", "--short", "HEAD"]);
   if (ahead === 0) return { ok:true, published:false, upToDate:true, branch, commit:commit.trim() };
   await run("git", ["-C", projectDir, "push", "origin", `${branch}:${branch}`], { env, timeout:120_000, maxBuffer:8*1024*1024 });
-  return { ok:true, published:true, branch, commit:commit.trim(), commits:ahead };
+  return { ok:true, published:true, branch, commit:commit.trim(), commits:ahead, integratedRemote };
 }
