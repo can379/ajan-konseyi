@@ -857,10 +857,12 @@ body::before { display: none; }
 #terminal-command { border: 0; background: transparent; box-shadow: none; padding: 7px 2px; font: 12px "JetBrains Mono", monospace; }
 #terminal-form button, #browser-bar button { border: 0; border-radius: 7px; background: #303632; color: #dce1de; padding: 6px 10px; }
 #tool-browser { display: flex; flex-direction: column; background: #fff; }
+#browser-tabs{height:36px;flex:none;display:flex;align-items:end;gap:3px;padding:5px 8px 0;background:#141816;border-bottom:1px solid #303532;overflow-x:auto}#browser-tabs .browser-tab{min-width:110px;max-width:220px;height:31px;display:flex;align-items:center;gap:7px;border:0;border-radius:8px 8px 0 0;padding:0 8px;background:#202522;color:#9da7a1}#browser-tabs .browser-tab.active{background:#303632;color:#f0f3f1}#browser-tabs .browser-tab-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}#browser-tabs .browser-tab-close{font-size:15px;line-height:1;padding:2px 4px;border-radius:5px}#browser-tabs .browser-tab-close:hover{background:#4a504c}#browser-new-tab{flex:none;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:#aeb6b1;font-size:18px}#browser-new-tab:hover{background:#303632}
 #browser-bar { height: 45px; flex: none; display: flex; gap: 7px; align-items: center; padding: 7px 9px; background: #1b1f1d; border-bottom: 1px solid #303532; }
 #browser-url { height: 31px; border-radius: 7px; background: #111412; border-color: #303632; font-size: 12px; }
-#browser-surface { flex: 1; min-height: 0; display: flex; }
+#browser-surface { flex: 1; min-height: 0; display: flex; position:relative; }
 #browser-frame, #browser-surface webview { width: 100%; height: 100%; flex: 1; min-height: 0; border: 0; background: #fff; }
+#browser-surface webview[hidden]{display:none}
 #browser-notice { padding: 8px 12px; background: #2b2519; color: #e9c77d; font-size: 11px; border-top: 1px solid #4a3c22; }
 #browser-share-status{padding:7px 10px;background:#18231f;border-bottom:1px solid #2c4238;color:#b9d8ca;font-size:11px}#browser-share-status button{margin-left:6px}
 .media-grid { display:flex; gap:8px; flex-wrap:wrap; margin-top:9px; }

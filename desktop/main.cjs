@@ -9,6 +9,7 @@ const root = path.resolve(__dirname, "..");
 let serverProcess = null;
 let mainWindow = null;
 let browserGuest = null;
+const browserGuests = new Map();
 let browserPoll = null;
 let browserPollInFlight = false;
 // Açılışı bekleyen komutun beklenen origin'i. Yönlendirme COMMIT EDİLMEDEN
@@ -49,7 +50,12 @@ ipcMain.on("browser-ready",(event,id)=>{
   if(!mainWindow||mainWindow.isDestroyed()||event.sender!==mainWindow.webContents)return;
   browserReadyWaiters.get(String(id))?.();
 });
-async function pollBrowserCommands(){releaseBrowserOriginLockIfExpired();if(browserPollInFlight)return;browserPollInFlight=true;let command;try{const response=await net.fetch("http://127.0.0.1:4780/api/browser/bridge/command",{headers:bridgeHeaders});if(!response.ok)return;({command}=await response.json());if(!command)return;if(command.expiresAt<=Date.now())throw new Error("Tarayıcı izni sona erdi");let result;if(command.action==="open"){expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;await createWindow();if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();app.focus({steal:true});mainWindow.webContents.send("browser-open",{requestId:command.id,url:command.payload.url,origin:command.origin,actor:command.actor,provider:command.provider,expiresAt:command.expiresAt});await waitForBrowserReady(command.id);const guest=await waitForBrowserGuest();await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else{const guest=await waitForBrowserGuest();expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;if(new URL(guest.getURL()).origin!==command.origin)throw new Error("Paylaşılan origin değişti");if(command.action==="snapshot")result=await guest.executeJavaScript(snapshotScript.replace("__ORIGIN__",JSON.stringify(command.origin)),true);else if(command.action==="navigate"){await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else if(command.action==="click"||command.action==="type")result=await guest.executeJavaScript(elementActionScript(command),true);else throw new Error("Desteklenmeyen tarayıcı komutu");}if(new URL(result.url).origin!==command.origin)throw new Error("Origin işlem sırasında değişti");await sendBridgeResult({id:command.id,result});}catch(error){if(command?.id)await sendBridgeResult({id:command.id,error:error.message}).catch(()=>{});}finally{browserPollInFlight=false;}}
+ipcMain.on("browser-active-guest",(event,id)=>{
+  if(!mainWindow||mainWindow.isDestroyed()||event.sender!==mainWindow.webContents)return;
+  const guest=browserGuests.get(Number(id));
+  if(guest&&!guest.isDestroyed())browserGuest=guest;
+});
+async function pollBrowserCommands(){releaseBrowserOriginLockIfExpired();if(browserPollInFlight)return;browserPollInFlight=true;let command;try{const response=await net.fetch("http://127.0.0.1:4780/api/browser/bridge/command",{headers:bridgeHeaders});if(!response.ok)return;({command}=await response.json());if(!command)return;if(command.expiresAt<=Date.now())throw new Error("Tarayıcı izni sona erdi");let result;if(command.action==="open"){expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;await createWindow();if(mainWindow.isMinimized())mainWindow.restore();mainWindow.show();mainWindow.focus();app.focus({steal:true});mainWindow.webContents.send("browser-open",{requestId:command.id,url:command.payload.url,origin:command.origin,actor:command.actor,provider:command.provider,expiresAt:command.expiresAt});await waitForBrowserReady(command.id);const guest=await waitForBrowserGuest();await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else{const guest=await waitForBrowserGuest();expectedBrowserOrigin=command.origin;expectedBrowserOriginUntil=command.expiresAt;if(new URL(guest.getURL()).origin!==command.origin)throw new Error("Paylaşılan origin değişti");if(command.action==="snapshot")result=await guest.executeJavaScript(snapshotScript.replace("__ORIGIN__",JSON.stringify(command.origin)),true);else if(command.action==="navigate"){await guest.loadURL(command.payload.url);result={ok:true,url:guest.getURL()};}else if(command.action==="click"||command.action==="type")result=await guest.executeJavaScript(elementActionScript(command),true);else throw new Error("Desteklenmeyen tarayıcı komutu");}if(new URL(result.url).origin!==command.origin)throw new Error("Origin işlem sırasında değişti");await sendBridgeResult({id:command.id,result});}catch(error){if(command?.id)await sendBridgeResult({id:command.id,error:error.message}).catch(()=>{});}finally{expectedBrowserOrigin=null;expectedBrowserOriginUntil=0;browserPollInFlight=false;}}
 
 function serverReady() {
   return new Promise((resolve) => {
@@ -102,7 +108,7 @@ async function createWindow() {
   // Köprü heartbeat'i webview'e bağlı olamaz: ilk `open` komutu bizzat paneli
   // açıp webview'i hazırlamak zorundadır. Ana arayüz yüklenir yüklenmez dinle.
   mainWindow.webContents.once("did-finish-load",ensureBrowserPoll);
-  mainWindow.webContents.on("did-attach-webview",(_event,guest)=>{browserGuest=guest;guest.setWindowOpenHandler(()=>({action:"deny"}));guest.on("will-navigate",(event,url)=>{if(!browserNavigationAllowed(url))event.preventDefault();});guest.on("will-redirect",(event,url)=>{if(!browserNavigationAllowed(url))event.preventDefault();});guest.session.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));guest.session.on("will-download",(event)=>event.preventDefault());guest.once("destroyed",()=>{browserGuest=null;});ensureBrowserPoll();});
+  mainWindow.webContents.on("did-attach-webview",(_event,guest)=>{browserGuests.set(guest.id,guest);browserGuest=guest;guest.setWindowOpenHandler(({url})=>{if(allowedBrowserUrl(url))mainWindow.webContents.send("browser-new-tab",{url,openerId:guest.id});return{action:"deny"};});guest.on("will-navigate",(event,url)=>{if(!browserNavigationAllowed(url))event.preventDefault();});guest.on("will-redirect",(event,url)=>{if(!browserNavigationAllowed(url))event.preventDefault();});guest.session.setPermissionRequestHandler((_contents,permission,callback)=>callback(["clipboard-sanitized-write","fullscreen"].includes(permission)));guest.session.on("will-download",()=>{});guest.once("destroyed",()=>{browserGuests.delete(guest.id);if(browserGuest===guest)browserGuest=[...browserGuests.values()].find((item)=>!item.isDestroyed())||null;});ensureBrowserPoll();});
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -119,7 +125,7 @@ async function createWindow() {
     items.push({ label:"Görseli Farklı Kaydet…", click:async()=>{ try { const guessed=decodeURIComponent(new URL(src).pathname.split("/").pop()||"gorsel.png"); const result=await dialog.showSaveDialog(mainWindow,{defaultPath:guessed}); if(!result.canceled&&result.filePath) require("node:fs").writeFileSync(result.filePath,await imageBytes()); } catch {} } });
     Menu.buildFromTemplate(items).popup({window:mainWindow});
   });
-  mainWindow.on("closed",()=>{mainWindow=null;browserGuest=null;if(browserPoll)clearInterval(browserPoll);browserPoll=null;});
+  mainWindow.on("closed",()=>{mainWindow=null;browserGuest=null;browserGuests.clear();if(browserPoll)clearInterval(browserPoll);browserPoll=null;});
 }
 
 app.whenReady().then(async () => {

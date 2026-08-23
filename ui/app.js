@@ -1188,7 +1188,7 @@ function openToolPanel(tab) {
   $("tool-terminal").hidden = tab !== "terminal";
   $("tool-browser").hidden = tab !== "browser";
   if (tab === "terminal") $("terminal-command").focus();
-  if (tab === "browser" && $("browser-frame").src === "about:blank") navigateBrowser($("browser-url").value);
+  if (tab === "browser" && !activeBrowserView()) createBrowserTab($("browser-url").value);
 }
 function normalizeBrowserUrl(value) {
   const raw = String(value || "").trim();
@@ -1198,10 +1198,21 @@ function normalizeBrowserUrl(value) {
   if(url.protocol==="https:"||(url.protocol==="http:"&&["localhost","127.0.0.1","::1"].includes(url.hostname)))return url.href;
   throw new Error("Yalnız HTTPS ve yerel HTTP adreslerine izin verilir");
 }
+const browserTabs=[];
+let activeBrowserTabId=null;
+const chromeUserAgent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+function activeBrowserTab(){return browserTabs.find((tab)=>tab.id===activeBrowserTabId)||null;}
+function activeBrowserView(){return activeBrowserTab()?.view||null;}
+function browserDisplayUrl(view){try{return view?.getURL?.()||view?.src||"about:blank";}catch{return view?.src||"about:blank";}}
+function updateBrowserControls(){const view=activeBrowserView();const url=browserDisplayUrl(view);if(url&&url!=="about:blank")$("browser-url").value=url;try{$("browser-back").disabled=!view?.canGoBack?.();$("browser-forward").disabled=!view?.canGoForward?.();}catch{$("browser-back").disabled=true;$("browser-forward").disabled=true;}}
+function renderBrowserTabs(){const bar=$("browser-tabs");bar.querySelectorAll(".browser-tab").forEach((node)=>node.remove());for(const tab of browserTabs){const button=document.createElement("button");button.type="button";button.className=`browser-tab${tab.id===activeBrowserTabId?" active":""}`;button.dataset.browserTab=tab.id;const title=document.createElement("span");title.className="browser-tab-title";title.textContent=tab.title||"Yeni sekme";const close=document.createElement("span");close.className="browser-tab-close";close.textContent="×";close.title="Sekmeyi kapat";button.append(title,close);bar.insertBefore(button,$("browser-new-tab"));}bar.querySelectorAll("[data-browser-tab]").forEach((button)=>button.addEventListener("click",(event)=>{const id=button.dataset.browserTab;if(event.target.closest(".browser-tab-close"))closeBrowserTab(id);else activateBrowserTab(id);}));}
+function activateBrowserTab(id){const tab=browserTabs.find((item)=>item.id===id);if(!tab)return;activeBrowserTabId=id;for(const item of browserTabs)item.view.hidden=item.id!==id;renderBrowserTabs();updateBrowserControls();try{window.desktopAPI?.setActiveBrowserGuest?.(tab.view.getWebContentsId());}catch{}}
+function closeBrowserTab(id){const index=browserTabs.findIndex((item)=>item.id===id);if(index<0)return;const [tab]=browserTabs.splice(index,1);tab.view.remove();if(activeBrowserTabId===id){const next=browserTabs[Math.min(index,browserTabs.length-1)];activeBrowserTabId=next?.id||null;if(next)activateBrowserTab(next.id);else createBrowserTab("https://www.google.com/");}else renderBrowserTabs();}
+function createBrowserTab(value="https://www.google.com/",{activate=true}={}){const url=normalizeBrowserUrl(value);if(!window.desktopAPI?.isDesktop){navigateBrowser(url);return null;}const id=`tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`;const view=document.createElement("webview");view.setAttribute("partition","persist:ajan-browser");view.setAttribute("allowpopups","");view.setAttribute("useragent",chromeUserAgent);view.src=url;view.hidden=true;const tab={id,title:"Yükleniyor…",url,view};browserTabs.push(tab);$("browser-surface").append(view);const sync=(nextUrl)=>{tab.url=nextUrl||browserDisplayUrl(view);if(tab.id===activeBrowserTabId)updateBrowserControls();};view.addEventListener("dom-ready",()=>{try{if(tab.id===activeBrowserTabId)window.desktopAPI?.setActiveBrowserGuest?.(view.getWebContentsId());}catch{}});view.addEventListener("did-start-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="×";});view.addEventListener("did-stop-loading",()=>{if(tab.id===activeBrowserTabId)$("browser-reload").textContent="↻";sync();});view.addEventListener("did-navigate",(event)=>sync(event.url));view.addEventListener("did-navigate-in-page",(event)=>sync(event.url));view.addEventListener("page-title-updated",(event)=>{tab.title=event.title||new URL(tab.url).hostname;renderBrowserTabs();});view.addEventListener("did-fail-load",(event)=>{if(event.errorCode===-3)return;$("browser-notice").hidden=false;$("browser-notice").textContent=`Sayfa yüklenemedi: ${event.errorDescription}`;});if(activate)activateBrowserTab(id);else renderBrowserTabs();return tab;}
 function navigateBrowser(value) {
   const url = normalizeBrowserUrl(value);
   $("browser-url").value = url;
-  const desktopView = $("desktop-browser-view");
+  const desktopView = activeBrowserView();
   const external = /^https?:\/\//i.test(url) && !/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(url);
   if (desktopView) {
     desktopView.src = url;
@@ -1216,12 +1227,7 @@ function navigateBrowser(value) {
   }
 }
 
-if (window.desktopAPI?.isDesktop) {
-  const webview = document.createElement("webview");
-  webview.id = "desktop-browser-view";
-  webview.setAttribute("partition", "persist:ajan-browser");
-  $("browser-surface").replaceChildren(webview);
-}
+if(window.desktopAPI?.isDesktop){$("browser-surface").replaceChildren();createBrowserTab("https://www.google.com/");}
 $("btn-tools").addEventListener("click", (e) => { e.stopPropagation(); $("tool-menu").hidden = !$("tool-menu").hidden; });
 document.querySelectorAll("[data-open-tool]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.openTool)));
 document.querySelectorAll("[data-open-details]").forEach((b) => b.addEventListener("click", () => {
@@ -1235,16 +1241,22 @@ $("btn-open-browser").addEventListener("click", () => { openToolPanel("browser")
 $("btn-tool-close").addEventListener("click",()=>{if(!$("tool-browser").hidden)fetch("/api/browser/stop",{method:"POST",headers:browserUiHeaders});$("tool-panel").classList.add("closed");});
 document.querySelectorAll("[data-tool-tab]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.toolTab)));
 $("browser-bar").addEventListener("submit", (e) => { e.preventDefault(); navigateBrowser($("browser-url").value); });
+$("browser-new-tab").addEventListener("click",()=>createBrowserTab("https://www.google.com/"));
+$("browser-back").addEventListener("click",()=>{try{activeBrowserView()?.goBack();}catch{}});
+$("browser-forward").addEventListener("click",()=>{try{activeBrowserView()?.goForward();}catch{}});
+$("browser-reload").addEventListener("click",()=>{const view=activeBrowserView();if(!view)return;try{view.isLoading()?view.stop():view.reload();}catch{}});
 $("browser-home").addEventListener("click", () => navigateBrowser("http://localhost:4780"));
 $("browser-external").addEventListener("click", () => window.open(normalizeBrowserUrl($("browser-url").value), "_blank", "noopener"));
 const browserUiHeaders={"Content-Type":"application/json","X-Ajan-UI-Token":window.desktopAPI?.uiToken||""};
-$("browser-share").addEventListener("click",async()=>{try{const origin=new URL($("desktop-browser-view")?.getURL()||normalizeBrowserUrl($("browser-url").value)).origin;const response=await fetch("/api/browser/share",{method:"POST",headers:browserUiHeaders,body:JSON.stringify({origin,durationMs:60_000})});const result=await response.json();if(!response.ok)throw new Error(result.error);}catch(error){$("browser-notice").hidden=false;$("browser-notice").textContent=error.message;}});
+$("browser-share").addEventListener("click",async()=>{try{const origin=new URL(browserDisplayUrl(activeBrowserView())||normalizeBrowserUrl($("browser-url").value)).origin;const response=await fetch("/api/browser/share",{method:"POST",headers:browserUiHeaders,body:JSON.stringify({origin,durationMs:60_000})});const result=await response.json();if(!response.ok)throw new Error(result.error);}catch(error){$("browser-notice").hidden=false;$("browser-notice").textContent=error.message;}});
 $("browser-stop-share").addEventListener("click",()=>fetch("/api/browser/stop",{method:"POST",headers:browserUiHeaders}));
 // "hazır" yanıtı YALNIZ requestAnimationFrame'e bağlanmamalı: pencere arka planda
 // veya örtülüyken macOS kare üretmediği için rAF hiç tetiklenmeyebiliyor ve açılış
 // "Tarayıcı paneli hazır olmadı" ile zaman aşımına uğruyordu. Panel kurulumunda bir
 // hata olsa bile yanıt gitmeli; aksi hâlde ajan sonsuza kadar bekler.
 window.desktopAPI?.onBrowserOpen?.((detail)=>{let sent=false;const ready=()=>{if(sent)return;sent=true;try{window.desktopAPI.browserReady(detail.requestId);}catch{}};try{openToolPanel("browser");$("browser-url").value=detail.url;const display=$("browser-share-status");display.hidden=false;display.textContent=`${detail.actor||detail.provider} · ${detail.origin} açılıyor`;}finally{requestAnimationFrame(ready);setTimeout(ready,50);}});
+window.desktopAPI?.onBrowserNewTab?.((detail)=>{try{openToolPanel("browser");createBrowserTab(detail.url);}catch(error){$("browser-notice").hidden=false;$("browser-notice").textContent=error.message;}});
+document.addEventListener("keydown",(event)=>{if(!window.desktopAPI?.isDesktop)return;const mod=event.metaKey||event.ctrlKey;if(mod&&event.key.toLowerCase()==="t"){event.preventDefault();openToolPanel("browser");createBrowserTab("https://www.google.com/");}else if(mod&&event.key.toLowerCase()==="w"&&!$("tool-browser").hidden){event.preventDefault();if(activeBrowserTabId)closeBrowserTab(activeBrowserTabId);}else if(mod&&event.key.toLowerCase()==="l"){event.preventDefault();openToolPanel("browser");$("browser-url").focus();$("browser-url").select();}else if(mod&&event.key.toLowerCase()==="r"&&!$("tool-browser").hidden){event.preventDefault();activeBrowserView()?.reload();}else if(mod&&event.key==="["){event.preventDefault();activeBrowserView()?.goBack();}else if(mod&&event.key==="]"){event.preventDefault();activeBrowserView()?.goForward();}});
 setInterval(async()=>{if(!window.desktopAPI?.isDesktop)return;try{const status=await(await fetch("/api/browser/status")).json();const display=$("browser-share-status");display.replaceChildren();display.hidden=!status.shared&&!status.approval&&!status.opening;$("browser-share").hidden=Boolean(status.shared);$("browser-stop-share").hidden=!status.shared&&!status.opening;if(status.shared||status.opening){const info=status.share||status.active;const text=document.createElement("span");text.textContent=`${info.actor||info.provider||"Ajan"} · ${info.origin||"tarayıcı açılıyor"}${status.share?` · ${Math.max(0,Math.ceil((status.share.expiresAt-Date.now())/1000))} sn`:""}`;display.append(text);}if(status.approval){const prompt=document.createElement("span");prompt.textContent=` ${status.approval.actor}: ${status.approval.action} — ${status.approval.summary} `;display.append(prompt);for(const [label,approved] of [["İzin ver",true],["Reddet",false]]){const button=document.createElement("button");button.textContent=label;button.addEventListener("click",()=>fetch("/api/browser/approve",{method:"POST",headers:browserUiHeaders,body:JSON.stringify({id:status.approval.id,approved})}));display.append(button);}}}catch{}},500);
 let terminalSessionId = null, terminalCursor = 0, terminalPoll = null;
 async function ensureTerminalSession() {

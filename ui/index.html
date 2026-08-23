@@ -209,8 +209,12 @@
       </form>
     </div>
     <div id="tool-browser" class="tool-body" hidden>
+      <div id="browser-tabs" role="tablist"><button type="button" id="browser-new-tab" title="Yeni sekme (⌘T)">＋</button></div>
       <form id="browser-bar">
-        <button type="button" id="browser-home" title="Uygulamayı aç">⌂</button>
+        <button type="button" id="browser-back" title="Geri (⌘[)">←</button>
+        <button type="button" id="browser-forward" title="İleri (⌘])">→</button>
+        <button type="button" id="browser-reload" title="Yenile (⌘R)">↻</button>
+        <button type="button" id="browser-home" title="Ana sayfa">⌂</button>
         <input id="browser-url" value="http://localhost:4780" aria-label="Adres">
         <button type="submit">Git</button>
         <button type="button" id="browser-share">Ajanla paylaş</button>
@@ -219,7 +223,7 @@
       </form>
       <div id="browser-share-status" hidden aria-live="polite"></div>
       <div id="browser-surface">
-        <iframe id="browser-frame" title="Gömülü tarayıcı" src="about:blank" sandbox="allow-forms allow-modals allow-same-origin allow-scripts"></iframe>
+        <iframe id="browser-frame" title="Gömülü tarayıcı" src="about:blank" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts"></iframe>
       </div>
       <div id="browser-notice" hidden></div>
     </div>
