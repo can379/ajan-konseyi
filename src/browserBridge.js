@@ -9,7 +9,11 @@ export class BrowserBridge {
   issueAgentToken({actor,provider,ttlMs=120_000}){const token=crypto.randomBytes(32).toString("base64url");this.agentTokens.set(token,{actor:String(actor).slice(0,80),provider:String(provider).slice(0,40),expiresAt:this.now()+ttlMs,remaining:10});return token;}
   consumeAgentToken(token){const key=String(token||"");const grant=this.agentTokens.get(key);if(!grant||grant.expiresAt<=this.now()||grant.remaining<=0){this.agentTokens.delete(key);return null;}grant.remaining-=1;return grant;}
   grant({origin,durationMs=60_000,actor="",provider=""}){const checked=validateBrowserUrl(origin);if(!checked.ok)throw new Error(checked.reason);this.stop("Yeni tarayıcı paylaşımı başlatıldı");this.share={origin:new URL(checked.url).origin,expiresAt:this.now()+Math.min(Math.max(Number(durationMs)||0,5000),300_000),actor:String(actor).slice(0,80),provider:String(provider).slice(0,40)};this.record("shared",this.share.origin);return this.share;}
-  activeShare(){if(!this.share||this.share.expiresAt<=this.now())this.stop("Tarayıcı paylaşım izni sona erdi");return this.share;}
+  // DİKKAT: yalnız SÜRESİ DOLMUŞ bir paylaşım durdurulur. Paylaşım henüz yokken
+  // stop() çağırmak, işlenmekte olan `open` komutunu iptal ediyordu: paylaşım ancak
+  // açılış tamamlanınca oluştuğu için arayüzün her status sorgusu (bkz. status())
+  // ilk açılışı öldürüyordu.
+  activeShare(){if(this.share&&this.share.expiresAt<=this.now())this.stop("Tarayıcı paylaşım izni sona erdi");return this.share;}
   isConnected(){return this.connectedAt>this.now()-3000;}
   status(){const share=this.activeShare();return{connected:this.isConnected(),shared:Boolean(share),opening:this.active?.action==="open",share,active:this.active,approval:this.approval&&{id:this.approval.id,actor:this.approval.actor,action:this.approval.action,summary:this.approval.summary},events:this.events.slice(-8)};}
   checkOpenRate(agent,origin){const now=this.now();if(this.share?.origin===origin&&this.share.expiresAt>now)return false;const history=(this.openHistory.get(agent.provider)||[]).filter((at)=>at>now-300_000);if(history.some((at)=>at>now-10_000)||history.length>=5){const error=new Error("Tarayıcı açma hız sınırı aşıldı");error.code="RATE_LIMIT";throw error;}history.push(now);this.openHistory.set(agent.provider,history);return true;}
