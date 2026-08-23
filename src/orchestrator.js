@@ -18,7 +18,9 @@ import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuth
 
 const exec = promisify(execFile);
 const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
+const HOST_ACTION_RE=/<<<AJAN_HOST_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
+export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 
 // Orkestratör: konsey ÜYELERİNİ (kullanıcının tanımladığı, her biri bir
 // sağlayıcıya bağlı kişilikler) yönetir. Üye sayısı serbesttir: 3 Codex mimar,
@@ -138,7 +140,8 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
 --- SÖZLEŞME SONU ---`;
     const browserToken=this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
-    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    const hostHelp=`\n\n--- ANA UYGULAMA YAYIN ARACI ---\nKullanıcı açıkça seçili projenin son sürümünü GitHub'a yayınlamanı veya push etmeni isterse sağlayıcı terminalinden git/ssh/gh/curl kullanma ve .command dosyası hazırlama. Yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_HOST_ACTION>>>{"action":"publish","payload":{}}<<<END>>>\nAna uygulama açık dalı kayıtlı deploy key ile yayınlar; force-push yapmaz ve sonucu sana geri verir.\n--- YAYIN ARACI SONU ---`;
+    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}${hostHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     if (route?.mode === "shared") {
       const label = CONNECTORS[route.connector]?.label || route.connector;
       this.store.setAgentStatus(member.id, "busy", `${label} · ortak Codex köprüsü`);
@@ -176,12 +179,23 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     let res = await provider.send(effectivePrompt, providerOpts);
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
-    for(let step=0;res.ok&&browserToken&&step<12;step++){
-      const action=parseBrowserAction(res.text);if(!action)break;
+    for(let step=0;res.ok&&step<12;step++){
+      const browserAction=browserToken&&parseBrowserAction(res.text);
+      const hostAction=parseHostAction(res.text);
+      if(!browserAction&&!hostAction)break;
+      const action=browserAction||hostAction;
       let result;
-      try{result=await this.browserBridge.request({token:browserToken,...action});}
+      try{
+        if(browserAction)result=await this.browserBridge.request({token:browserToken,...browserAction});
+        else{
+          if(!/(?:github|git\b).{0,80}(?:yayın|yayin|push|gönder)|(?:yayınla|yayinla|push et).{0,80}(?:github|repo|proje|sürüm)/i.test(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
+          const projectDir=run.projectDir||process.env.AJAN_KONSEYI_SOURCE_DIR;
+          const deployKey=path.join(this.rootDir,"generated","ajan-konseyi-deploy");
+          result=await gitops.publishCurrentBranch(projectDir,deployKey,String(hostAction.payload.branch||""));
+        }
+      }
       catch(error){result={error:String(error.message||error)};}
-      const followup=`--- UYGULAMA TARAYICI ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının tarayıcı görevini sürdür. Başka bir tarayıcı eylemi gerekiyorsa yalnız AJAN_BROWSER_ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
+      const followup=`--- ANA UYGULAMA ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının görevini sürdür. Başka bir araç eylemi gerekiyorsa ilgili ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
       res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}`:followup,{...providerOpts,fresh:opts.fresh});
     }
     const stopped = run.stopRequested;

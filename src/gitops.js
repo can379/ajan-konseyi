@@ -142,3 +142,23 @@ export async function publishIntegration(projectDir, runId, targetBranch) {
     return { ok: false, branch: targetBranch, error: String(err.message || err).slice(0, 800) };
   }
 }
+
+function shellQuote(value) { return `'${String(value).replace(/'/g, `'\\''`)}'`; }
+
+// Ajan sağlayıcısının sandbox/DNS durumundan bağımsız, ana uygulama sürecinde
+// kayıtlı deploy key ile yalnız mevcut dalı fast-forward güvenliğiyle yayınlar.
+export async function publishCurrentBranch(projectDir, deployKey, requestedBranch = "") {
+  if (!projectDir || !(await isGitRepo(projectDir))) throw new Error("Yayınlanacak Git projesi seçili değil");
+  if (!deployKey || !fs.existsSync(deployKey)) throw new Error("GitHub deploy key bulunamadı");
+  const branch = await currentBranch(projectDir);
+  if (requestedBranch && requestedBranch !== branch) throw new Error(`Yalnız açık dal yayınlanabilir (açık: ${branch}, istenen: ${requestedBranch})`);
+  const env = { ...process.env, GIT_TERMINAL_PROMPT:"0", GIT_SSH_COMMAND:`ssh -i ${shellQuote(deployKey)} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new` };
+  await run("git", ["-C", projectDir, "fetch", "origin", branch], { env, timeout:120_000, maxBuffer:4*1024*1024 });
+  const { stdout:counts } = await run("git", ["-C", projectDir, "rev-list", "--left-right", "--count", `origin/${branch}...${branch}`], { env });
+  const [behind,ahead] = counts.trim().split(/\s+/).map(Number);
+  if (behind > 0) throw new Error(ahead > 0 ? `Yerel ve GitHub dalları ayrışmış (geride ${behind}, ileride ${ahead}); otomatik force-push yapılmadı` : `Yerel dal GitHub'dan ${behind} commit geride; önce güncelleme alınmalı`);
+  const { stdout:commit } = await run("git", ["-C", projectDir, "rev-parse", "--short", "HEAD"]);
+  if (ahead === 0) return { ok:true, published:false, upToDate:true, branch, commit:commit.trim() };
+  await run("git", ["-C", projectDir, "push", "origin", `${branch}:${branch}`], { env, timeout:120_000, maxBuffer:8*1024*1024 });
+  return { ok:true, published:true, branch, commit:commit.trim(), commits:ahead };
+}

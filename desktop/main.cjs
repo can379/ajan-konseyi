@@ -6,6 +6,7 @@ const crypto = require("node:crypto");
 const { SENSITIVE_FIELD_SNIPPET } = require("../src/browserFieldPolicy.cjs");
 
 const root = path.resolve(__dirname, "..");
+const sourceRoot = app.isPackaged ? path.resolve(process.resourcesPath, "../../../../..") : root;
 let serverProcess = null;
 let mainWindow = null;
 let browserGuest = null;
@@ -78,6 +79,7 @@ async function ensureServer() {
       PATH: `${cliPath}${path.delimiter}${process.env.PATH || ""}`,
       ELECTRON_RUN_AS_NODE: "1",
       AJAN_KONSEYI_DATA_DIR: app.getPath("userData"),
+      AJAN_KONSEYI_SOURCE_DIR: sourceRoot,
       AJAN_UI_TOKEN: uiToken,
       AJAN_BROWSER_BRIDGE_TOKEN: bridgeToken,
     },

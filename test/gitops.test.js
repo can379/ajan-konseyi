@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { publishIntegration } from "../src/gitops.js";
+import { publishCurrentBranch, publishIntegration } from "../src/gitops.js";
 
 function git(dir, ...args) {
   return execFileSync("git", ["-C", dir, ...args], {
@@ -30,4 +30,17 @@ test("integration dalı yalnız temiz ve beklenen hedef dala yayınlanır", asyn
 
   fs.writeFileSync(path.join(dir, "kirli.txt"), "x");
   await assert.rejects(() => publishIntegration(dir, "run-test", "main"), /commit edilmemiş/);
+});
+
+test("ana uygulama güncel dalı sağlayıcı sandbox'ı olmadan yayınlar",async(t)=>{
+  const base=fs.mkdtempSync(path.join(os.tmpdir(),"ajan-publish-"));
+  t.after(()=>fs.rmSync(base,{recursive:true,force:true}));
+  const remote=path.join(base,"remote.git"),repo=path.join(base,"repo"),key=path.join(base,"deploy-key");
+  execFileSync("git",["init","--bare",remote]);fs.mkdirSync(repo);fs.writeFileSync(key,"test");
+  git(repo,"init","-b","main");git(repo,"remote","add","origin",remote);
+  fs.writeFileSync(path.join(repo,"a.txt"),"ilk\n");git(repo,"add","a.txt");git(repo,"commit","-m","ilk");git(repo,"push","-u","origin","main");
+  fs.writeFileSync(path.join(repo,"a.txt"),"son\n");git(repo,"commit","-am","son");
+  const result=await publishCurrentBranch(repo,key);
+  assert.equal(result.published,true);assert.equal(result.commits,1);
+  assert.equal(git(remote,"rev-parse","--short","main"),result.commit);
 });
