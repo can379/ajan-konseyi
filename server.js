@@ -9,6 +9,7 @@ import { MODEL_CATALOG, EFFORT_LEVELS } from "./src/models.js";
 import { detectMedia, MAX_UPLOAD_BYTES, PROVIDER_CAPABILITIES } from "./src/media.js";
 import { discoverCapabilities } from "./src/capabilityDiscovery.js";
 import { conversationTitle } from "./src/util.js";
+import { BrowserBridge } from "./src/browserBridge.js";
 import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -21,11 +22,15 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 // Geliştirici modunda env verilmezse mevcut davranış korunur.
 const DATA_ROOT = path.resolve(process.env.AJAN_KONSEYI_DATA_DIR || ROOT);
 const PORT = process.env.PORT || 4780;
+const UI_TOKEN = process.env.AJAN_UI_TOKEN || "";
+const BRIDGE_TOKEN = process.env.AJAN_BROWSER_BRIDGE_TOKEN || "";
 
 fs.mkdirSync(DATA_ROOT, { recursive: true });
 const store = new Store(DATA_ROOT);
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
+const browserBridge = new BrowserBridge({ bridgeToken:BRIDGE_TOKEN });
+orch.browserBridge = browserBridge;
 
 // Kalıcı proje kabukları: cwd, export'lar ve uzun çalışan süreçler komutlar
 // arasında korunur. Çıktı artımlı okunur; masaüstü kapanınca temizlenir.
@@ -87,6 +92,9 @@ function readBody(req) {
   });
 }
 
+function bearer(req) { return String(req.headers.authorization || "").replace(/^Bearer\s+/i, ""); }
+function uiAuthorized(req) { return Boolean(UI_TOKEN && req.headers["x-ajan-ui-token"] === UI_TOKEN); }
+
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/markdown" };
 
 const server = http.createServer(async (req, res) => {
@@ -128,8 +136,19 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && p === "/api/capabilities") {
-      return json(res,200,await discoverCapabilities(url.searchParams.get("refresh")==="1"));
+      const capabilities=structuredClone(await discoverCapabilities(url.searchParams.get("refresh")==="1"));
+      const browser=browserBridge.status();
+      const browserStatus=!browser.connected?"needs-bridge":(browser.shared?"shared-controlled":"agent-open");
+      for(const provider of Object.values(capabilities.providers||{}))provider.native.browser=browserStatus;
+      return json(res,200,capabilities);
     }
+    if(req.method==="GET"&&p==="/api/browser/status")return json(res,200,browserBridge.status());
+    if(req.method==="POST"&&p==="/api/browser/share"){if(!uiAuthorized(req))return json(res,403,{error:"Yetkisiz arayüz isteği"});try{return json(res,200,browserBridge.grant(await readBody(req)));}catch(error){return json(res,400,{error:error.message});}}
+    if(req.method==="POST"&&p==="/api/browser/stop"){if(!uiAuthorized(req))return json(res,403,{error:"Yetkisiz arayüz isteği"});browserBridge.stop();return json(res,200,{ok:true});}
+    if(req.method==="POST"&&p==="/api/browser/approve"){if(!uiAuthorized(req))return json(res,403,{error:"Yetkisiz arayüz isteği"});const body=await readBody(req);return json(res,browserBridge.approve(body.id,Boolean(body.approved))?200:404,{ok:true});}
+    if(req.method==="POST"&&p==="/api/browser/action"){try{const body=await readBody(req);return json(res,200,await browserBridge.request({token:bearer(req),action:body.action,payload:body.payload}));}catch(error){const status=error.code==="RATE_LIMIT"?429:error.code==="POLICY"?400:error.code==="AUTH"?403:409;return json(res,status,{error:error.message});}}
+    if(req.method==="GET"&&p==="/api/browser/bridge/command"){const command=browserBridge.nextCommand(bearer(req));if(command===undefined)return json(res,403,{error:"Yetkisiz köprü"});return json(res,200,{command});}
+    if(req.method==="POST"&&p==="/api/browser/bridge/result"){const body=await readBody(req);const ok=browserBridge.complete(bearer(req),body.id,body.result,body.error);return json(res,ok?200:403,{ok});}
 
     // ---- Kalıcı proje terminali ----
     if (req.method === "POST" && p === "/api/terminal/sessions") {

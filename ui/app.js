@@ -591,7 +591,7 @@ function renderAgentPop() {
       <div class="a-note" style="margin-top:6px;font-size:11.5px;color:var(--dim)">
         Görevleri analiz eder, üyelere dağıtır, tartışmayı yönetir ve raporu yazar.
       </div>
-      <div class="pop-actions"><button class="btn-ghost small" data-pop-close>Kapat</button></div>`;
+      <div class="pop-actions"><button class="btn-gradient small" data-pop-save>Kaydet</button><button class="btn-ghost small" data-pop-close>Kapat</button></div>`;
     return;
   }
   const mem = memberById(popAgent);
@@ -599,8 +599,43 @@ function renderAgentPop() {
   pop.innerHTML = memberCardHTML(mem) + `
     <div class="pop-actions">
       <button class="btn-ghost small" data-dm-agent="${esc(mem.id)}">✉ Bu üyeye yaz</button>
+      <button class="btn-gradient small" data-pop-save>Kaydet</button>
       <button class="btn-ghost small" data-pop-close>Kapat</button>
     </div>`;
+}
+
+async function saveAgentPop() {
+  const pop = $("agent-pop");
+  if (!popAgent || pop.hidden) return;
+  const members = (state.config.members || []).map((member) => ({ ...member }));
+  let coordinator = { ...(state.config.coordinator || {}) };
+  if (popAgent === "koordinator") {
+    const card = pop.querySelector("[data-coord]");
+    coordinator = {
+      provider: card.querySelector("[data-cprovider]").value,
+      model: card.querySelector("[data-cmodel]").value,
+      effort: card.querySelector("[data-ceffort]").value,
+    };
+  } else {
+    const card = pop.querySelector("[data-member]");
+    const index = members.findIndex((member) => member.id === popAgent);
+    if (card && index >= 0) members[index] = {
+      ...members[index],
+      name: card.querySelector("[data-mname]").value.trim() || "Üye",
+      provider: card.querySelector("[data-mprovider]").value,
+      role: card.querySelector("[data-mrole]").value,
+      model: card.querySelector("[data-mmodel]").value,
+      effort: card.querySelector("[data-meffort]").value,
+      enabled: card.querySelector("[data-menable]").checked,
+    };
+  }
+  const response = await fetch("/api/config", {
+    method:"POST", headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ members, coordinator }),
+  });
+  if (!response.ok) throw new Error("Ajan ayarları kaydedilemedi");
+  popAgent = null;
+  await fetchState();
 }
 
 
@@ -943,6 +978,7 @@ document.addEventListener("click", async (e) => {
     renderAgentPop();
     return;
   }
+  if (closest("[data-pop-save]")) { await saveAgentPop(); return; }
   if (closest("[data-pop-close]")) { popAgent = null; renderAgentPop(); return; }
   const dm = closest("[data-dm-agent]");
   if (dm) {
@@ -1071,7 +1107,9 @@ document.addEventListener("change", async (e) => {
     if (custom === null) { render(); return; }
     t.value = custom.trim();
   }
-  await saveMembers();
+  // Yan panel değişiklikleri anında kalıcıdır. Üst bar hızlı paneli ise
+  // kullanıcının açıkça Kaydet demesini bekler.
+  if (!t.closest("#agent-pop")) await saveMembers();
 });
 
 // Üye ekle / sil
@@ -1155,7 +1193,10 @@ function openToolPanel(tab) {
 function normalizeBrowserUrl(value) {
   const raw = String(value || "").trim();
   if (!raw) return "http://localhost:4780";
-  return /^[a-z][a-z\d+.-]*:/i.test(raw) ? raw : `http://${raw}`;
+  const candidate=/^[a-z][a-z\d+.-]*:/i.test(raw)?raw:`https://${raw}`;
+  const url=new URL(candidate);
+  if(url.protocol==="https:"||(url.protocol==="http:"&&["localhost","127.0.0.1","::1"].includes(url.hostname)))return url.href;
+  throw new Error("Yalnız HTTPS ve yerel HTTP adreslerine izin verilir");
 }
 function navigateBrowser(value) {
   const url = normalizeBrowserUrl(value);
@@ -1179,7 +1220,6 @@ if (window.desktopAPI?.isDesktop) {
   const webview = document.createElement("webview");
   webview.id = "desktop-browser-view";
   webview.setAttribute("partition", "persist:ajan-browser");
-  webview.setAttribute("allowpopups", "true");
   $("browser-surface").replaceChildren(webview);
 }
 $("btn-tools").addEventListener("click", (e) => { e.stopPropagation(); $("tool-menu").hidden = !$("tool-menu").hidden; });
@@ -1192,11 +1232,16 @@ document.querySelectorAll("[data-open-details]").forEach((b) => b.addEventListen
 document.addEventListener("click", (e) => { if (!e.target.closest(".tool-menu-wrap")) $("tool-menu").hidden = true; });
 $("btn-open-terminal").addEventListener("click", () => { openToolPanel("terminal"); autoCloseSidebar(); });
 $("btn-open-browser").addEventListener("click", () => { openToolPanel("browser"); autoCloseSidebar(); });
-$("btn-tool-close").addEventListener("click", () => $("tool-panel").classList.add("closed"));
+$("btn-tool-close").addEventListener("click",()=>{if(!$("tool-browser").hidden)fetch("/api/browser/stop",{method:"POST",headers:browserUiHeaders});$("tool-panel").classList.add("closed");});
 document.querySelectorAll("[data-tool-tab]").forEach((b) => b.addEventListener("click", () => openToolPanel(b.dataset.toolTab)));
 $("browser-bar").addEventListener("submit", (e) => { e.preventDefault(); navigateBrowser($("browser-url").value); });
 $("browser-home").addEventListener("click", () => navigateBrowser("http://localhost:4780"));
 $("browser-external").addEventListener("click", () => window.open(normalizeBrowserUrl($("browser-url").value), "_blank", "noopener"));
+const browserUiHeaders={"Content-Type":"application/json","X-Ajan-UI-Token":window.desktopAPI?.uiToken||""};
+$("browser-share").addEventListener("click",async()=>{try{const origin=new URL($("desktop-browser-view")?.getURL()||normalizeBrowserUrl($("browser-url").value)).origin;const response=await fetch("/api/browser/share",{method:"POST",headers:browserUiHeaders,body:JSON.stringify({origin,durationMs:60_000})});const result=await response.json();if(!response.ok)throw new Error(result.error);}catch(error){$("browser-notice").hidden=false;$("browser-notice").textContent=error.message;}});
+$("browser-stop-share").addEventListener("click",()=>fetch("/api/browser/stop",{method:"POST",headers:browserUiHeaders}));
+window.desktopAPI?.onBrowserOpen?.((detail)=>{openToolPanel("browser");$("browser-url").value=detail.url;const display=$("browser-share-status");display.hidden=false;display.textContent=`${detail.actor||detail.provider} · ${detail.origin} açılıyor`;requestAnimationFrame(()=>window.desktopAPI.browserReady(detail.requestId));});
+setInterval(async()=>{if(!window.desktopAPI?.isDesktop)return;try{const status=await(await fetch("/api/browser/status")).json();const display=$("browser-share-status");display.replaceChildren();display.hidden=!status.shared&&!status.approval&&!status.opening;$("browser-share").hidden=Boolean(status.shared);$("browser-stop-share").hidden=!status.shared&&!status.opening;if(status.shared||status.opening){const info=status.share||status.active;const text=document.createElement("span");text.textContent=`${info.actor||info.provider||"Ajan"} · ${info.origin||"tarayıcı açılıyor"}${status.share?` · ${Math.max(0,Math.ceil((status.share.expiresAt-Date.now())/1000))} sn`:""}`;display.append(text);}if(status.approval){const prompt=document.createElement("span");prompt.textContent=` ${status.approval.actor}: ${status.approval.action} — ${status.approval.summary} `;display.append(prompt);for(const [label,approved] of [["İzin ver",true],["Reddet",false]]){const button=document.createElement("button");button.textContent=label;button.addEventListener("click",()=>fetch("/api/browser/approve",{method:"POST",headers:browserUiHeaders,body:JSON.stringify({id:status.approval.id,approved})}));display.append(button);}}}catch{}},500);
 let terminalSessionId = null, terminalCursor = 0, terminalPoll = null;
 async function ensureTerminalSession() {
   const r=await fetch("/api/terminal/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({projectId:activeProjectId()})});

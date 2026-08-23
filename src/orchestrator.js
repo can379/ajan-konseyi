@@ -134,7 +134,9 @@ export class Orchestrator {
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları bağlı proje ya da ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
 --- SÖZLEŞME SONU ---`;
-    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    const browserToken=this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
+    const browserHelp=browserToken?`\n\nGörünür uygulama tarayıcısını gerektiğinde kendin açabilirsin: curl -sS -X POST -H 'Authorization: Bearer ${browserToken}' -H 'Content-Type: application/json' --data '{"action":"open","payload":{"url":"https://example.com"}}' http://127.0.0.1:4780/api/browser/action . Açılış uygulamayı öne getirir ve origin'i 60 saniye paylaşır. Sonra aynı uç noktada snapshot kullan; navigate, click ve type kullanıcı onayı bekler. E-posta/kullanıcı adı, parola, OTP ve ödeme alanlarına yazmak teknik olarak yasaktır; bunları kullanıcı elle doldurur.`:"";
+    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     if (route?.mode === "shared") {
       const label = CONNECTORS[route.connector]?.label || route.connector;
       this.store.setAgentStatus(member.id, "busy", `${label} · ortak Codex köprüsü`);
@@ -749,6 +751,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           prompt: t.prompt, status: "pending", result: null,
           dependsOn: Array.isArray(t.depends_on) ? t.depends_on : [],
           tier: ["fast", "balanced", "strong"].includes(t.model_tier) ? t.model_tier : "balanced",
+          // Aynı yapılandırılmış üye birden fazla göreve atansa bile her görev
+          // ayrı sağlayıcı konuşmasıdır; böylece koordinatör ajan çoğaltabilir.
+          agentInstanceId: uid("agent-"),
         };
       });
       run.reviewRounds = Math.min(plan.review_rounds ?? 1, 2);
@@ -910,6 +915,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
     const opts = {
       label: task.title,
+      sessionKey: `${run.id}#worker#${task.agentInstanceId || task.id}`,
       timeoutMs: agSleeping ? 5 * 60 * 1000 : undefined,
       codeMode: run.mode === "code",
       cwd: worktrees[member.id]?.wtDir || (run.mode !== "code" ? run.projectDir || undefined : undefined),

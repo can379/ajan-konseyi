@@ -213,10 +213,13 @@
         <button type="button" id="browser-home" title="Uygulamayı aç">⌂</button>
         <input id="browser-url" value="http://localhost:4780" aria-label="Adres">
         <button type="submit">Git</button>
+        <button type="button" id="browser-share">Ajanla paylaş</button>
+        <button type="button" id="browser-stop-share" hidden>Durdur</button>
         <button type="button" id="browser-external" title="Sistem tarayıcısında aç">↗</button>
       </form>
+      <div id="browser-share-status" hidden aria-live="polite"></div>
       <div id="browser-surface">
-        <iframe id="browser-frame" title="Gömülü tarayıcı" src="about:blank" sandbox="allow-forms allow-modals allow-popups allow-same-origin allow-scripts allow-downloads"></iframe>
+        <iframe id="browser-frame" title="Gömülü tarayıcı" src="about:blank" sandbox="allow-forms allow-modals allow-same-origin allow-scripts"></iframe>
       </div>
       <div id="browser-notice" hidden></div>
     </div>

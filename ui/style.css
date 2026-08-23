@@ -862,6 +862,7 @@ body::before { display: none; }
 #browser-surface { flex: 1; min-height: 0; display: flex; }
 #browser-frame, #browser-surface webview { width: 100%; height: 100%; flex: 1; min-height: 0; border: 0; background: #fff; }
 #browser-notice { padding: 8px 12px; background: #2b2519; color: #e9c77d; font-size: 11px; border-top: 1px solid #4a3c22; }
+#browser-share-status{padding:7px 10px;background:#18231f;border-bottom:1px solid #2c4238;color:#b9d8ca;font-size:11px}#browser-share-status button{margin-left:6px}
 .media-grid { display:flex; gap:8px; flex-wrap:wrap; margin-top:9px; }
 .media-thumb { width:180px; border:1px solid var(--border-soft); border-radius:10px; background:#191b19; overflow:hidden; color:var(--dim); text-align:left; }
 .media-thumb img { width:100%; height:120px; object-fit:cover; display:block; }
