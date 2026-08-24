@@ -77,6 +77,16 @@ function waitWithSignal(ms, signal) {
   });
 }
 
+function responseText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => {
+    if (typeof part === "string") return part;
+    if (part?.type === "text" || part?.type === "output_text") return String(part.text || "");
+    return "";
+  }).join("");
+}
+
 async function readStream(response, onDelta) {
   if (!response.body?.getReader) return null;
   const reader = response.body.getReader();
@@ -85,6 +95,7 @@ async function readStream(response, onDelta) {
   let text = "";
   let id = null;
   let usage = null;
+  let streamError = null;
   while (true) {
     const { done, value } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream:!done });
@@ -98,14 +109,23 @@ async function readStream(response, onDelta) {
       try { event = JSON.parse(raw); } catch { continue; }
       id ||= event.id || null;
       usage = event.usage || usage;
-      const delta = event?.choices?.[0]?.delta?.content;
-      if (typeof delta === "string" && delta) {
-        text += delta;
+      if (event?.error) {
+        streamError = new Error(event.error.message || "OpenRouter akış hatası");
+        streamError.status = Number(event.error.code || event.error.status) || 0;
+        continue;
+      }
+      const choice = event?.choices?.[0];
+      const delta = responseText(choice?.delta?.content);
+      const completed = responseText(choice?.message?.content);
+      const addition = delta || (!text ? completed : "");
+      if (addition) {
+        text += addition;
         onDelta(text);
       }
     }
     if (done) break;
   }
+  if (streamError && !text.trim()) throw streamError;
   return { id, text, usage:usage || {} };
 }
 
@@ -141,9 +161,9 @@ export class OpenRouterAgent extends BaseAgent {
     this.children.add(cancellation);
     try {
       const retryDelays = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs : DEFAULT_RETRY_DELAYS_MS;
-      let response;
+      let payload;
       for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
-        response = await this.fetchImpl(ENDPOINT, {
+        const response = await this.fetchImpl(ENDPOINT, {
           method:"POST",
           headers:{ Authorization:`Bearer ${apiKey}`, "Content-Type":"application/json", "X-OpenRouter-Title":"Ajan Konseyi" },
           body:JSON.stringify({
@@ -155,18 +175,35 @@ export class OpenRouterAgent extends BaseAgent {
           }),
           signal:controller.signal,
         });
-        if (response.ok) break;
-        const payload = await response.json().catch(() => ({}));
-        const detail = payload?.error?.message || response.statusText;
-        const canRetry = RETRYABLE_STATUS.has(response.status) && attempt < retryDelays.length;
-        if (!canRetry) throw new Error(`OpenRouter ${response.status}: ${detail}`);
-        await waitWithSignal(retryAfterMs(response, retryDelays[attempt]), controller.signal);
+        if (!response.ok) {
+          const errorPayload = await response.json().catch(() => ({}));
+          const detail = errorPayload?.error?.message || response.statusText;
+          const canRetry = RETRYABLE_STATUS.has(response.status) && attempt < retryDelays.length;
+          if (!canRetry) throw new Error(`OpenRouter ${response.status}: ${detail}`);
+          await waitWithSignal(retryAfterMs(response, retryDelays[attempt]), controller.signal);
+          continue;
+        }
+
+        try {
+          payload = await readStream(response, (partial) => { if (!opts.silent) this.progress(opts.label || "", partial, opts.memberId); });
+          // Test doubles and older fetch implementations may not expose a readable stream.
+          if (!payload) payload = await response.json().catch(() => ({}));
+          const candidate = responseText(payload?.text ?? payload?.choices?.[0]?.message?.content);
+          if (candidate.trim()) {
+            payload.text = candidate;
+            break;
+          }
+          if (attempt >= retryDelays.length) throw new Error("Ox Alpha boş yanıt döndürdü");
+        } catch (error) {
+          if (controller.signal.aborted || attempt >= retryDelays.length) throw error;
+          const status = Number(error?.status) || 0;
+          if (status && !RETRYABLE_STATUS.has(status)) throw error;
+        }
+        payload = null;
+        await waitWithSignal(retryDelays[attempt], controller.signal);
       }
-      let payload = await readStream(response, (partial) => { if (!opts.silent) this.progress(opts.label || "", partial, opts.memberId); });
-      // Test doubles and older fetch implementations may not expose a readable stream.
-      if (!payload) payload = await response.json().catch(() => ({}));
-      let text = payload?.text ?? payload?.choices?.[0]?.message?.content;
-      if (typeof text !== "string") throw new Error("Ox Alpha metin yanıtı döndürmedi");
+      let text = responseText(payload?.text ?? payload?.choices?.[0]?.message?.content);
+      if (!text.trim()) throw new Error("Ox Alpha boş yanıt döndürdü");
       // Stealth modeller öz-kimlik sorularında eğitim verilerinden yanlış ürün adı
       // üretebilir. Kullanıcıya yalnız doğrulanabilen sağlayıcı kimliğini gösterin.
       if (identityQuestion && /\b(?:codex|chatgpt|openai|claude|gemini)\b/iu.test(text)) text = verifiedIdentityAnswer(prompt);

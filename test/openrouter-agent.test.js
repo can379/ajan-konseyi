@@ -135,3 +135,61 @@ test("Ox Alpha kalıcı istemci hatalarını yeniden denemez", async () => {
   await assert.rejects(() => agent.invoke("Yanıtla", { retryDelaysMs:[0, 0] }), /OpenRouter 400/);
   assert.equal(calls, 1);
 });
+
+test("Ox Alpha boş başarılı yanıtı tamamlanmış saymayıp yeniden dener", async () => {
+  let calls = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async () => {
+      calls++;
+      return {
+        ok:true,
+        body:null,
+        json:async () => calls === 1
+          ? { choices:[{ message:{ content:"" } }], usage:{} }
+          : { choices:[{ message:{ content:"Gerçek yanıt" } }], usage:{} },
+      };
+    },
+  });
+  const result = await agent.invoke("Yanıtla", { sessionKey:"empty-retry", retryDelaysMs:[0] });
+  assert.equal(calls, 2);
+  assert.equal(result.text, "Gerçek yanıt");
+});
+
+test("Ox Alpha art arda boş yanıt verirse açık hata üretir", async () => {
+  let calls = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async () => {
+      calls++;
+      return { ok:true, body:null, json:async () => ({ choices:[{ message:{ content:[] } }], usage:{} }) };
+    },
+  });
+  await assert.rejects(
+    () => agent.invoke("Yanıtla", { sessionKey:"always-empty", retryDelaysMs:[0, 0] }),
+    /boş yanıt döndürdü/,
+  );
+  assert.equal(calls, 3);
+});
+
+test("Ox Alpha SSE içinde 200 ile gelen sağlayıcı hatasını yeniden dener", async () => {
+  const encoder = new TextEncoder();
+  let calls = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async () => {
+      calls++;
+      const events = calls === 1
+        ? [`data: ${JSON.stringify({ error:{ code:429, message:"Provider returned error" } })}\n\n`, "data: [DONE]\n\n"]
+        : [`data: ${JSON.stringify({ choices:[{ delta:{ content:[{ type:"text", text:"Akış yanıtı" }] } }] })}\n\n`, "data: [DONE]\n\n"];
+      let index = 0;
+      return {
+        ok:true,
+        body:{ getReader:() => ({ read:async () => index < events.length ? { done:false, value:encoder.encode(events[index++]) } : { done:true } }) },
+      };
+    },
+  });
+  const result = await agent.invoke("Yanıtla", { sessionKey:"stream-error", retryDelaysMs:[0] });
+  assert.equal(calls, 2);
+  assert.equal(result.text, "Akış yanıtı");
+});

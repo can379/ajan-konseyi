@@ -14,6 +14,8 @@ import { TIER_MAP, contextWindowFor } from "./models.js";
 import { extractJson, now, truncate, uid, usageDayKey, extractSummary, stripSummaryBlock, summaryContract } from "./util.js";
 import * as gitops from "./gitops.js";
 import { createCheckpoint, pruneAutoCheckpoints, shouldAutoCheckpoint } from "./checkpoints.js";
+import { writeSkillFiles, skillCatalog } from "./skills.js";
+import { findSimilarRepairs, recordRepair, repairHint } from "./repairMemory.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
 import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
 import { analyzeImagesLocally } from "./localVision.js";
@@ -804,6 +806,20 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
   }
 
+  // Yetenek katalogu: gövdeler diske yazılır, isteme yalnız başlık + kısa
+  // açıklama + dosya yolu girer (aşamalı açılım). Yetenek sayısı arttıkça
+  // bağlam maliyeti sabit kalır; ajan gerekeni kendisi okur.
+  skillCatalogFor(run) {
+    const project = run.projectId ? this.config.getProject(run.projectId) : null;
+    if (!project?.skills?.length) return "";
+    try {
+      const entries = writeSkillFiles(this.rootDir, project.id, project.skills);
+      return skillCatalog(entries);
+    } catch {
+      return "";
+    }
+  }
+
   // ---- Bağlam bütçesi izleme ----
   // CLI oturumu her çağrıda TÜM konuşmayı yeniden gönderir; bu yüzden son
   // çağrının (input + önbellekten okunan) toplamı, o oturumun güncel bağlam
@@ -992,7 +1008,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         `Türkçe ve düzgün Markdown ile yanıtla.` +
         (run.projectDir ? ` Bağlı proje: ${run.projectDir}` : "") +
         (this.config.getProject(run.projectId)?.instructions ? `\n\nProje talimatları:\n${this.config.getProject(run.projectId).instructions}` : "") +
-        (this.config.getProject(run.projectId)?.skills?.length ? `\n\nBu projede yeniden kullanılabilir çalışma yetenekleri:\n- ${this.config.getProject(run.projectId).skills.join("\n- ")}` : "") +
+        this.skillCatalogFor(run) +
         (this.projectHistory(run) ? `\n\nProjede önceki sohbetlerden devralınan bağlam:\n${this.projectHistory(run)}` : "") +
         (this.projectContext.readMemory(run.projectId) ? `\n\nKalıcı proje hafızası:\n${truncate(this.projectContext.readMemory(run.projectId),4000)}` : "") +
         (run.sessionHandoff?.[mem.id] ? `\n\nÖnceki oturumundan devir teslim notun:\n${run.sessionHandoff[mem.id]}` : "") +
@@ -1756,9 +1772,16 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
             const fixerId = [...diffs].sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
             const fixer = this.availableMembers().find((m) => m.id === fixerId);
             if (fixer) {
+              // Bu projede daha once cozulmus benzer hatalar varsa ipucu olarak ver.
+              const firstFailure = testResult.output;
+              const priorRepairs = findSimilarRepairs(this.rootDir, run.projectId, firstFailure);
+              if (priorRepairs.length) {
+                S.addMessage(run, { from: "sistem", kind: "info", content: `🧠 Bu hataya benzer ${priorRepairs.length} geçmiş çözüm bulundu; onarım istemine eklendi.` });
+              }
               const fixPrompt = this.roleHeader(fixer, run) +
                 `Birleştirme sonrası testler KIRILDI. Test çıktısı:\n\n${truncate(testResult.output, 6000)}\n\n` +
-                `Bu dizinde çalışıyorsun: ${testDir}\nTestleri geçirecek asgari düzeltmeyi uygula ve ne değiştirdiğini özetle.`;
+                `Bu dizinde çalışıyorsun: ${testDir}\nTestleri geçirecek asgari düzeltmeyi uygula ve ne değiştirdiğini özetle.` +
+                repairHint(priorRepairs);
               const fix = await this.callMember(run, fixer, fixPrompt, {
                 label: "test düzeltme", codeMode: true, cwd: testDir, shouldStop: () => run.stopRequested,
               });
@@ -1773,6 +1796,15 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
                   this.memberMsg(run,fixer,"result",`Test düzeltmesi ${attempt}/3:\n${retry.text}`);
                   testResult=await this.runTests(run,testDir);
                   run.repairHistory.push({attempt,agent:fixer.name,ok:testResult.ok,at:new Date().toISOString()});S.updateRun(run);
+                }
+                // Kirmizi -> yesil olduysa hata imzasi + cozum cifti hafizaya yazilir.
+                if (testResult.ok) {
+                  const lastFix = [...(run.messages || [])].reverse()
+                    .find((m) => m.from === fixer.id && /Test düzeltmesi/.test(String(m.content || "")))?.content || fix.text;
+                  const saved = recordRepair(this.rootDir, run.projectId, {
+                    output: firstFailure, solution: lastFix, agent: fixer.name, command: run.testCommand,
+                  });
+                  if (saved) S.addMessage(run, { from: "sistem", kind: "info", content: "🧠 Bu hata ve çözümü proje onarım hafızasına kaydedildi; benzeri tekrar çıkarsa ajana hatırlatılacak." });
                 }
                 const integrationTask={id:`${run.id}-integration-fix`,title:"Birleştirme sonrası test düzeltmesi",assignee:fixer.id,assigneeName:fixer.name,prompt:"Birleştirme sonrası testleri geçiren asgari düzeltme",status:"done",result:fix.text,tier:"strong",contract:normalizeTaskContract({goal:"Birleştirme sonrası test hatasını gider",nonGoals:["İlgisiz yeniden yapılandırma"],allowedPaths:["**"],forbiddenPaths:[],risk:"high",acceptanceCriteria:["Zorunlu test başarıyla geçer"],testCommands:[run.testCommand],approvalBoundaries:["Hedef dala uygulamadan önce kullanıcı onayı"]})};
                 run.tasks=run.tasks.filter((task)=>task.id!==integrationTask.id);run.tasks.push(integrationTask);S.updateRun(run);

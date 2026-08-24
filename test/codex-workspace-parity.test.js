@@ -19,7 +19,11 @@ test("proje çalışma alanı canlı sunucu çıktı kataloğu ve kontrol noktal
 });
 
 test("proje talimatları yetenekler diff yorumları ve otomatik devam desteklenir",()=>{
-  assert.match(orch,/Proje talimatları/);assert.match(orch,/yeniden kullanılabilir çalışma yetenekleri/);
+  assert.match(orch,/Proje talimatları/);
+  // Yetenekler artik toptan enjekte edilmez: govdeler diske yazilir, isteme
+  // yalniz katalog girer (asamali acilim). Ifade skills.js'e tasindi.
+  assert.match(orch,/skillCatalogFor\(run\)/);
+  assert.match(fs.readFileSync(new URL("../src/skills.js",import.meta.url),"utf8"),/yeniden kullanılabilir çalışma yetenekleri/);
   assert.match(server,/diff-comments/);assert.match(server,/run\.status==="interrupted"&&run\.autoResume/);
   assert.match(app,/data-diff-file/);assert.match(app,/openProjectSettings/);assert.match(app,/function showModal\(html\)/);
 });
