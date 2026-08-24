@@ -2012,8 +2012,101 @@ $("btn-stop").addEventListener("click", () => {
 
 const ta = $("f-request");
 function autoGrow() { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; }
-ta.addEventListener("input", () => { autoGrow(); renderTopbar(); });
+
+// ---- Eğik çizgi komut paleti ----
+// "/" ile başlayan ve henüz boşluk içermeyen girdi palet açar; ok tuşları
+// gezdirir, Enter/Tab seçer, Esc kapatır. Kayıt defteri commands.js'tedir.
+const cmdPalette = $("cmd-palette");
+let cmdMatches = [], cmdIndex = 0;
+
+function updateCmdPalette() {
+  const value = ta.value;
+  const typing = /^\/[a-zçğıöşü-]*$/i.test(value);
+  if (!typing) { cmdPalette.hidden = true; cmdMatches = []; return; }
+  cmdMatches = filterSlashCommands(value);
+  cmdIndex = Math.min(cmdIndex, Math.max(0, cmdMatches.length - 1));
+  if (!cmdMatches.length) {
+    cmdPalette.innerHTML = '<div class="cmd-empty">Komut bulunamadı</div>';
+    cmdPalette.hidden = false;
+    return;
+  }
+  let lastGroup = null, html = "";
+  cmdMatches.forEach((c, i) => {
+    if (c.grup !== lastGroup) { html += `<div class="cmd-group">${esc(c.grup)}</div>`; lastGroup = c.grup; }
+    html += `<button type="button" class="cmd-item ${i === cmdIndex ? "active" : ""}" data-cmd-index="${i}">`
+      + `<b>/${esc(c.cmd)}</b><small>${esc(c.aciklama)}</small><i>${c.tur === "eylem" ? "eylem" : "önek"}</i></button>`;
+  });
+  cmdPalette.innerHTML = html;
+  cmdPalette.hidden = false;
+  cmdPalette.querySelector(".cmd-item.active")?.scrollIntoView({ block: "nearest" });
+}
+
+function runCommandAction(command) {
+  const eylem = command.eylem || "";
+  if (eylem.startsWith("sekme:")) return openToolPanel(eylem.slice(6));
+  if (eylem.startsWith("ayar:")) return openSettingsScreen(eylem.slice(5));
+  if (eylem === "yeniSohbet") return $("btn-new").click();
+  if (eylem === "turuDurdur") return $("btn-stop").click();
+  if (eylem === "projeSec") return $("btn-project").click();
+  if (eylem === "kontrolNoktalari") {
+    const id = activeProjectId();
+    return id ? openCheckpoints(id) : alert("Önce bir proje seçin (📁 Proje seç).");
+  }
+  if (eylem === "mcpBilgi") {
+    return showModal(`<div class="m-head"><h2>MCP sunucu modu</h2><button data-modal-close>×</button></div>
+      <p>Konsey, Claude Code ve Codex içinden araç olarak çağrılabilir. Uygulama açıkken bir kez kaydedin:</p>
+      <pre>claude mcp add ajan-konseyi --scope user -- node ${esc(state.home || "~")}/Desktop/ajan/mcp-server.js\ncodex mcp add ajan-konseyi -- node ${esc(state.home || "~")}/Desktop/ajan/mcp-server.js</pre>
+      <p>Araçlar: <code>uye_sor</code>, <code>konsey_incele</code>, <code>konsey_sor</code>, <code>kosu_durumu</code>, <code>konsey_bilgi</code>.</p>
+      <div class="m-foot"><button data-modal-close>Kapat</button></div>`);
+  }
+  // Sohbet yonetimi seçili sohbet ister
+  const run = selectedRun ? state.runs[selectedRun] : null;
+  if (!run) return alert("Önce bir sohbet seçin.");
+  if (eylem === "yenidenAdlandir") {
+    const title = prompt("Yeni sohbet adı", run.title || "");
+    if (title) patchRun(run.id, { title }).then(fetchState);
+    return;
+  }
+  if (eylem === "sabitle") return patchRun(run.id, { pinned: !run.pinned }).then(fetchState);
+  if (eylem === "arsivle") return patchRun(run.id, { archived: !run.archived }).then(fetchState);
+  if (eylem === "disaAktar") {
+    const a = document.createElement("a");
+    a.href = `/api/runs/${run.id}/export`; a.download = `${run.id}.json`; a.click();
+    return;
+  }
+  if (eylem === "devret") {
+    const target = prompt("Hangi ajana veya konseye devredilsin?", "konsey");
+    if (target) fetch(`/api/runs/${run.id}/transfer`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target, projectId: run.projectId }) })
+      .then((r) => r.json()).then((j) => { if (j.runId) { selectRun(j.runId); fetchState(); } });
+    return;
+  }
+}
+
+function chooseCommand(command) {
+  cmdPalette.hidden = true;
+  if (command.tur === "eylem") { ta.value = ""; autoGrow(); runCommandAction(command); return; }
+  ta.value = `/${command.cmd} `;
+  autoGrow(); ta.focus();
+  // Metinsiz gonderilebilen onekler (/ozetle, /yayinla) hemen gidebilir; yine
+  // de kullanicinin Enter'ina birakilir ki ek yazma sansi kalsin.
+}
+
+cmdPalette.addEventListener("mousedown", (e) => {
+  const item = e.target.closest("[data-cmd-index]");
+  if (!item) return;
+  e.preventDefault();
+  chooseCommand(cmdMatches[Number(item.dataset.cmdIndex)]);
+});
+
+ta.addEventListener("input", () => { autoGrow(); renderTopbar(); cmdIndex = 0; updateCmdPalette(); });
 ta.addEventListener("keydown", (e) => {
+  if (!cmdPalette.hidden && cmdMatches.length) {
+    if (e.key === "ArrowDown") { e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdMatches.length; return updateCmdPalette(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); cmdIndex = (cmdIndex - 1 + cmdMatches.length) % cmdMatches.length; return updateCmdPalette(); }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); return chooseCommand(cmdMatches[cmdIndex]); }
+    if (e.key === "Escape") { cmdPalette.hidden = true; return; }
+  }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
 });
 $("btn-send").addEventListener("click", send);
@@ -2157,17 +2250,40 @@ async function send() {
   if (!text && pendingAttachments.length === 0) return;
   if (pendingAttachments.some((a) => a.uploading)) return alert("Dosyaların yüklenmesi henüz tamamlanmadı.");
   if (pendingAttachments.some((a) => a.error)) return alert("Başarısız dosyayı kaldırın veya yeniden deneyin.");
-  const messageText = text || "Ek dosyaları incele.";
-  const target = $("f-target").value;
+  let messageText = text || "Ek dosyaları incele.";
+  let target = $("f-target").value;
+  let sendMode = currentMode, sendApproach = null;
+
+  // "/" komutu: eylemler burada calisir, onekler yonlendirme/mod/hedef ayarlar.
+  const slash = typeof parseSlashInput === "function" ? parseSlashInput(text) : null;
+  if (slash) {
+    const { command, rest } = slash;
+    cmdPalette.hidden = true;
+    if (command.tur === "eylem") { ta.value = ""; autoGrow(); runCommandAction(command); return; }
+    if (command.uye) {
+      const member = (state.config.members || []).find((m) => m.enabled && m.name === command.uye);
+      if (!member) return alert(`${command.uye} etkin değil.`);
+      if (!rest && !pendingAttachments.length) return alert("Komuttan sonra mesajınızı yazın.");
+      target = member.id;
+      messageText = rest || "Ek dosyaları incele.";
+    } else {
+      if (command.sablon && !command.metinsiz && !rest) return alert("Komuttan sonra içeriği yazın.");
+      if (!command.sablon && !rest && !pendingAttachments.length) return alert("Komuttan sonra mesajınızı yazın.");
+      messageText = ((command.sablon || "") + rest).trim() || "Ek dosyaları incele.";
+      sendMode = command.mode || currentMode;
+      sendApproach = command.approach || null;
+    }
+  }
 
   if (target === "konsey") {
-    if (currentMode === "code" && !activeProjectId())
+    if (sendMode === "code" && !activeProjectId())
       return alert("Kod modu için önce bir proje seçin (📁 Proje seç).");
     // Sohbet akışı: seçili sohbet varsa DEVAM eder, yoksa yeni sohbet açılır
     const body = {
       conversationId: selRun?.kind === "chat" ? selectedRun : null,
       text: messageText,
-      mode: currentMode,
+      mode: sendMode,
+      approach: sendApproach,
       projectId: activeProjectId(),
       testCommand: $("f-test").value,
       maxDebateRounds: $("f-rounds").value,

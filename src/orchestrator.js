@@ -44,6 +44,24 @@ export function isIdentityQuestion(text) {
 // sunucunun kendi dizininde calisiyor, projeyi goremiyor ve ona yazamiyordu.
 // Iki istisna korunur: izole incelemeler yalniz kanit paketiyle calisir ve
 // kod modunda ayri calisma kopyasi olmayan gorevler ana agaca yazmamalidir.
+// Tur yonlendirmesinin saf karari. Uc girdi yarisir:
+//  - forced: kullanicinin "/" komutuyla actikca sectigi kademe (her seyi ezer)
+//  - requestedMemberId: metindeki "@Uye" cagrisi (yalniz auto modda gecerli)
+//  - routed: koordinatorun onerisi
+// Kullanici modu acikca sectiyse ve sonuc konseyse, koordinator baska mod
+// onerse bile KULLANICININ modu korunur; kucuk isler ise quick/pair'e inerek
+// tam turun maliyetinden kacinir (kademeli acilim).
+export function resolveTurnRoute({ mode = "auto", forced = null, requestedMemberId = null, routed = null } = {}) {
+  const explicitMode = ["discussion", "split", "code"].includes(mode) ? mode : null;
+  if (forced === "quick") return { approach: "quick", member_id: requestedMemberId || routed?.member_id || null, explicit: true };
+  if (forced === "pair") return { approach: "pair", member_id: routed?.member_id || null, reviewer_id: routed?.reviewer_id || null, explicit: true };
+  if (forced === "council") return { approach: "council", mode: explicitMode || routed?.mode || "discussion", explicit: true };
+  if (requestedMemberId) return { approach: "quick", member_id: requestedMemberId, explicit: true };
+  if (!routed) return { approach: "council", mode: explicitMode || "discussion" };
+  if (explicitMode && routed.approach === "council") return { ...routed, mode: explicitMode };
+  return routed;
+}
+
 export function resolveMemberCwd(run, opts = {}) {
   if (opts.cwd !== undefined) return opts.cwd;
   if (opts.isolated || opts.noProjectCwd) return undefined;
@@ -1077,6 +1095,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       id: uid("queue-"),
       ts: new Date().toISOString(),
       target: item.target || "konsey",
+      approach: ["quick", "pair", "council"].includes(item.approach) ? item.approach : null,
       text: item.text,
       attachments: item.attachments || [],
       mode: item.mode || "auto",
@@ -1092,7 +1111,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     this.store.updateRun(run);
     queueMicrotask(() => {
       const job = next.target === "konsey"
-        ? this.continueChat(run, next.text, next.attachments, next.mode)
+        ? this.continueChat(run, next.text, next.attachments, next.mode, { approach: next.approach })
         : this.directMessage(run, next.target, next.text, next.attachments);
       job.catch((err) => this.store.addMessage(run, {
         from: "sistem", kind: "error", content: "Sıradaki mesaj işlenemedi: " + String(err.message || err),
@@ -1100,7 +1119,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     });
   }
 
-  async continueChat(run, text, attachments = [], mode = "auto") {
+  async continueChat(run, text, attachments = [], mode = "auto", opts = {}) {
     const S = this.store;
     if (run.turnActive) throw new Error("Bu sohbette bir tur zaten çalışıyor; önce durdurun");
     run.turnActive = true;
@@ -1129,15 +1148,35 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       // calisma kopyalari, inceleme ve kanit kapisi sessizce devre disi
       // kalir. Tek uyeye sormak icin bestecideki hedef secici kullanilir ve
       // o yol buraya hic ugramaz.
-      const requestedMember = mode === "auto" ? this.explicitlyRequestedMember(text, avail) : null;
-      let route;
-      if (requestedMember) {
-        route = { approach: "quick", member_id: requestedMember.id, explicit: true };
-      } else if (mode !== "auto") {
-        route = { approach: "council", mode };
-      } else {
-        route = normalizeRoute(await this.coordinator.routeTurn(run, this.memberListText(avail), ctx), avail.map((m) => m.id));
+      // "/" komutuyla zorlanan kademe her seyi ezer; koordinatore sorulmaz
+      // ("/hizli" tam da koordinator gecikmesinden kacmak icindir).
+      const forced = ["quick", "pair", "council"].includes(opts.approach) ? opts.approach : null;
+      const requestedMember = mode === "auto" && !forced ? this.explicitlyRequestedMember(text, avail) : null;
+      let routed = null;
+      if (!forced && !requestedMember) {
+        // Acik modlarda da koordinator once isin boyutuna bakar: kucuk is
+        // tam konsey torenine girmeden tek uye veya ikili ile biter
+        // (kademeli acilim). Konsey secilirse kullanicinin modu korunur.
+        routed = normalizeRoute(
+          await this.coordinator.routeTurn(run, this.memberListText(avail), ctx,
+            mode !== "auto" ? { selectedMode: mode } : {}),
+          avail.map((m) => m.id));
         this.checkStop(run);
+      }
+      const route = resolveTurnRoute({ mode, forced, requestedMemberId: requestedMember?.id || null, routed });
+      // Kucuk-is yoluna inildiginde kullanici bunu keyfi sanmasin: tek satir
+      // gerekce dusulur ve buyutme kestirmesi hatirlatilir.
+      if (mode !== "auto" && !forced && route.approach !== "council") {
+        S.addMessage(run, { from: "sistem", kind: "info",
+          content: `⚡ ${route.approach === "quick" ? "Hızlı yol" : "İkili yol"}: ${routed?.reason || "iş küçük değerlendirildi"} — tam konsey için mesajı /konsey ile başlatın.` });
+      }
+      // Zorlanan kademede uye secilmemisse: kod isinde kod yazabilen uye,
+      // degilse ilk uygun uye.
+      if (forced && route.approach !== "council" && !route.member_id) {
+        route.member_id = (mode === "code" ? preferredCoder(avail)?.id : null) || avail[0].id;
+      }
+      if (route.approach === "pair" && !route.reviewer_id) {
+        route.reviewer_id = avail.find((m) => m.id !== route.member_id)?.id || null;
       }
 
       if (attachments.length) {

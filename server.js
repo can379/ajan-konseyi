@@ -276,6 +276,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && (p === "/" || p === "/index.html")) {
       return serveFile(res, path.join(ROOT, "ui", "index.html"));
     }
+    // commands.cjs: depo "type: module" oldugu icin testler ancak CJS dosyayi
+    // require edebiliyor; tarayici icin ayni dosya /commands.js olarak sunulur.
+    if (req.method === "GET" && p === "/commands.js") {
+      return serveFile(res, path.join(ROOT, "ui", "commands.cjs"));
+    }
     if (req.method === "GET" && (p === "/app.js" || p === "/style.css" || p === "/studio.css")) {
       return serveFile(res, path.join(ROOT, "ui", p));
     }
@@ -740,10 +745,11 @@ const server = http.createServer(async (req, res) => {
       let run = body.conversationId ? store.getRun(body.conversationId) : null;
       let createdConversation = false;
       if (run && run.kind !== "chat") run = null;
+      const approach = ["quick", "pair", "council"].includes(body.approach) ? body.approach : null;
       if (run?.turnActive || run?.directActive) {
         const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
         const queued = orch.enqueueMessage(run, {
-          target: "konsey", text, mode: chatMode,
+          target: "konsey", text, mode: chatMode, approach,
           attachments: sanitizeAttachments(body.attachments),
         });
         return json(res, 202, { runId: run.id, queued: true, queueId: queued.id });
@@ -771,7 +777,7 @@ const server = http.createServer(async (req, res) => {
       run.budget={enabled:body.budget?.enabled===true,maxCalls:Math.max(1,Math.min(Number(body.budget?.maxCalls)||24,200)),maxTokens:Math.max(1000,Number(body.budget?.maxTokens)||250000),stopped:false,reason:null};
       run.testFirst = !!body.testFirst;
       const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
-      orch.continueChat(run, text, sanitizeAttachments(body.attachments), chatMode)
+      orch.continueChat(run, text, sanitizeAttachments(body.attachments), chatMode, { approach })
         .then(()=>createdConversation?orch.generateConversationTitle(run,text):null)
         .catch(() => {});
       return json(res, 200, { runId: run.id });
