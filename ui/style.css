@@ -1378,3 +1378,21 @@ body.split-resizing iframe,body.split-resizing webview{pointer-events:none!impor
 @media (min-width:761px){
   #workspace { padding-right: 34px; }
 }
+
+
+/* ---- Sürükleyerek boyutlandırma imlece yapışık olsun ---- */
+/* #tool-panel ve #sidebar genişlikte CSS geçişi taşır. Bu geçiş panel
+   açılıp kapanırken doğrudur, ama SÜRÜKLERKEN her ara ölçü de animasyona
+   girdiği için panel fareyi geriden takip ediyordu. Sürükleme boyunca
+   genişlik geçişleri kapatılır; bırakınca yeniden devreye girer. */
+body.split-resizing #tool-panel,
+body.split-resizing #sidebar,
+body.split-resizing #main,
+body.split-resizing #workspace {
+  transition: none !important;
+}
+/* Sürüklerken imleç panelin üstünden geçince metin seçilmesin ve gömülü
+   içerik olayları çalmasın. */
+body.split-resizing * { user-select: none !important; }
+body.split-resizing #tool-panel, body.split-resizing #main { pointer-events: none; }
+body.split-resizing .split-resizer { pointer-events: auto; }

@@ -2231,10 +2231,50 @@ function initializeSplitLayout(){
         const maximum=Math.max(380,window.innerWidth-sidebarWidth-360),width=Math.min(Math.min(980,maximum),Math.max(380,value));root.style.setProperty("--tool-width",`${width}px`);handle.setAttribute("aria-valuenow",String(Math.round(width)));if(persist)localStorage.setItem("ajan.tool.width",String(width));
       }
     };
-    handle.addEventListener("pointerdown",event=>{startX=event.clientX;startWidth=(type==="sidebar"?sidebar:tool).getBoundingClientRect().width;handle.setPointerCapture(event.pointerId);document.body.classList.add("split-resizing");event.preventDefault();});
-    handle.addEventListener("pointermove",event=>{if(!handle.hasPointerCapture(event.pointerId))return;apply(startWidth+(type==="sidebar"?event.clientX-startX:startX-event.clientX),false);});
-    const finish=event=>{if(!handle.hasPointerCapture(event.pointerId))return;handle.releasePointerCapture(event.pointerId);document.body.classList.remove("split-resizing");apply((type==="sidebar"?sidebar:tool).getBoundingClientRect().width,true);};
-    handle.addEventListener("pointerup",finish);handle.addEventListener("pointercancel",finish);
+    // Sürükleme durumu AYRI bir değişkende tutulur. Eskiden hem hareket hem
+    // bitiş "hasPointerCapture" koşuluna bağlıydı; yakalama düşerse (panel
+    // yeniden konumlanır, imleç webview üstüne geçer, pencere odağı gider)
+    // bitiş fonksiyonu erkenden dönüyor, "split-resizing" sınıfı üstte
+    // kalıyor ve fare bırakıldıktan sonra da boyutlandırma sürüyordu.
+    let dragging=false,pointerId=null,pendingFrame=0,pendingValue=0;
+    const flush=()=>{pendingFrame=0;apply(pendingValue,false);};
+    handle.addEventListener("pointerdown",event=>{
+      if(event.button!==undefined&&event.button!==0)return;
+      dragging=true;pointerId=event.pointerId;
+      startX=event.clientX;startWidth=(type==="sidebar"?sidebar:tool).getBoundingClientRect().width;
+      try{handle.setPointerCapture(event.pointerId);}catch{}
+      document.body.classList.add("split-resizing");event.preventDefault();
+    });
+    // Ölçü her fare olayında değil, kare başına bir kez uygulanır: sürükleme
+    // imlece yapışık ilerler, ara ölçümler boşa harcanmaz.
+    const move=event=>{
+      if(!dragging||(pointerId!==null&&event.pointerId!==pointerId))return;
+      pendingValue=startWidth+(type==="sidebar"?event.clientX-startX:startX-event.clientX);
+      if(!pendingFrame)pendingFrame=requestAnimationFrame(flush);
+    };
+    const finish=event=>{
+      if(!dragging)return;
+      dragging=false;
+      if(pendingFrame){cancelAnimationFrame(pendingFrame);pendingFrame=0;}
+      if(pointerId!==null){try{if(handle.hasPointerCapture(pointerId))handle.releasePointerCapture(pointerId);}catch{}}
+      pointerId=null;
+      document.body.classList.remove("split-resizing");
+      if(event&&typeof event.clientX==="number")apply(startWidth+(type==="sidebar"?event.clientX-startX:startX-event.clientX),true);
+      else apply((type==="sidebar"?sidebar:tool).getBoundingClientRect().width,true);
+    };
+    // Bitiş olayları PENCEREDE de dinlenir: fare tutamağın dışında bırakılsa
+    // veya yakalama düşse bile sürükleme mutlaka biter.
+    handle.addEventListener("pointermove",move);
+    window.addEventListener("pointermove",move);
+    handle.addEventListener("pointerup",finish);
+    handle.addEventListener("pointercancel",finish);
+    handle.addEventListener("lostpointercapture",finish);
+    window.addEventListener("pointerup",finish);
+    window.addEventListener("pointercancel",finish);
+    // NOT: pencere "blur" olayina BAGLANMAZ. Surukleme sirasinda gecici odak
+    // kaybi (baska pencere one gelmesi) sahte bir bitis uretip surukleme
+    // ortasinda birakiyordu. Birakmanin her gercek yolu zaten yukaridaki
+    // pointerup/pointercancel/lostpointercapture ile kapsanir.
     handle.addEventListener("dblclick",()=>apply(type==="sidebar"?276:620,true));
     handle.addEventListener("keydown",event=>{if(!["ArrowLeft","ArrowRight"].includes(event.key))return;const current=(type==="sidebar"?sidebar:tool).getBoundingClientRect().width,direction=event.key==="ArrowRight"?1:-1;apply(current+(type==="sidebar"?direction:-direction)*16,true);event.preventDefault();});
   };
