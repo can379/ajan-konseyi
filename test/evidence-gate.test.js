@@ -42,6 +42,27 @@ test("yüksek önem veya başarısız doğrulayıcı kapıyı kapatır",()=>{
   assert.equal(result.passed,false);assert.match(result.reasons.join(" "),/review geçmedi/);assert.match(result.reasons.join(" "),/Doğrulayıcı/);
 });
 
+test("riskli ve itirazlı salt-okunur denetim raporu done olabilir ama merge ve publish olamaz",()=>{
+  const run=fixture(),contract=run.tasks[0].contract;
+  run.mode="discussion";
+  run.reviews.push({taskId:"t1",agreement:2,severity:"yuksek",evidencePacket:"packet",reviewedCommit:"commit",reviewedTree:"tree",contractFingerprint:contract.fingerprint});
+  run.verify={verdict:"riskli"};
+  assert.equal(evaluateEvidenceGate(run,"done",{requireTests:false}).passed,true);
+  assert.equal(evaluateEvidenceGate(run,"merge",{requireTests:false}).passed,false);
+  assert.equal(evaluateEvidenceGate(run,"publish").passed,false);
+});
+
+test("itirazlı review kod koşusunu done aşamasında da engeller",()=>{
+  const run=fixture(),contract=run.tasks[0].contract;
+  run.reviews.push({taskId:"t1",agreement:3,severity:"yuksek",evidencePacket:"packet",reviewedCommit:"commit",reviewedTree:"tree",contractFingerprint:contract.fingerprint});
+  run.tests.push({command:"npm test",ok:true,output:"pass"});
+  run.verify={verdict:"riskli"};
+  const result=evaluateEvidenceGate(run,"done");
+  assert.equal(result.passed,false);
+  assert.match(result.reasons.join(" "),/review geçmedi/);
+  assert.match(result.reasons.join(" "),/Doğrulayıcı/);
+});
+
 test("kod değişikliğiyle geçersizleşen eski review EvidenceGate'i açamaz",()=>{
   const run=fixture(),contract=run.tasks[0].contract;
   run.reviews.push({taskId:"t1",agreement:5,severity:"dusuk",evidencePacket:"eski-paket",reviewedCommit:"eski-commit",contractFingerprint:contract.fingerprint,invalidatedAt:"2026-08-23T00:00:00.000Z"});

@@ -355,7 +355,7 @@ function renderConversations() {
     <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
     <div class="r-meta"><span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
   </div>`).join("") : `<div class="conversation-empty">${query ? "Eşleşen sohbet bulunamadı." : "Henüz sohbet yok."}</div>`;
-  bindRunContextMenu();
+  bindRunContextMenu(el);
 }
 
 function renderCapabilities() {
@@ -447,42 +447,169 @@ function renderProjects() {
       </div>
     </div>`;
   };
-  $("project-list").innerHTML = list.length
+  const listEl = $("project-list");
+  // innerHTML degisimi kaydirma konumunu sifirlarsa satirlar farenin altindan
+  // kayar ve tiklama yanlis satira gider. Konumu render boyunca koruruz.
+  const scroller = listEl.closest(".side-section.grow") || listEl.parentElement;
+  const keepScroll = scroller ? scroller.scrollTop : 0;
+  listEl.innerHTML = list.length
     ? list.map(projectHTML).join("")
     : `<div class="muted">Proje ekleyin; koşular projeye bağlanır ve konsey kaldığı yerden devam eder.</div>`;
+  if (scroller && scroller.scrollTop !== keepScroll) scroller.scrollTop = keepScroll;
   bindProjectContextMenu();
-  bindRunContextMenu();
+  bindRunContextMenu(listEl);
 }
 let runMenuTimer=null;
-function bindRunContextMenu(){
+async function openSidebarRun(id){
+  const run=state.runs[id];
+  if(!run)return;
   const menu=$("run-context-menu");
-  const cancelClose=()=>clearTimeout(runMenuTimer);
-  const close=(delay=120)=>{cancelClose();runMenuTimer=setTimeout(()=>{menu.hidden=true;menu.dataset.runId="";},delay);};
-  for(const row of document.querySelectorAll(".run-item[data-run]")){
-    row.addEventListener("mouseenter",()=>{
-      cancelClose();
-      const rect=row.getBoundingClientRect(),run=state.runs[row.dataset.run];
-      menu.dataset.runId=row.dataset.run;
-      menu.querySelector('[data-run-menu="pin"]').textContent=run?.pinned?"Sabitlemeyi kaldır":"Sabitle";
-      menu.querySelector('[data-run-menu="archive"]').textContent=run?.archived?"Arşivden çıkar":"Arşivle";
-      menu.hidden=false;
-      requestAnimationFrame(()=>{
-        menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+2)}px`;
-        menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;
-      });
-    });
-    row.addEventListener("mouseleave",(event)=>{
-      if(event.relatedTarget===menu||menu.contains(event.relatedTarget))return;
-      close(420);
+  menu.hidden=true;
+  menu.dataset.runId="";
+  if(run.projectId&&run.projectId!==activeProjectId()){
+    await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:run.projectId})});
+  }
+  selectRun(id);
+  showMainView("chat");
+  // Masaustu duzeninde bir proje sohbeti acmak sol paneli kapatmamalidir.
+  // Panel yalniz gercek mobil yerlesimde otomatik kapanir.
+  autoCloseSidebar();
+  await fetchState();
+}
+// ---- Kenar cubugu satir menusu (tek paylasilan bilesen) ----
+// Proje ici ve proje disi sohbetler AYNI denetleyiciyi kullanir. Dinleyiciler
+// satirlara degil, yeniden render'da hayatta kalan sabit koke (#sidebar)
+// baglanir; boylece innerHTML yenilense de ne dinleyici kaybolur ne de
+// coklanir. Hover durumu render sonrasi son fare konumundan geri kazanilir.
+let sidebarMenusBound=false;
+const lastPointer={x:-1,y:-1,inside:false};
+function runMenuEl(){return $("run-context-menu");}
+function projectMenuEl(){return $("project-context-menu");}
+function hideRunMenu(){const m=runMenuEl();if(!m)return;clearTimeout(runMenuTimer);m.hidden=true;m.dataset.runId="";m.classList.remove("opens-left");}
+function hideProjectMenu(){const m=projectMenuEl();if(!m)return;clearTimeout(projectMenuTimer);m.hidden=true;m.dataset.projectId="";m.classList.remove("opens-left");}
+function scheduleHideRunMenu(delay=260){clearTimeout(runMenuTimer);runMenuTimer=setTimeout(hideRunMenu,delay);}
+function scheduleHideProjectMenu(delay=200){clearTimeout(projectMenuTimer);projectMenuTimer=setTimeout(hideProjectMenu,delay);}
+// Menuyu satirin hemen sagina yerlestirir. Satir kapsayicisindan tasarsa bile
+// capa kenar cubugunun gorunur sag kenariyla sinirlanir; boylece menu asla
+// ekranin ortasinda veya alakasiz bir noktada acilmaz.
+function placeMenuNextTo(menu,row){
+  const rect=row.getBoundingClientRect();
+  const sidebar=$("sidebar");
+  const bounds=sidebar&&!sidebar.classList.contains("hidden")?sidebar.getBoundingClientRect():null;
+  const anchorRight=bounds?Math.min(rect.right,bounds.right):rect.right;
+  const anchorLeft=bounds?Math.max(rect.left,bounds.left):rect.left;
+  menu.style.visibility="hidden";
+  menu.hidden=false;
+  const gap=6,pad=10,width=menu.offsetWidth||178,height=menu.offsetHeight||0;
+  const opensLeft=anchorRight+gap+width>window.innerWidth-pad;
+  const x=opensLeft?Math.max(pad,anchorLeft-width-gap):anchorRight+gap;
+  const y=Math.max(pad,Math.min(rect.top-4,window.innerHeight-height-pad));
+  menu.classList.toggle("opens-left",opensLeft);
+  menu.style.left=`${Math.round(x)}px`;
+  menu.style.top=`${Math.round(y)}px`;
+  menu.style.visibility="visible";
+}
+function openRunMenu(row){
+  const menu=runMenuEl();if(!menu||!row)return;
+  hideProjectMenu();
+  clearTimeout(runMenuTimer);
+  const run=state.runs[row.dataset.run];
+  menu.dataset.runId=row.dataset.run;
+  const pin=menu.querySelector('[data-run-menu="pin"]'),archive=menu.querySelector('[data-run-menu="archive"]');
+  if(pin)pin.textContent=run?.pinned?"Sabitlemeyi kaldır":"Sabitle";
+  if(archive)archive.textContent=run?.archived?"Arşivden çıkar":"Arşivle";
+  placeMenuNextTo(menu,row);
+}
+function openProjectRowMenu(row){
+  const menu=projectMenuEl();if(!menu||!row)return;
+  hideRunMenu();
+  clearTimeout(projectMenuTimer);
+  menu.dataset.projectId=row.dataset.proj;
+  placeMenuNextTo(menu,row);
+}
+// Fare hangi satirin uzerindeyse dogru menuyu acar. Alt sohbet HER ZAMAN
+// onceliklidir: proje sohbetine gelindiginde proje menusu asla acilmaz.
+function resolveSidebarHover(target){
+  if(!target||!target.closest)return null;
+  if(target.closest("#run-context-menu"))return{kind:"run-menu"};
+  if(target.closest("#project-context-menu"))return{kind:"project-menu"};
+  const runRow=target.closest(".run-item[data-run]");
+  if(runRow)return{kind:"run",row:runRow};
+  const projRow=target.closest(".project-item[data-proj]");
+  if(projRow)return{kind:"project",row:projRow};
+  return null;
+}
+function applySidebarHover(hit){
+  if(!hit){scheduleHideRunMenu();scheduleHideProjectMenu();return;}
+  if(hit.kind==="run-menu"){clearTimeout(runMenuTimer);hideProjectMenu();return;}
+  if(hit.kind==="project-menu"){clearTimeout(projectMenuTimer);return;}
+  if(hit.kind==="run"){
+    // Ayni satir zaten acikken yeniden konumlandirma yapilmaz; boylece
+    // satir icinde gezinirken menu titremez.
+    if(runMenuEl()?.dataset.runId===hit.row.dataset.run&&!runMenuEl().hidden){clearTimeout(runMenuTimer);hideProjectMenu();return;}
+    openRunMenu(hit.row);return;
+  }
+  if(hit.kind==="project"){
+    if(projectMenuEl()?.dataset.projectId===hit.row.dataset.proj&&!projectMenuEl().hidden){clearTimeout(projectMenuTimer);hideRunMenu();return;}
+    openProjectRowMenu(hit.row);return;
+  }
+}
+// Render sonrasi: DOM yenilendigi icin tarayici mouseenter uretmez. Son fare
+// konumundaki satiri bulup menuyu ayni satira yeniden baglariz.
+function syncSidebarHover(){
+  if(!lastPointer.inside)return;
+  const el=document.elementFromPoint(lastPointer.x,lastPointer.y);
+  const hit=resolveSidebarHover(el);
+  if(!hit){hideRunMenu();hideProjectMenu();return;}
+  if(hit.kind==="run"){openRunMenu(hit.row);return;}
+  if(hit.kind==="project"){openProjectRowMenu(hit.row);return;}
+}
+function bindSidebarMenus(){
+  if(sidebarMenusBound)return;
+  const sidebar=$("sidebar");
+  if(!sidebar)return;
+  sidebarMenusBound=true;
+  for(const menu of [runMenuEl(),projectMenuEl()]){
+    if(menu&&menu.parentElement!==document.body)document.body.appendChild(menu);
+  }
+  const track=(event)=>{lastPointer.x=event.clientX;lastPointer.y=event.clientY;lastPointer.inside=true;};
+  // pointerover/pointerout kabarcik yayilimi yapar; delegasyon bu sayede
+  // satirlar yeniden olusturulsa bile calisir.
+  sidebar.addEventListener("pointerover",(event)=>{track(event);applySidebarHover(resolveSidebarHover(event.target));});
+  sidebar.addEventListener("pointermove",track);
+  sidebar.addEventListener("pointerout",(event)=>{
+    // Satirdan menuye (veya menuden satira) gecerken menu kapanmamalidir.
+    const next=event.relatedTarget;
+    if(next&&resolveSidebarHover(next))return;
+    if(next&&(next.closest?.("#run-context-menu")||next.closest?.("#project-context-menu")))return;
+    scheduleHideRunMenu();scheduleHideProjectMenu();
+  });
+  for(const menu of [runMenuEl(),projectMenuEl()]){
+    if(!menu)continue;
+    menu.addEventListener("pointerover",(event)=>{track(event);clearTimeout(runMenuTimer);clearTimeout(projectMenuTimer);});
+    menu.addEventListener("pointerout",(event)=>{
+      const next=event.relatedTarget;
+      if(next&&(resolveSidebarHover(next)))return;
+      scheduleHideRunMenu(120);scheduleHideProjectMenu(120);
     });
   }
-  menu.onmouseenter=cancelClose;
-  menu.onmouseleave=(event)=>{
-    const row=event.relatedTarget?.closest?.(".run-item[data-run]");
-    if(row?.dataset.run===menu.dataset.runId)return;
-    close();
-  };
+  document.addEventListener("pointermove",(event)=>{lastPointer.x=event.clientX;lastPointer.y=event.clientY;lastPointer.inside=true;},true);
+  // Sohbet satirina tiklama: sohbeti acar ve olayin proje satirina ya da
+  // belge seviyesindeki dinleyicilere tasmasini engeller.
+  sidebar.addEventListener("click",(event)=>{
+    const row=event.target.closest?.(".run-item[data-run]");
+    if(!row)return;
+    event.preventDefault();
+    event.stopPropagation();
+    hideRunMenu();hideProjectMenu();
+    openSidebarRun(row.dataset.run);
+  },true);
 }
+// Render fonksiyonlari bu iki adi cagirmaya devam eder. Artik satir basina
+// dinleyici eklemezler; yalniz tek seferlik baglamayi ve render sonrasi
+// hover tazelemesini tetiklerler (coklanan dinleyici imkansiz).
+function bindRunContextMenu(root){bindSidebarMenus();if(root)syncSidebarHover();}
+function bindProjectContextMenu(){bindSidebarMenus();}
 async function patchRun(id,patch){await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)});await fetchState();}
 async function startProjectPreview(id){await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:id})});const response=await fetch(`/api/projects/${id}/dev/start`,{method:"POST"}),result=await response.json();if(!response.ok)return alert(result.error);openToolPanel("browser");$("browser-notice").hidden=false;$("browser-notice").textContent=`${result.command} başlatılıyor…`;for(let i=0;i<40;i++){await new Promise(r=>setTimeout(r,500));const status=await fetch(`/api/projects/${id}/dev`).then(r=>r.json());if(status.url){createBrowserTab(status.url);$("browser-notice").hidden=true;return;}if(status.alive===false)return alert(`Sunucu kapandı.\n${status.output||""}`);}alert("Sunucu çalışıyor ancak port henüz algılanamadı.");}
 function openProjectSettings(id){const p=state.config.projects.find(x=>x.id===id);if(!p)return;showModal(`<div class="m-head"><h2>${esc(p.name)} · Proje ayarları</h2><button data-modal-close>×</button></div><label class="field">Kalıcı proje talimatları<textarea id="project-instructions" rows="7">${esc(p.instructions||"")}</textarea></label><label class="field">Yeniden kullanılabilir yetenekler <small>Her satıra bir çalışma kuralı veya yetenek yazın.</small><textarea id="project-skills" rows="5">${esc((p.skills||[]).join("\n"))}</textarea></label><label class="field">Geliştirme komutu<input id="project-dev-command" value="${esc(p.devCommand||"")}" placeholder="npm run dev"></label><label class="field artifact-export-setting"><span><input type="checkbox" id="project-artifact-export" ${p.artifactExport?"checked":""}> Konsey kanıtlarını repoya aktar</span><small>Task, handoff, review ve integration sonuçlarını .ajan-konseyi/ altında saklar. Varsayılan olarak kapalıdır.</small></label><div class="m-foot"><button data-modal-close>Vazgeç</button><button class="btn-gradient" data-save-project-settings="${id}">Kaydet</button></div>`);}
@@ -491,15 +618,6 @@ async function openProjectMemory(id){const data=await fetch(`/api/projects/${id}
 function openChatManager(projectId,{trash=false}={}){const runs=Object.values(state.runs).filter(r=>r.kind==="chat"&&r.projectId===projectId&&Boolean(r.deletedAt)===trash);showModal(`<div class="m-head"><h2>${trash?"Çöp kutusu":"Sohbetleri yönet"}</h2><button data-modal-close>×</button></div><div class="m-list chat-manage-list">${runs.map(r=>`<label class="m-item"><input type="checkbox" data-manage-run="${r.id}"><span>${esc(r.title||r.request)}<small>${esc((r.tags||[]).join(", "))}</small></span></label>`).join("")||'<div class="muted">Sohbet yok.</div>'}</div><div class="m-foot"><button data-modal-close>Kapat</button>${trash?'<button data-bulk-chat="restore">Geri yükle</button>':'<button data-bulk-chat="archive">Arşivle</button><button data-bulk-chat="move">Projeye taşı</button><button data-bulk-chat="trash">Çöpe taşı</button>'}</div>`);}
 
 let projectMenuTimer=null;
-function bindProjectContextMenu(){
-  const menu=$("project-context-menu");
-  const close=()=>{clearTimeout(projectMenuTimer);projectMenuTimer=setTimeout(()=>menu.hidden=true,140);};
-  for(const row of document.querySelectorAll(".project-item")){
-    row.addEventListener("mouseenter",()=>{clearTimeout(projectMenuTimer);const rect=row.getBoundingClientRect();menu.dataset.projectId=row.dataset.proj;menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;menu.hidden=false;requestAnimationFrame(()=>{menu.style.left=`${Math.min(innerWidth-menu.offsetWidth-12,rect.right+8)}px`;menu.style.top=`${Math.min(innerHeight-menu.offsetHeight-12,rect.top)}px`;});});
-    row.addEventListener("mouseleave",close);
-  }
-  menu.onmouseenter=()=>clearTimeout(projectMenuTimer);menu.onmouseleave=close;
-}
 
 // ---- Üye kartları: kullanıcı istediği kadar üye ekler (3 Codex mimar vb.) ----
 function modelOptsFor(provider, current) {
@@ -1141,11 +1259,8 @@ document.addEventListener("click", async (e) => {
   // koşu seç
   const runEl = closest("[data-run]");
   if (runEl) {
-    const run=state.runs[runEl.dataset.run];
-    if(run?.projectId&&run.projectId!==activeProjectId()) {
-      await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({activeProject:run.projectId})});
-    }
-    selectRun(runEl.dataset.run); showMainView("chat"); autoCloseSidebar(); fetchState(); return;
+    await openSidebarRun(runEl.dataset.run);
+    return;
   }
 
   const moreProject=closest("[data-more-project]");
@@ -1375,7 +1490,12 @@ document.addEventListener("click", async (e) => {
 // sabit düğmeler
 $("btn-sidebar").addEventListener("click", () => $("sidebar").classList.toggle("hidden"));
 $("btn-side-close").addEventListener("click", () => $("sidebar").classList.add("hidden"));
-function autoCloseSidebar() { if (window.innerWidth < 1100) $("sidebar").classList.add("hidden"); }
+function autoCloseSidebar() {
+  // Electron penceresi Retina/olceklendirme nedeniyle dar CSS pikseli
+  // raporlasa da masaustu uygulamasidir. Otomatik kapanma yalniz tarayicida
+  // gercek mobil yerlesimde uygulanir.
+  if (!window.desktopAPI && window.matchMedia("(max-width: 760px)").matches) $("sidebar").classList.add("hidden");
+}
 $("btn-new").addEventListener("click", async () => {
   // Yeni sohbet proje dışıdır; proje sohbetleri kendi gruplarında kalmaya devam eder.
   if (activeProjectId()) {

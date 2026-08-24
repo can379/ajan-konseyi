@@ -94,9 +94,30 @@ test("üst çubuk ajanları ve hızlı model ayarlarını görünür tutar",()=>
 test("sohbet işlem menüsü fare satırdan menüye geçerken açık kalır",()=>{
   const app=fs.readFileSync(path.resolve("ui/app.js"),"utf8");
   const css=fs.readFileSync(path.resolve("ui/style.css"),"utf8");
-  assert.match(app,/event\.relatedTarget===menu\|\|menu\.contains\(event\.relatedTarget\)/);
-  assert.match(app,/close\(420\)/);
-  assert.match(css,/#run-context-menu:before\{[^}]*left:-8px/);
+  // Satirdan menuye gecerken menu acik kalir (relatedTarget + gecikmeli kapanma).
+  assert.match(app,/const next=event\.relatedTarget/);
+  assert.match(app,/function scheduleHideRunMenu\(delay=260\)/);
+  assert.match(app,/document\.body\.appendChild\(menu\)/);
+  assert.match(app,/const x=opensLeft\?Math\.max\(pad,anchorLeft-width-gap\):anchorRight\+gap/);
+  assert.match(app,/openSidebarRun\(row\.dataset\.run\)/);
+  assert.match(css,/#run-context-menu:before\{[^}]*left:-10px/);
+  assert.match(css,/#run-context-menu\.opens-left:before/);
+  assert.match(css,/#run-context-menu\{position:fixed\}/);
+});
+
+test("proje altı sohbet proje menüsünü açmaz ve masaüstü panelini kapatmaz",()=>{
+  const app=fs.readFileSync(path.resolve("ui/app.js"),"utf8");
+  // Sohbet satiri proje satirindan ONCE cozulur; proje menusu asla acilmaz.
+  assert.match(app,/const runRow=target\.closest\("\.run-item\[data-run\]"\)/);
+  assert.match(app,/if\(runRow\)return\{kind:"run",row:runRow\}/);
+  assert.match(app,/hideProjectMenu\(\)/);
+  assert.match(app,/!window\.desktopAPI && window\.matchMedia\("\(max-width: 760px\)"\)\.matches/);
+  // Yeniden render sonrasi hover tazelenir (dinleyici coklanmadan).
+  assert.match(app,/function syncSidebarHover\(\)/);
+  assert.match(app,/document\.elementFromPoint\(lastPointer\.x,lastPointer\.y\)/);
+  // Tiklama delegasyonla ele alinir ve yayilim durdurulur.
+  assert.match(app,/sidebar\.addEventListener\("click",\(event\)=>\{[\s\S]*?openSidebarRun\(row\.dataset\.run\)/);
+  assert.doesNotMatch(app,/row\.addEventListener\("mouseenter"/);
 });
 
 test("yerel görev bütçesi abonelik kotası sanılmaması için varsayılan olarak kapalıdır",()=>{
