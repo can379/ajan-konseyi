@@ -242,6 +242,33 @@ export class Orchestrator {
   }
 
   // Üye çağrısı: durum rozetini yönetir, kullanım verisini üyeye yazar
+  // ---- Runtime kimlik zarfi ----
+  // Rozet, mesaji kimin URETMESI ISTENDIGINE degil GERCEKTEN kimin urettigine
+  // bakmalidir. Her cagri icin istenen uye, fiilen calisan saglayici/model ve
+  // varsa devir nedeni kaydedilir; UI kimligi bu zarftan okur. Ajanin kendi
+  // metninde "ben Xim" demesi kanit sayilmaz.
+  recordEnvelope(run, { requestedMember, actualProvider, actualModel, label, reason = null, startedAt, ok = true }) {
+    run.envelopes = run.envelopes || [];
+    const envelope = {
+      id: uid("exec-"),
+      requestedMemberId: requestedMember?.id || null,
+      requestedMemberName: requestedMember?.name || null,
+      requestedProvider: requestedMember?.provider || null,
+      actualProvider: actualProvider || requestedMember?.provider || null,
+      actualModel: actualModel || null,
+      substituted: Boolean(actualProvider && requestedMember?.provider && actualProvider !== requestedMember.provider),
+      reason, label: label || null, ok,
+      startedAt: startedAt || new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+    };
+    run.envelopes.push(envelope);
+    if (run.envelopes.length > 400) run.envelopes = run.envelopes.slice(-400);
+    // Kalicilik istege baglidir: zarf zaten run nesnesinde. Minimal bir store
+    // (testler, gomulu kullanim) cagri yolunu dusurmemeli.
+    this.store.saveRun?.(run);
+    return envelope;
+  }
+
   async callMember(run, member, prompt, opts = {}) {
     const used=Object.values(run.usage||{}).reduce((sum,item)=>({calls:sum.calls+(item.calls||0),tokens:sum.tokens+(item.input||0)+(item.output||0)}),{calls:0,tokens:0});
     const budget=run.budget||{enabled:false,maxCalls:24,maxTokens:250000};
@@ -324,6 +351,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       effort: member.effort || undefined,
       onUsage: (u) => { this.accumUsage(run, member.id, u); this.trackSessionContext(run, member, u); },
     };
+    const envStartedAt = new Date().toISOString();
     let res = await provider.send(effectivePrompt, providerOpts);
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
@@ -357,6 +385,16 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
     if (route && res?.raw) res.raw.connectorRoute = route;
+    // Gercekten hangi saglayici/model calisti? Rozet bunu okur.
+    this.recordEnvelope(run, {
+      requestedMember: member,
+      actualProvider: route?.mode === "shared" ? route.provider : member.provider,
+      actualModel: providerOpts?.model || member.model || null,
+      label: opts.label,
+      reason: route?.mode === "shared" ? `ortak bağlayıcı: ${route.connector}` : null,
+      startedAt: envStartedAt,
+      ok: res?.ok !== false,
+    });
     return res;
     } finally {
       // Sağlayıcı, görsel çözümleyici veya araç köprüsü beklenmedik biçimde
@@ -540,6 +578,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Bir sağlayıcı yalnız "oluşturdum" diyerek gerçek dosya döndürmediyse
     // Codex'in yüksek kaliteli raster aracını ortak motor
     // olarak kullan. Yanıt, istenen üyenin aynı mesajında render edilir.
+    // Ortak motor devreye giriyor: bu bir KIMLIK DEVRIDIR. Zarfa yazilir ve
+    // mesajda gorunur kilinir; "Antigravity" rozetiyle Codex ciktisi sunulmaz.
+    run.imageEngineHandoff = run.imageEngineHandoff || {};
     const generator = this.members().find((m) => m.enabled && m.provider === "codex") ||
       this.members().find((m) => m.enabled && m.provider === "antigravity") || {
       id: "shared-image-generator", name: "Ortak Görsel Motoru", provider: "codex", role: "uygulayici", model: "", effort: "",
@@ -558,7 +599,18 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
     // Geçersiz SVG/"yapamam" açıklamasını son mesaja taşımıyoruz; kullanıcı
     // yalnız gerçek üretim sonucunu ve raster önizlemeyi görür.
-    return `İstenen görsel yüksek kaliteli ortak görsel motoruyla oluşturuldu ve doğrulandı.\n\n${this.keepOnlyAssetPaths(generated.text, assets, accepted)}`;
+    // Kimlik devri kaydi: rozet bu bilgiyi okuyup "X motoruyla üretildi" der.
+    run.imageEngineHandoff[requestedMember.id] = {
+      engineProvider: generator.provider, engineName: generator.name, at: new Date().toISOString(),
+    };
+    this.recordEnvelope(run, {
+      requestedMember, actualProvider: generator.provider, actualModel: generator.model || null,
+      label: "görsel üretimi", reason: "ortak görsel motoru", ok: true,
+    });
+    this.store.saveRun?.(run);
+    const engineLabel = generator.provider === requestedMember.provider ? "" :
+      ` (görsel dosyası ${generator.provider} motoruyla üretildi)`;
+    return `İstenen görsel yüksek kaliteli ortak görsel motoruyla oluşturuldu ve doğrulandı${engineLabel}.\n\n${this.keepOnlyAssetPaths(generated.text, assets, accepted)}`;
   }
 
   // Mesaja GERCEK saglayici ve model imzasi eklenir. Uye adi kullanici
@@ -593,9 +645,20 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         .replace(/\b(?:ve|,)?\s*(?:ölçeklenebilir\s+)?vektör\s+SVG\s+format(?:ında|larında)?/gi, "");
       if (!displayContent) displayContent = "Görsel hazır.";
     }
+    // Boş balon kullanıcı için sessiz başarısızlıktır: ne yanıt ne hata görür.
+    // Sağlayıcı metin de dosya da üretmediyse bunu görünür bir hataya çevir.
+    if (!String(displayContent).trim() && !attachments.length) {
+      this.log(`${member.provider}/${member.name} boş yanıt döndürdü (kind=${kind})`);
+      this.store.addMessage(run, { from: "sistem", kind: "error",
+        content: `${member.name} boş yanıt döndürdü (sağlayıcı: ${member.provider}); mesaj yazılmadı. İsteği daraltıp yeniden deneyin.` });
+      return [];
+    }
     this.store.addMessage(run, {
       from: member.id, fromLabel: member.name, provider: member.provider,
       model: this.memberSignature(member).model,
+      // Görsel ortak motorla üretildiyse gerçek üretici mesajda taşınır.
+      engineProvider: (attachments.some((a) => a.kind === "image") && run.imageEngineHandoff?.[member.id]?.engineProvider !== member.provider)
+        ? run.imageEngineHandoff?.[member.id]?.engineProvider || null : null,
       kind, taskId, content: displayContent, attachments, summary,
     });
     return attachments;
@@ -772,6 +835,47 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
   checkStop(run) {
     if (run.stopRequested) throw new Error("Kullanıcı durdurdu");
+  }
+
+  // Kapı bir DURDURMA NOKTASIDIR, idam değil. Engel sebeplerinden hangi adımın
+  // eksik olduğu çıkarılır ve YALNIZ o adım tekrarlanır; tamamlanmış görevler,
+  // tartışma ve oylama korunur. Böylece bir konsey koşusunun tamamı çöpe gitmez.
+  async repairEvidenceGap(run, reasons, worktrees = {}) {
+    const S = this.store;
+    let repaired = false;
+
+    // (a) Eksik/başarısız review: yalnız o görevin incelemesi yeniden yapılır.
+    const taskIds = [...new Set(reasons
+      .map((reason) => /^\[([\w.-]+)\]/.exec(String(reason))?.[1])
+      .filter(Boolean))];
+    for (const taskId of taskIds) {
+      const task = (run.tasks || []).find((item) => item.id === taskId && item.status === "done");
+      if (!task) continue;
+      S.addMessage(run, { from: "sistem", kind: "info", content: `↻ [${taskId}] kanıt eksiği için yalnız bu görevin bağımsız incelemesi yenileniyor.` });
+      run.reviews = (run.reviews || []).filter((review) => review.taskId !== taskId);
+      await this.reviewTask(run, task, worktrees);
+      repaired = true;
+      if (run.stopRequested) return repaired;
+    }
+
+    // (b) Zorunlu test çalışmamış/başarısız: testi tekrar çalıştır.
+    const testReasons = reasons.filter((reason) => /Zorunlu test/.test(String(reason)));
+    if (testReasons.length && run.testCommand) {
+      const testDir = path.join(S.runsDir, run.id, "worktrees", "_integration");
+      const dir = fs.existsSync(testDir) ? testDir : (run.projectDir || this.rootDir);
+      S.addMessage(run, { from: "sistem", kind: "info", content: "↻ Zorunlu test kanıtı eksik; test yeniden çalıştırılıyor." });
+      await this.runTests(run, dir);
+      repaired = true;
+    }
+
+    // (c) Doğrulayıcı turu geçmedi: yalnız doğrulama (ve düzeltme) turu yenilenir.
+    if (reasons.some((reason) => /Doğrulayıcı turu geçmedi/.test(String(reason)))) {
+      S.addMessage(run, { from: "sistem", kind: "info", content: "↻ Doğrulayıcı turu yenileniyor (tartışma ve oylama korunuyor)." });
+      run.verify = null;
+      await this.verifyRound(run, worktrees);
+      repaired = true;
+    }
+    return repaired;
   }
 
   enforceEvidenceGate(run,action,options){
@@ -1315,7 +1419,18 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "decision", content: `KARAR: ${fin.decision}\n\nGerekçe: ${fin.rationale}` });
     this.projectContext.appendMemory(run.projectId, run, fin.decision);
     if (!chatTurn) {
-      const doneGate=this.enforceEvidenceGate(run,"done",{requireTests:run.mode==="code"});
+      // Kapı takılırsa koşuyu öldürme: eksik adımı onar ve yeniden dene.
+      let doneGate = null;
+      for (let attempt = 1; attempt <= 3 && !doneGate; attempt++) {
+        try {
+          doneGate = this.enforceEvidenceGate(run, "done", { requireTests: run.mode === "code" });
+        } catch (error) {
+          if (!(error instanceof EvidenceGateError) || attempt === 3 || run.stopRequested) throw error;
+          S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "info", content: `Kanıt kapısı takıldı (${attempt}/3). Tüm koşu iptal edilmiyor; yalnız eksik adım yenileniyor.` });
+          const repaired = await this.repairEvidenceGap(run, error.reasons || [], worktrees);
+          if (!repaired) throw error;
+        }
+      }
       S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate tamamlanma için geçti · ${doneGate.evidence.reviews.length} review kanıtı`});
       S.updateRun(run, { status: "done", phase: "done" });
       this.exportArtifacts(run,"done");

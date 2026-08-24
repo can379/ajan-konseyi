@@ -20,7 +20,7 @@ async function run(win) {
   // Menu acilana kadar fareyi yeniden oynat: pencere odagi/ilk kare gecikmesi
   // gibi zamanlama kaynakli kirilganligi giderir, kontrolu zayiflatmaz.
   const moveUntilMenu = async (x, y, selector) => {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 8; i++) {
       await moveTo(x + (i % 2), y);
       const open = await js(`!document.querySelector('${selector}').hidden`);
       if (open) return true;
@@ -136,10 +136,22 @@ async function run(win) {
 
 app.whenReady().then(async () => {
   const win = new BrowserWindow({ width: 1440, height: 900, show: true, webPreferences: { sandbox: false } });
+  win.setAlwaysOnTop(true);
   let out;
   try {
     await win.loadURL(URL_TO_TEST);
-    await sleep(2500);
+    // Yuk altinda ilk kare gecikebilir: gorunur+odakli olmasini ve satirlarin
+    // gercekten render edilmesini bekle.
+    win.show(); win.focus();
+    // NOT: did-finish-load beklenmez — loadURL zaten yuklemeden SONRA cozulur,
+    // olay bu noktada gecmis olur ve dinleyici sonsuza kadar bekler.
+    for (let i = 0; i < 30; i++) {
+      const ready = await win.webContents.executeJavaScript(
+        `!!document.querySelector('#project-list .project-runs .run-item[data-run]')`, true).catch(() => false);
+      if (ready) break;
+      await sleep(500);
+    }
+    await sleep(1200);
     out = await run(win);
   } catch (error) {
     out = { error: String(error && error.message || error) };

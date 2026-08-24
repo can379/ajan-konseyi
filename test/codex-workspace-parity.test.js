@@ -53,7 +53,12 @@ test("git ve test merkezi dal durumu diff log commit ve test çalıştırmayı s
   assert.match(app,/renderGitCenter/);assert.match(html,/data-tool-tab="git"/);assert.match(html,/git-test-output/);
 });
 test("EvidenceGate review ve zorunlu kontroller geçmeden merge publish done işlemlerini engeller",()=>{
-  assert.match(orch,/enforceEvidenceGate\(run,"merge"/);assert.match(orch,/enforceEvidenceGate\(run,"publish"/);assert.match(orch,/enforceEvidenceGate\(run,"done"/);
+  assert.match(orch,/enforceEvidenceGate\(run,"merge"/);assert.match(orch,/enforceEvidenceGate\(run,"publish"/);
+  assert.match(orch,/enforceEvidenceGate\(run, "done"/);
+  // Kapi artik kosuyu oldurmez: eksik adim onarilip yeniden denenir, onarim
+  // mumkun degilse hata yine yukselir (kapi gevsetilmedi).
+  assert.match(orch,/await this\.repairEvidenceGap\(run, error\.reasons/);
+  assert.match(orch,/if \(!repaired\) throw error/);
 });
 test("review sonrası değişiklik tree kimliğiyle eski onayı geçersiz kılar ve tekrar inceletir",()=>{
   assert.match(orch,/revalidateChangedReviews/);assert.match(orch,/invalidateStaleReviews/);assert.match(orch,/reviewedTree/);

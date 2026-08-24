@@ -2,7 +2,13 @@ import fs from "node:fs";
 import { BaseAgent } from "./base.js";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
+// stealth/ox-alpha bir AKIL YURUTME modelidir: "reasoning" tokenlari da
+// max_tokens butcesinden dusulur. Dar bir butce uzun analiz isteklerinde
+// tamamen dusunmeye harcanir, content bos kalir ve model finish_reason="length"
+// ile biter. Butceyi modelin 1M baglamina yarasir bicimde genis tut.
+const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
+const IDENTITY_MAX_OUTPUT_TOKENS = 4_000;
+const MAX_OUTPUT_TOKENS_CEILING = 128_000;
 const DEFAULT_HISTORY_CHARS = 24_000;
 const DEFAULT_RETRY_DELAYS_MS = [1_200, 2_500, 5_000];
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
@@ -87,12 +93,29 @@ function responseText(content) {
   }).join("");
 }
 
+// Saglayici akil yurutmeyi "reasoning" (duz metin) veya "reasoning_details"
+// (parcali) alaninda gonderir; ikisi ayni icerigi tasidigi icin biri secilir.
+function reasoningText(delta) {
+  if (typeof delta?.reasoning === "string" && delta.reasoning) return delta.reasoning;
+  const details = delta?.reasoning_details;
+  if (!Array.isArray(details)) return "";
+  return details.map((part) => (part?.type === "reasoning.text" ? String(part.text || "") : "")).join("");
+}
+
+function emptyResponseError(truncated, budget) {
+  return new Error(truncated
+    ? `Ox Alpha ${budget} tokenlik bütçenin tamamını akıl yürütmeye harcadı ve yanıt üretemedi; isteği daraltın`
+    : "Ox Alpha boş yanıt döndürdü");
+}
+
 async function readStream(response, onDelta) {
   if (!response.body?.getReader) return null;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
   let text = "";
+  let reasoning = "";
+  let finishReason = null;
   let id = null;
   let usage = null;
   let streamError = null;
@@ -115,18 +138,19 @@ async function readStream(response, onDelta) {
         continue;
       }
       const choice = event?.choices?.[0];
+      finishReason = choice?.finish_reason || finishReason;
       const delta = responseText(choice?.delta?.content);
       const completed = responseText(choice?.message?.content);
       const addition = delta || (!text ? completed : "");
-      if (addition) {
-        text += addition;
-        onDelta(text);
-      }
+      const thinking = reasoningText(choice?.delta);
+      if (thinking) reasoning += thinking;
+      if (addition) text += addition;
+      if (addition || thinking) onDelta(text, reasoning);
     }
     if (done) break;
   }
   if (streamError && !text.trim()) throw streamError;
-  return { id, text, usage:usage || {} };
+  return { id, text, reasoning, finishReason, usage:usage || {} };
 }
 
 export class OpenRouterAgent extends BaseAgent {
@@ -161,6 +185,9 @@ export class OpenRouterAgent extends BaseAgent {
     this.children.add(cancellation);
     try {
       const retryDelays = Array.isArray(opts.retryDelaysMs) ? opts.retryDelaysMs : DEFAULT_RETRY_DELAYS_MS;
+      const ceiling = Math.max(1, Number(opts.maxTokensCeiling) || MAX_OUTPUT_TOKENS_CEILING);
+      let maxTokens = Math.max(1, Number(opts.maxTokens) || (identityQuestion ? IDENTITY_MAX_OUTPUT_TOKENS : DEFAULT_MAX_OUTPUT_TOKENS));
+      let truncated = false;
       let payload;
       for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
         const response = await this.fetchImpl(ENDPOINT, {
@@ -171,7 +198,7 @@ export class OpenRouterAgent extends BaseAgent {
             messages,
             stream:true,
             stream_options:{ include_usage:true },
-            max_tokens:opts.maxTokens || (identityQuestion ? 500 : DEFAULT_MAX_OUTPUT_TOKENS),
+            max_tokens:maxTokens,
           }),
           signal:controller.signal,
         });
@@ -185,15 +212,32 @@ export class OpenRouterAgent extends BaseAgent {
         }
 
         try {
-          payload = await readStream(response, (partial) => { if (!opts.silent) this.progress(opts.label || "", partial, opts.memberId); });
+          payload = await readStream(response, (partial, thinking) => {
+            if (opts.silent) return;
+            // Model dakikalarca yalnız akıl yürütebilir. Kartı boş bırakmak
+            // yerine durumu bildir; ham akıl yürütme metnini kullanıcıya dökme.
+            if (partial) this.progress(opts.label || "", partial, opts.memberId);
+            else if (thinking) this.progress(`${opts.label || "yanıtlıyor"} · akıl yürütüyor`, "", opts.memberId);
+          });
           // Test doubles and older fetch implementations may not expose a readable stream.
           if (!payload) payload = await response.json().catch(() => ({}));
-          const candidate = responseText(payload?.text ?? payload?.choices?.[0]?.message?.content);
+          const choice = payload?.choices?.[0];
+          const candidate = responseText(payload?.text ?? choice?.message?.content);
           if (candidate.trim()) {
             payload.text = candidate;
             break;
           }
-          if (attempt >= retryDelays.length) throw new Error("Ox Alpha boş yanıt döndürdü");
+          // finish_reason="length" + boş content: yanıt hatalı değil, bütçe dar.
+          // Bu geçici bir sunucu hatası olmadığı için beklemeden, daha geniş
+          // bütçeyle hemen yeniden dene.
+          truncated = (payload?.finishReason ?? choice?.finish_reason) === "length";
+          if (truncated && maxTokens < ceiling && attempt < retryDelays.length) {
+            maxTokens = Math.min(ceiling, maxTokens * 4);
+            this.log(`ox-alpha akıl yürütmede tükendi; token bütçesi ${maxTokens} yapıldı`);
+            payload = null;
+            continue;
+          }
+          if (attempt >= retryDelays.length) throw emptyResponseError(truncated, maxTokens);
         } catch (error) {
           if (controller.signal.aborted || attempt >= retryDelays.length) throw error;
           const status = Number(error?.status) || 0;
@@ -203,7 +247,7 @@ export class OpenRouterAgent extends BaseAgent {
         await waitWithSignal(retryDelays[attempt], controller.signal);
       }
       let text = responseText(payload?.text ?? payload?.choices?.[0]?.message?.content);
-      if (!text.trim()) throw new Error("Ox Alpha boş yanıt döndürdü");
+      if (!text.trim()) throw emptyResponseError(truncated, maxTokens);
       // Stealth modeller öz-kimlik sorularında eğitim verilerinden yanlış ürün adı
       // üretebilir. Kullanıcıya yalnız doğrulanabilen sağlayıcı kimliğini gösterin.
       if (identityQuestion && /\b(?:codex|chatgpt|openai|claude|gemini)\b/iu.test(text)) text = verifiedIdentityAnswer(prompt);

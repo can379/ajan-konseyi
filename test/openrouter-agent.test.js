@@ -28,7 +28,7 @@ test("Ox Alpha çağrısı doğru OpenRouter modeli ve Bearer anahtarıyla gider
   assert.equal(request.options.headers.Authorization, "Bearer sk-or-test-secret");
   assert.equal(body.model, "stealth/ox-alpha");
   assert.equal(body.stream, true);
-  assert.equal(body.max_tokens, 4096);
+  assert.equal(body.max_tokens, 32_000);
   assert.equal(body.messages[0].role, "system");
   assert.match(body.messages[0].content, /must never claim that you are Codex/);
   assert.equal(body.messages[1].content, "Görevi incele");
@@ -192,4 +192,85 @@ test("Ox Alpha SSE içinde 200 ile gelen sağlayıcı hatasını yeniden dener",
   const result = await agent.invoke("Yanıtla", { sessionKey:"stream-error", retryDelaysMs:[0] });
   assert.equal(calls, 2);
   assert.equal(result.text, "Akış yanıtı");
+});
+
+test("Ox Alpha bütün bütçeyi akıl yürütmeye harcarsa bütçeyi büyütüp yanıtı alır", async () => {
+  const encoder = new TextEncoder();
+  const budgets = [];
+  let calls = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async (_url, options) => {
+      calls++;
+      budgets.push(JSON.parse(options.body).max_tokens);
+      // İlk denemede model yalnız akıl yürütür ve bütçe dolduğu için kesilir.
+      const events = calls === 1
+        ? [`data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:"düşünüyorum" } }] })}\n\n`,
+           `data: ${JSON.stringify({ choices:[{ delta:{}, finish_reason:"length" }] })}\n\n`, "data: [DONE]\n\n"]
+        : [`data: ${JSON.stringify({ choices:[{ delta:{ content:"Geniş bütçeyle yanıt" } }] })}\n\n`,
+           `data: ${JSON.stringify({ choices:[{ delta:{}, finish_reason:"stop" }] })}\n\n`, "data: [DONE]\n\n"];
+      let index = 0;
+      return {
+        ok:true,
+        body:{ getReader:() => ({ read:async () => index < events.length ? { done:false, value:encoder.encode(events[index++]) } : { done:true } }) },
+      };
+    },
+  });
+  agent.progress = () => {};
+
+  const result = await agent.invoke("Uzun analiz yaz", { sessionKey:"reasoning-budget", retryDelaysMs:[0, 0] });
+  assert.equal(calls, 2);
+  assert.equal(budgets[0], 32_000);
+  assert.equal(budgets[1], 128_000);
+  assert.equal(result.text, "Geniş bütçeyle yanıt");
+});
+
+test("Ox Alpha bütçe büyütmesine rağmen yanıt üretemezse akıl yürütme hatasını bildirir", async () => {
+  const encoder = new TextEncoder();
+  let calls = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async () => {
+      calls++;
+      const events = [`data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:"hâlâ düşünüyorum" } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices:[{ delta:{}, finish_reason:"length" }] })}\n\n`, "data: [DONE]\n\n"];
+      let index = 0;
+      return {
+        ok:true,
+        body:{ getReader:() => ({ read:async () => index < events.length ? { done:false, value:encoder.encode(events[index++]) } : { done:true } }) },
+      };
+    },
+  });
+  agent.progress = () => {};
+
+  await assert.rejects(
+    () => agent.invoke("Uzun analiz yaz", { sessionKey:"reasoning-stuck", retryDelaysMs:[0, 0] }),
+    /akıl yürütmeye harcadı/,
+  );
+  assert.ok(calls >= 2);
+});
+
+test("Ox Alpha yalnız akıl yürütürken kartı boş bırakmaz", async () => {
+  const encoder = new TextEncoder();
+  const labels = [];
+  const events = [
+    `data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning_details:[{ type:"reasoning.text", text:"plan kuruyorum" }] } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices:[{ delta:{ content:"Sonuç" } }] })}\n\n`,
+    "data: [DONE]\n\n",
+  ];
+  let index = 0;
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider:async () => "sk-test",
+    fetchImpl:async () => ({
+      ok:true,
+      body:{ getReader:() => ({ read:async () => index < events.length ? { done:false, value:encoder.encode(events[index++]) } : { done:true } }) },
+    }),
+  });
+  agent.progress = (label, text) => labels.push([label, text]);
+
+  const result = await agent.invoke("Selam", { sessionKey:"thinking-label", label:"yanıtlıyor" });
+  assert.equal(result.text, "Sonuç");
+  assert.deepEqual(labels[0], ["yanıtlıyor · akıl yürütüyor", ""]);
+  // Ham akıl yürütme metni kullanıcıya akıtılmaz.
+  assert.ok(labels.every(([, text]) => !String(text).includes("plan kuruyorum")));
 });

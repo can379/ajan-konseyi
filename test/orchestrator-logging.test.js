@@ -87,3 +87,31 @@ test("analyzeImages saf geçiştir: yerel Vision hatasını yutmaz", async () =>
   }
   fs.rmSync(rootDir, { recursive: true, force: true });
 });
+
+test("boş üye yanıtı sessiz balon değil görünür hata olur", () => {
+  const rootDir = temporaryRoot();
+  const yazilan = [];
+  const orch = Object.create(Orchestrator.prototype);
+  Object.assign(orch, {
+    rootDir,
+    store: { addMessage: (_run, msg) => yazilan.push(msg) },
+    config: { data: { members: [] }, getProject: () => null },
+    memberSignature: () => ({ provider: "openrouter", model: "stealth/ox-alpha" }),
+  });
+  const run = { id: "run-1", imageEngineHandoff: {} };
+  const member = { id: "m-ox-alpha", name: "Ox Alpha", provider: "openrouter", model: "stealth/ox-alpha" };
+
+  const attachments = orch.memberMsg(run, member, "message", "   ");
+  assert.deepEqual(attachments, []);
+  assert.equal(yazilan.length, 1);
+  assert.equal(yazilan[0].from, "sistem");
+  assert.equal(yazilan[0].kind, "error");
+  assert.match(yazilan[0].content, /Ox Alpha boş yanıt döndürdü/);
+  assert.match(fs.readFileSync(path.join(rootDir, "runs", "orchestrator.log"), "utf8"), /boş yanıt döndürdü/);
+
+  orch.memberMsg(run, member, "message", "Gerçek yanıt");
+  assert.equal(yazilan.length, 2);
+  assert.equal(yazilan[1].from, "m-ox-alpha");
+  assert.equal(yazilan[1].content, "Gerçek yanıt");
+  fs.rmSync(rootDir, { recursive: true, force: true });
+});

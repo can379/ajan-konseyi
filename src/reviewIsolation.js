@@ -14,6 +14,24 @@ function freeze(value) {
   return value;
 }
 
+
+// Sozlesmedeki zorunlu test komutlarini, sistemin KAYDETTIGI gercek
+// calistirmalarla eslestirir. Boylece reviewer "hangi zorunlu test fiilen
+// calisti, hangisi calismadi" sorusunu yazarin anlatimindan degil olaylardan
+// gorur. Calismayan komut sessizce kaybolmaz; acikca "calistirilmadi" olur.
+export function bindTestEvidence(contract, tests) {
+  const commands = [...new Set((contract?.testCommands || []).map((c) => String(c || "").trim()).filter(Boolean))];
+  const executions = Array.isArray(tests) ? tests : [];
+  return commands.map((command) => {
+    const match = [...executions].reverse().find((item) => String(item.command || "").trim() === command);
+    if (!match) return { command, ran: false, ok: false, at: null, output: "" };
+    return {
+      command, ran: true, ok: match.ok === true, at: match.ts || null,
+      output: String(match.output || "").slice(-4000),
+    };
+  });
+}
+
 function cleanTests(value) {
   return (Array.isArray(value) ? value : []).slice(-50).map((item) => ({
     command: String(item.command || "").slice(0, 1000), ok: item.ok === true,
@@ -31,7 +49,9 @@ export function createReviewPacket({ taskId, contract, author }) {
       acceptanceCriteria:contract.acceptanceCriteria, testCommands:contract.testCommands,
       approvalBoundaries:contract.approvalBoundaries, revision:contract.revision, fingerprint:contract.fingerprint }),
     author: { commit:String(author.commit), parentCommit:String(author.parentCommit || ""), tree:String(author.tree || ""),
-      diff:String(author.diff || "").slice(0,120000), tests:cleanTests(author.tests) },
+      diff:String(author.diff || "").slice(0,120000), tests:cleanTests(author.tests),
+      // Zorunlu komut -> gercek calistirma eslesmesi (olaylardan, anlatimdan degil)
+      requiredTests:bindTestEvidence(contract, author.tests) },
   };
   payload.fingerprint=crypto.createHash("sha256").update(JSON.stringify(canonical(payload))).digest("hex");
   return freeze(payload);
@@ -42,7 +62,8 @@ export function isolatedReviewPrompt(packet, reviewerName="Reviewer") {
 
 Yalnız aşağıdaki immutable kanıt paketini kullan. Sohbet geçmişine, kullanıcının önceki mesajlarına, yazarın açıklamalarına, ortak hafızaya, proje dosyalarına, internete veya başka araçlara başvurma. Kod değiştirme. Pakette olmayan bilgi için varsayım üretme; "kanıt yok" de.
 
-TaskContract kabul kriterlerini tek tek commit diff'i ve test sonuçlarıyla karşılaştır. Sonucu YALNIZCA şu şemada tek JSON nesnesi olarak ver:
+TaskContract kabul kriterlerini tek tek commit diff'i ve test sonuçlarıyla karşılaştır.
+Paketteki "requiredTests" alanı, sözleşmenin zorunlu komutlarını sistemin kaydettiği GERÇEK çalıştırmalarla eşleştirir: ran=false ise o test hiç çalışmamıştır, yazarın metinde ne dediği önemsizdir. Sonucu YALNIZCA şu şemada tek JSON nesnesi olarak ver:
 {"agreement":1-5,"severity":"dusuk|orta|yuksek","points":["somut bulgu"],"evidence":["commit/diff/test kanıtı"],"suggestion":"tek cümlelik öneri"}
 
 --- IMMUTABLE REVIEW PACKET (${packet.fingerprint}) ---

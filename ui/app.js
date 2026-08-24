@@ -122,6 +122,12 @@ function showMainView(view) {
 function providerBadge(msg) {
   const provider = msg?.provider;
   if (!provider || !PROVIDER_LABELS[provider]) return "";
+  // Kimlik devri: içeriği fiilen başka bir sağlayıcı ürettiyse gizlenmez.
+  if (msg.engineProvider && msg.engineProvider !== provider && PROVIDER_LABELS[msg.engineProvider]) {
+    const engine = PROVIDER_LABELS[msg.engineProvider];
+    return `<span class="provider-badge pb-${esc(provider)}" title="${esc(PROVIDER_LABELS[provider])}">${esc(PROVIDER_LABELS[provider])}</span>` +
+      `<span class="provider-badge handoff pb-${esc(msg.engineProvider)}" title="Bu içeriği fiilen ${esc(engine)} üretti">↳ ${esc(engine)} üretti</span>`;
+  }
   // Koordinatörün hangi yapay zekâ olduğunu kullanıcı seçtiği için onun da
   // rozetlenmesi kimlik sorusunu tamamen kapatır.
   const label = PROVIDER_LABELS[provider];
