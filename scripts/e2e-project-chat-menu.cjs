@@ -17,6 +17,17 @@ async function run(win) {
     wc.sendInputEvent({ type: "mouseMove", x: Math.round(x), y: Math.round(y) });
     await sleep(180);
   };
+  // Menu acilana kadar fareyi yeniden oynat: pencere odagi/ilk kare gecikmesi
+  // gibi zamanlama kaynakli kirilganligi giderir, kontrolu zayiflatmaz.
+  const moveUntilMenu = async (x, y, selector) => {
+    for (let i = 0; i < 4; i++) {
+      await moveTo(x + (i % 2), y);
+      const open = await js(`!document.querySelector('${selector}').hidden`);
+      if (open) return true;
+      await sleep(250);
+    }
+    return false;
+  };
   const clickAt = async (x, y) => {
     await moveTo(x, y);
     wc.sendInputEvent({ type: "mouseDown", x: Math.round(x), y: Math.round(y), button: "left", clickCount: 1 });
@@ -48,7 +59,7 @@ async function run(win) {
   results.satirTasmiyor = target.rowRight <= target.sidebarRight + 1;
 
   // 2) HOVER: sohbet satiri -> yalniz sohbet menusu acilmali
-  await moveTo(target.x, target.y);
+  await moveUntilMenu(target.x, target.y, '#run-context-menu');
   results.hover = await js(`(()=>{
     const rm=document.getElementById('run-context-menu'), pm=document.getElementById('project-context-menu');
     const b=rm.getBoundingClientRect(), sb=document.getElementById('sidebar').getBoundingClientRect();
@@ -74,21 +85,21 @@ async function run(win) {
   // 4) Yeniden render sonrasi davranis bozulmamali + coklu dinleyici olmamali
   await js(`renderProjects(); renderConversations();`);
   await sleep(500);
-  await moveTo(target.x, target.y);
+  await moveUntilMenu(target.x, target.y, '#run-context-menu');
   results.renderSonrasi = await js(`(()=>{
     const rm=document.getElementById('run-context-menu'), pm=document.getElementById('project-context-menu');
     return {sohbetMenusuAcik:!rm.hidden, projeMenusuKapali:pm.hidden, id:rm.dataset.runId||''};
   })()`);
 
   // 5) Proje basligina hover -> proje menusu acilir, sohbet menusu kapanir
-  await moveTo(target.projX, target.projY);
+  await moveUntilMenu(target.projX, target.projY, '#project-context-menu');
   results.projeBasligi = await js(`(()=>{
     const rm=document.getElementById('run-context-menu'), pm=document.getElementById('project-context-menu');
     return {projeMenusuAcik:!pm.hidden, sohbetMenusuKapandi:rm.hidden, ikisiBirdenAcikDegil:!(!rm.hidden&&!pm.hidden)};
   })()`);
 
   // 6) Sohbet satirina donunce proje menusu kapanmali (sohbet oncelikli)
-  await moveTo(target.x, target.y);
+  await moveUntilMenu(target.x, target.y, '#run-context-menu');
   results.sohbeteDonus = await js(`(()=>{
     const rm=document.getElementById('run-context-menu'), pm=document.getElementById('project-context-menu');
     return {sohbetMenusuAcik:!rm.hidden, projeMenusuKapali:pm.hidden};
