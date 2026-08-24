@@ -13,5 +13,8 @@ bridge/antigravity/outbox/
 bridge/antigravity/done/
 config.json
 workspace-state.json
+# MCP koprusu icin yazilan port/belirtec dosyasi. `npm start` ile calisirken
+# veri dizini repo koku oldugundan buraya duser; belirtec tasidigi icin izlenmez.
+mcp-endpoint.json
 *.log
 .DS_Store
