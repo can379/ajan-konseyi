@@ -13,6 +13,7 @@ import { ProjectContext } from "./projectContext.js";
 import { TIER_MAP } from "./models.js";
 import { extractJson, now, truncate, uid, usageDayKey } from "./util.js";
 import * as gitops from "./gitops.js";
+import { createCheckpoint, pruneAutoCheckpoints, shouldAutoCheckpoint } from "./checkpoints.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
 import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGeneratedAssets } from "./media.js";
 import { analyzeImagesLocally } from "./localVision.js";
@@ -461,7 +462,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       generator:run.imageStudio?.generatorId || "codex", status:"pending", result:null, error:null,
     }));
     this.store.updateRun(run);
-    this.store.addMessage(run, { from:"koordinator", kind:"info", content:`${work.length} görsel görevi ${limit} eşzamanlı worker ile konseye dağıtıldı. Sanat yönetimini seçilen ajanlar, yüksek kaliteli raster üretimini ortak görsel motoru yapacak.` });
+    this.store.addMessage(run, { from:"koordinator", provider: this.config?.data?.coordinator?.provider || null, kind:"info", content:`${work.length} görsel görevi ${limit} eşzamanlı worker ile konseye dağıtıldı. Sanat yönetimini seçilen ajanlar, yüksek kaliteli raster üretimini ortak görsel motoru yapacak.` });
     this.runImageBatch(run, limit).catch((err) => this.failRun(run, err));
   }
 
@@ -521,7 +522,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     run.turnActive=false; run.batch.endedAt=new Date().toISOString();
     const stopped=run.stopRequested;
     this.store.updateRun(run, { status:stopped ? "stopped" : (run.batch.completed ? "done" : "failed"), phase:stopped ? "stopped" : "done" });
-    this.store.addMessage(run, { from:"koordinator", kind:run.batch.failed ? "info" : "result", content:`Toplu üretim tamamlandı: ${run.batch.completed}/${run.batch.total} başarılı, ${run.batch.failed} hatalı.` });
+    this.store.addMessage(run, { from:"koordinator", provider: this.config?.data?.coordinator?.provider || null, kind:run.batch.failed ? "info" : "result", content:`Toplu üretim tamamlandı: ${run.batch.completed}/${run.batch.total} başarılı, ${run.batch.failed} hatalı.` });
     this.persistSessions(run);
   }
 
@@ -558,6 +559,14 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     return `İstenen görsel yüksek kaliteli ortak görsel motoruyla oluşturuldu ve doğrulandı.\n\n${this.keepOnlyAssetPaths(generated.text, assets, accepted)}`;
   }
 
+  // Mesaja GERCEK saglayici ve model imzasi eklenir. Uye adi kullanici
+  // tarafindan serbestce verildigi icin (ornegin "Antigravity" adli bir uyenin
+  // arkasinda Claude olabilir) arayuzde adin yaninda saglayici rozeti gosterilir.
+  memberSignature(member) {
+    const model = member.model || this.pickTierModel(member.provider, "balanced") || "";
+    return { provider: member.provider, model: model || null };
+  }
+
   memberMsg(run, member, kind, content, taskId = null, requestText = "") {
     let attachments = collectGeneratedAssets(content, this.rootDir);
     const wantsVector = /(?:\bsvg\b|vektör|vector)/i.test(String(requestText || ""));
@@ -584,6 +593,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
     this.store.addMessage(run, {
       from: member.id, fromLabel: member.name, provider: member.provider,
+      model: this.memberSignature(member).model,
       kind, taskId, content: displayContent, attachments,
     });
     return attachments;
@@ -767,6 +777,48 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     catch(error){this.store.updateRun(run);this.store.addMessage(run,{from:"sistem",kind:"error",content:`EvidenceGate ${action} işlemini engelledi:\n- ${(error.reasons||[error.message]).join("\n- ")}`});throw error;}
   }
 
+  // Kod turu baslamadan once otomatik anlik goruntu. Ajanlar dosya
+  // degistirmeye baslamadan ONCE alinir; kullanici "Kontrol noktaları"
+  // ekranindan tek tikla o ana donebilir. Maliyet kontrolu: yalniz kod
+  // modunda, en fazla 10 dakikada bir, son 3 otomatik kopya saklanir.
+  async autoCheckpoint(run) {
+    if (run.mode !== "code" || !run.projectId || !run.projectDir) return null;
+    const project = this.config.getProject(run.projectId);
+    if (!project) return null;
+    const dir = path.join(this.rootDir, "checkpoints");
+    try {
+      if (!shouldAutoCheckpoint(dir, project.id)) return null;
+      const meta = createCheckpoint(dir, project, {
+        name: `Tur öncesi · ${truncate(run.request, 40)}`, auto: true,
+      });
+      pruneAutoCheckpoints(dir, project.id, 3);
+      this.store.addMessage(run, {
+        from: "sistem", kind: "info",
+        content: `📌 Tur öncesi otomatik kontrol noktası alındı ("${meta.name}"). Proje menüsündeki "Kontrol noktaları"ndan bu ana dönebilirsiniz.`,
+      });
+      return meta;
+    } catch (error) {
+      // Anlik goruntu alinamamasi turu engellemez.
+      this.store.addMessage(run, { from: "sistem", kind: "info", content: `Otomatik kontrol noktası alınamadı: ${String(error.message || error)}` });
+      return null;
+    }
+  }
+
+  // Kod tabani brifingi: sembol haritasi + KANIT KURALI.
+  // Bu brifing yalniz planlama isteminde degil, hizli yanit ve DOGRUDAN MESAJ
+  // yollarinda da verilir; aksi halde ajan kodu hic gormeden "su ozellik yok"
+  // gibi eskimis iddialar uretir (sektor analizi raporunda birebir yasandi).
+  async codebaseBrief(run, { limit = 6000 } = {}) {
+    if (!run.projectDir) return "";
+    let map = "";
+    try { map = await this.projectContext.repoMap(run.projectDir); } catch { return ""; }
+    if (!map) return "";
+    return `\n\nKOD TABANI BRİFİNGİ (${run.projectDir}${run.commitHash ? ` · commit ${run.commitHash}` : ""}):\n` +
+      `Kod hakkında bir iddia üretmeden ÖNCE ilgili dosyanın güncel hâlini oku; her iddiaya dosya:satır kanıtı ekle. ` +
+      `Bir özelliğin "eksik" olduğunu söylemeden önce sembol haritasında ve dosyalarda ara.\n` +
+      truncate(map, limit);
+  }
+
   // Koordinatör çağrıları için koşuya özgü bağlam (durumsuz Coordinator)
   coordCtx(run) {
     return {
@@ -854,6 +906,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       if (route.approach === "quick") {
         let member = avail.find((m) => m.id === route.member_id) || avail[0];
         await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit });
+      } else if (route.approach === "pair") {
+        const producer = avail.find((m) => m.id === route.member_id) || avail[0];
+        const reviewer = avail.find((m) => m.id === route.reviewer_id && m.id !== producer.id)
+          || avail.find((m) => m.id !== producer.id);
+        if (!reviewer) await this.quickReply(run, producer, text, attachments, { allowFallback: !route.explicit });
+        else await this.pairReply(run, producer, reviewer, text, attachments);
       } else {
         run.mode = ["discussion", "split", "code"].includes(route.mode) ? route.mode : "discussion";
         run.tasks = [];
@@ -877,6 +935,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.setPhase(run, "answering");
     const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
     const imageNote = attachmentPrompt(attachments);
+    const brief = await this.codebaseBrief(run);
     const prefixFor = (mem) => {
       if (this.providers[mem.provider].sessions.get(this.sessionKeyFor(run, mem))) return "";
       const history = run.messages.slice(-10, -1)
@@ -888,7 +947,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         (this.config.getProject(run.projectId)?.skills?.length ? `\n\nBu projede yeniden kullanılabilir çalışma yetenekleri:\n- ${this.config.getProject(run.projectId).skills.join("\n- ")}` : "") +
         (this.projectHistory(run) ? `\n\nProjede önceki sohbetlerden devralınan bağlam:\n${this.projectHistory(run)}` : "") +
         (this.projectContext.readMemory(run.projectId) ? `\n\nKalıcı proje hafızası:\n${truncate(this.projectContext.readMemory(run.projectId),4000)}` : "") +
-        (history ? `\n\nSohbet geçmişi:\n${history}` : "") + "\n\n--- KULLANICININ MESAJI ---\n";
+        (history ? `\n\nSohbet geçmişi:\n${history}` : "") + brief + "\n\n--- KULLANICININ MESAJI ---\n";
     };
     const generatingImage = this.isImageGenerationRequest(text) || this.isImageRevisionRequest(run, text);
     const agentText = generatingImage ? this.imageGenerationPrompt(text) : text;
@@ -934,6 +993,54 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     } else if (!run.stopRequested) {
       throw new Error(`${member.name} yanıt veremedi: ${res.error}`);
     }
+  }
+
+  // ---- L2: Üretici + bağımsız denetçi ----
+  // Tam konseyin (plan/tartışma/oylama) maliyetini ödemeden ikinci bir göz
+  // sağlar. Denetçi engelleyici sorun bulursa üretici BİR kez düzeltir.
+  async pairReply(run, producer, reviewer, text, attachments = []) {
+    const S = this.store;
+    S.setPhase(run, "answering");
+    await this.quickReply(run, producer, text, attachments, { allowFallback: true });
+    if (run.stopRequested) return;
+
+    const answer = [...run.messages].reverse().find((m) => m.from === producer.id && m.kind === "message")?.content;
+    if (!answer) return;
+
+    S.setPhase(run, "review");
+    const reviewPrompt = this.roleHeader(reviewer, run) +
+      `İKİLİ İNCELEME. "${producer.name}" üyesinin kullanıcıya verdiği yanıtı bağımsız denetle.\n\n` +
+      `Kullanıcının isteği:\n${truncate(text, 2000)}\n\n` +
+      `Denetlenecek yanıt:\n${truncate(answer, 6000)}\n\n` +
+      `Yalnız SONUCU DEĞİŞTİRECEK sorunları bildir (hata, eksik, yanlış varsayım, risk). ` +
+      `Üslup/biçim tercihi bildirme. Kod veya dosya hakkında iddia üretmeden önce güncel hâlini oku ve dosya:satır kanıtı ver.\n` +
+      `YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
+      `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme"}`;
+    const res = await this.callMember(run, reviewer, reviewPrompt, {
+      label: "ikili inceleme", shouldStop: () => run.stopRequested,
+    });
+    if (!res.ok || run.stopRequested) return;
+
+    const verdict = extractJson(res.text) || { verdict: "onay", issues: [], summary: res.text };
+    const issues = Array.isArray(verdict.issues) ? verdict.issues.filter(Boolean) : [];
+    const needsFix = verdict.verdict === "duzeltme" && issues.length > 0;
+    this.memberMsg(run, reviewer, "review",
+      `🔍 İkili inceleme — ${needsFix ? "düzeltme istendi" : "onaylandı"}\n${verdict.summary || ""}` +
+      (issues.length ? "\n" + issues.map((i) => `• ${i}`).join("\n") : ""));
+    run.reviews.push({
+      taskId: null, reviewer: reviewer.id, reviewerName: reviewer.name,
+      agreement: needsFix ? 2 : 5, severity: needsFix ? "orta" : "dusuk", points: issues,
+    });
+    S.updateRun(run);
+    if (!needsFix) return;
+
+    const fixPrompt = `Bağımsız denetçi (${reviewer.name}) yanıtında şu engelleyici sorunları buldu:\n` +
+      issues.map((i) => `• ${i}`).join("\n") +
+      `\n\nBunları gider ve kullanıcıya DÜZELTİLMİŞ nihai yanıtı ver. Neyi değiştirdiğini bir cümleyle belirt.`;
+    const fix = await this.callMember(run, producer, fixPrompt, {
+      label: "düzeltme", shouldStop: () => run.stopRequested,
+    });
+    if (fix.ok && !run.stopRequested) this.memberMsg(run, producer, "message", fix.text);
   }
 
   stopTurn(run) {
@@ -1011,7 +1118,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       });
       run.reviewRounds = Math.min(plan.review_rounds ?? 1, 2);
       S.addMessage(run, {
-        from: "koordinator", kind: "message",
+        from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "message",
         content: `Analiz: ${plan.analysis}\n\nMod: ${run.mode}\nGörev dağılımı:\n` +
           run.tasks.map((t) => `- [${t.id}] ${t.title} → ${t.assigneeName} (${t.tier}${t.dependsOn.length ? ", bağımlı: " + t.dependsOn.join(",") : ""})`).join("\n"),
       });
@@ -1021,6 +1128,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // ---- Kod modu: üye başına worktree ----
     const worktrees = {};
     if (run.mode === "code") {
+      // Ajanlar dosyalara dokunmadan once geri donulebilir bir nokta birak.
+      await this.autoCheckpoint(run);
       if (!run.projectDir) throw new Error("Kod modu için proje dizini gerekli. '📁 Proje seç' ile bir klasör bağlayın.");
       if (!(await gitops.isGitRepo(run.projectDir))) {
         this.notify("Ajan Konseyi ⚠", "Git deposu başlatma onayı bekleniyor");
@@ -1105,7 +1214,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         this.checkStop(run);
         const assess = await this.assessConflict(run, round + 1, ctx);
         S.addMessage(run, {
-          from: "koordinator", kind: "message",
+          from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "message",
           content: (assess.conflict ? "Görüş ayrılığı tespit edildi: " : "Uzlaşma durumu: ") + assess.summary,
         });
         if (!assess.conflict) break;
@@ -1138,7 +1247,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.addDecision(run, { title: fin.decision, detail: "Nihai karar", rationale: fin.rationale });
     run.report = fin.report_markdown || fin.decision;
     fs.writeFileSync(path.join(S.runsDir, run.id, "report.md"), run.report);
-    S.addMessage(run, { from: "koordinator", kind: "decision", content: `KARAR: ${fin.decision}\n\nGerekçe: ${fin.rationale}` });
+    S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "decision", content: `KARAR: ${fin.decision}\n\nGerekçe: ${fin.rationale}` });
     this.projectContext.appendMemory(run.projectId, run, fin.decision);
     if (!chatTurn) {
       const doneGate=this.enforceEvidenceGate(run,"done",{requireTests:run.mode==="code"});
@@ -1157,7 +1266,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     if (requiresCodeAuthoring(task, run.mode) && !canAuthorCode(member)) {
       const coder = preferredCoder(avail, Object.fromEntries(avail.map((m) => [m.id, run.tasks.filter((t) => t.assignee === m.id).length])));
       if (!coder) { task.status="failed"; task.result="Kod yazabilecek etkin Claude veya Codex üyesi yok."; S.updateRun(run); return; }
-      S.addMessage(run, { from:"koordinator", kind:"info", taskId:task.id, content:`Kod yazma görevi ${member?.name || task.assigneeName} yerine ${coder.name} üyesine atandı. Antigravity araştırma, görsel ve doğrulama görevlerinde tutulur.` });
+      S.addMessage(run, { from:"koordinator", provider: this.config?.data?.coordinator?.provider || null, kind:"info", taskId:task.id, content:`Kod yazma görevi ${member?.name || task.assigneeName} yerine ${coder.name} üyesine atandı. Antigravity araştırma, görsel ve doğrulama görevlerinde tutulur.` });
       member=coder; task.assignee=coder.id; task.assigneeName=coder.name;
     }
     if (!member || !avail.some((m) => m.id === member.id)) {
@@ -1177,7 +1286,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     task.status = "active";
     task.startedAt = new Date().toISOString();
     S.updateRun(run);
-    S.addMessage(run, { from: "koordinator", kind: "task", taskId: task.id, content: `[${member.name}] için görev: ${task.title}\n\n${task.prompt}` });
+    S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "task", taskId: task.id, content: `[${member.name}] için görev: ${task.title}\n\n${task.prompt}` });
 
     const images = (run.attachments || []).filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
     const agSleeping = member.provider === "antigravity" && this.antigravitySleeping();
@@ -1248,7 +1357,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       S.addMessage(run, { from:"sistem", kind:"error", taskId:task.id, content:`${member.name} üç denemede de görevi tamamlayamadı: ${res.error}` });
       if (member.provider === "antigravity") {
         S.addMessage(run, {
-          from:"koordinator", kind:"info", taskId:task.id,
+          from:"koordinator", provider: this.config?.data?.coordinator?.provider || null, kind:"info", taskId:task.id,
           content:`⚠ ${member.name} (Antigravity) görüşü üç denemede de alınamadı; görev başka bir yapay zekâ adına tamamlanmış sayılmayacak.`,
         });
       }
@@ -1420,7 +1529,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
   async holdVote(run, assess) {
     const S = this.store;
-    S.addMessage(run, { from: "koordinator", kind: "info", content: "Tartışma tur sınırına ulaşıldı; rubrikli oylamaya geçiliyor." });
+    S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "info", content: "Tartışma tur sınırına ulaşıldı; rubrikli oylamaya geçiliyor." });
     const positions = run.tasks.filter((t) => t.status === "done")
       .map((t) => `- "${t.assigneeName}" (${t.assignee}) yaklaşımı: ${truncate(t.result, 2000)}`).join("\n");
     const votes = [];
@@ -1530,7 +1639,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
     const plan = await this.coordinator.mergePlan(run, diffs, this.coordCtx(run));
     S.addMessage(run, {
-      from: "koordinator", kind: "message",
+      from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "message",
       content: `Birleştirme planı: ${plan.summary}\nSıra: ${(plan.merge_order || []).map((id) => this.memberById(id)?.name || id).join(" → ")}` +
         (plan.conflicts?.length ? `\n\n⚠ Çakışmalar (elle inceleme gerekli):\n- ${plan.conflicts.join("\n- ")}` : "") +
         (plan.risks?.length ? `\nRiskler:\n- ${plan.risks.join("\n- ")}` : ""),
@@ -1590,7 +1699,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           if (!fixApproved) {
             S.addMessage(run, { from: "sistem", kind: "info", content: "Otomatik test düzeltmesi reddedildi." });
           } else {
-            S.addMessage(run, { from: "koordinator", kind: "info", content: "Testler kırıldı; onaylanan düzeltme turu başlıyor." });
+            S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "info", content: "Testler kırıldı; onaylanan düzeltme turu başlıyor." });
             const fixerId = [...diffs].sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
             const fixer = this.availableMembers().find((m) => m.id === fixerId);
             if (fixer) {
@@ -1605,7 +1714,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
                 testResult = await this.runTests(run, testDir);
                 run.repairHistory??=[];run.repairHistory.push({attempt:1,agent:fixer.name,ok:testResult.ok,at:new Date().toISOString()});
                 for(let attempt=2;!testResult.ok&&attempt<=3&&!run.stopRequested;attempt++){
-                  S.addMessage(run,{from:"koordinator",kind:"info",content:`Otomatik onarma ${attempt}/3: kalan test hataları yeniden inceleniyor.`});
+                  S.addMessage(run,{from:"koordinator", provider: this.config?.data?.coordinator?.provider || null,kind:"info",content:`Otomatik onarma ${attempt}/3: kalan test hataları yeniden inceleniyor.`});
                   const retry=await this.callMember(run,fixer,`${this.roleHeader(fixer,run)}Önceki düzeltmeden sonra testler hâlâ başarısız. Güncel çıktı:\n\n${truncate(testResult.output,6000)}\n\nKök nedeni bul, yalnız gerekli kodu düzelt ve testi çalıştır.`,{label:`test düzeltme ${attempt}/3`,codeMode:true,cwd:testDir,shouldStop:()=>run.stopRequested});
                   if(!retry.ok)break;
                   this.memberMsg(run,fixer,"result",`Test düzeltmesi ${attempt}/3:\n${retry.text}`);
@@ -1709,8 +1818,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const imageNote = attachmentPrompt(attachments);
       const inherited=this.projectHistory(run);
       const memory=this.projectContext.readMemory(run.projectId);
+      // Ilk temasta kod tabani brifingi + kanit kurali verilir; ajan kodu
+      // gormeden "su ozellik yok" gibi iddialar uretmesin.
+      const firstContact = !this.providers[member.provider].sessions.get(this.sessionKeyFor(run, member));
+      const brief = firstContact ? await this.codebaseBrief(run) : "";
       const res = await this.callMember(run, member,
-        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}\n\n${content}${imageNote}`,
+        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}${brief}\n\n${content}${imageNote}`,
         { label: "doğrudan mesaj", images, media: attachments, timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
           // Sağlayıcı/bağlayıcı kararını proje hafızası veya önceki sohbetten
           // değil, yalnız kullanıcının bu turdaki gerçek mesajından üret.

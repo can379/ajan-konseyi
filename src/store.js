@@ -161,13 +161,14 @@ export class Store extends EventEmitter {
   }
 
   // ---- Mesajlar (ortak konuşma alanı) ----
-  addMessage(run, { from, fromLabel = null, provider = null, kind = "message", taskId = null, content, attachments = [] }) {
+  addMessage(run, { from, fromLabel = null, provider = null, model = null, kind = "message", taskId = null, content, attachments = [] }) {
     const msg = {
       id: uid("msg-"),
       ts: now(),
       from,               // üye id'si | kullanici | koordinator | sistem
       fromLabel,          // üyenin görünen adı (örn. "Codex Mimar 2")
       provider,           // üyenin sağlayıcısı (renk için): claude | codex | antigravity
+      model,              // gerçekten çalıştırılan model (kimlik rozeti için)
       kind,               // message | task | result | review | debate | vote | decision | error | info
       taskId,
       content: truncate(String(content ?? ""), 16000),

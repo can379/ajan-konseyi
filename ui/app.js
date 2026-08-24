@@ -116,6 +116,19 @@ function showMainView(view) {
   if (studio) renderImageStudio();
 }
 
+
+// Kimlik seffafligi: uye adini kullanici koydugu icin ("Antigravity" adli uyenin
+// arkasinda Claude olabilir) mesajda gercek saglayici rozetle gosterilir.
+function providerBadge(msg) {
+  const provider = msg?.provider;
+  if (!provider || !PROVIDER_LABELS[provider]) return "";
+  // Koordinatörün hangi yapay zekâ olduğunu kullanıcı seçtiği için onun da
+  // rozetlenmesi kimlik sorusunu tamamen kapatır.
+  const label = PROVIDER_LABELS[provider];
+  const title = msg.model ? `${label} · ${msg.model}` : label;
+  return `<span class="provider-badge pb-${esc(provider)}" title="${esc(title)}">${esc(label)}</span>`;
+}
+
 function memberById(id) {
   return (state.config.members || []).find((m) => m.id === id) || null;
 }
@@ -895,7 +908,7 @@ function msgHTML(m) {
     <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
     <div class="m-body">
       <div class="m-head">
-        <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
+        <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>${providerBadge(m)}
         <span class="m-kind">${esc(KIND_TR[m.kind] || m.kind)}</span>
         <span class="m-time">${new Date(m.ts).toLocaleTimeString("tr", { hour: "2-digit", minute: "2-digit" })}</span>
       </div>

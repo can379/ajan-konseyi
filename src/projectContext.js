@@ -10,6 +10,56 @@ const exec = promisify(execFile);
 // koşudan koşuya taşınan kalıcı proje hafızası.
 // Hafıza dosyaları kullanıcının projesine DEĞİL, sistemin kendi
 // memory/ klasörüne yazılır.
+
+// Sembol cikarma: harici bagimlilik (tree-sitter/ctags) YOK. Diller icin
+// hafif desenlerle ust duzey tanimlar bulunur; amac tam ayristirma degil,
+// ajanin dogru dosyaya/satira gitmesini saglayacak kompakt bir harita.
+const SYMBOL_EXT = new Set([".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py", ".go", ".rs", ".java", ".swift", ".rb", ".php", ".c", ".h", ".cpp", ".cs", ".kt"]);
+
+const SYMBOL_PATTERNS = [
+  // JS/TS aileleri
+  /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/,
+  /^\s*(?:export\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/,
+  /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/,
+  /^\s*(?:export\s+)?(?:interface|type|enum)\s+([A-Za-z_$][\w$]*)/,
+  // Sinif metotlari (girintili, kontrol sozcugu olmayan)
+  /^\s{2,}(?:async\s+)?(?:static\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/,
+  // Python / Go / Rust / Java / Swift / Ruby / PHP / C ailesi
+  /^\s*(?:async\s+)?def\s+([A-Za-z_][\w]*)/,
+  /^\s*class\s+([A-Za-z_][\w]*)/,
+  /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)/,
+  /^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][\w]*)/,
+  /^\s*(?:pub\s+)?(?:struct|trait|impl|enum)\s+([A-Za-z_][\w]*)/,
+  /^\s*(?:public|private|protected|internal)?\s*(?:static\s+)?(?:final\s+)?(?:class|interface|record)\s+([A-Za-z_][\w]*)/,
+  /^\s*(?:public|private|internal|open)?\s*(?:final\s+)?(?:func|class|struct|protocol|extension)\s+([A-Za-z_][\w]*)/,
+];
+// Kontrol sozcukleri metot sanilmasin.
+const NOT_SYMBOL = new Set(["if", "for", "while", "switch", "catch", "return", "constructor", "function", "else", "do", "try", "await", "typeof", "new", "delete"]);
+
+function extractSymbols(content, ext) {
+  const out = [];
+  const seen = new Set();
+  const lines = content.split("\n");
+  const limit = Math.min(lines.length, 4000);
+  for (let i = 0; i < limit; i++) {
+    const line = lines[i];
+    if (!line || line.length > 400) continue;
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("#")) continue;
+    for (const pattern of SYMBOL_PATTERNS) {
+      const match = pattern.exec(line);
+      if (!match) continue;
+      const name = match[1];
+      if (!name || NOT_SYMBOL.has(name) || seen.has(name)) break;
+      seen.add(name);
+      out.push(`${name}@${i + 1}`);
+      break;
+    }
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+
 export class ProjectContext {
   constructor(rootDir) {
     this.memDir = path.join(rootDir, "memory");
@@ -17,8 +67,12 @@ export class ProjectContext {
     this.mapCache = {}; // projectDir -> { builtAt, map }
   }
 
-  // ---- Repo haritası ----
-  async repoMap(projectDir) {
+  // ---- Repo haritası (sembol indeksli) ----
+  // Duz dosya listesi ajana bir sembolun NEREDE oldugunu soylemez; ajan da
+  // dosyalari tek tek okur ve kota asil orada tukenir. Bu yuzden dosya
+  // agacinin yani sira bagimsiz (harici kutuphane olmadan) cikarilmis bir
+  // sembol haritasi uretilir: sinif/fonksiyon/export adlari + satir numarasi.
+  async repoMap(projectDir, { budget = 9000 } = {}) {
     if (!projectDir || !fs.existsSync(projectDir)) return "";
     const cached = this.mapCache[projectDir];
     if (cached && Date.now() - cached.builtAt < 10 * 60 * 1000) return cached.map;
@@ -28,28 +82,45 @@ export class ProjectContext {
       const { stdout } = await exec("git", ["-C", projectDir, "ls-files"], { maxBuffer: 10 * 1024 * 1024 });
       files = stdout.trim().split("\n").filter(Boolean);
     } catch {
-      files = this.walk(projectDir, projectDir, 0).slice(0, 500);
-    }
-    if (files.length > 500) {
-      files = files.slice(0, 500);
+      files = this.walk(projectDir, projectDir, 0);
     }
 
-    // Dizin ağacını sıkıştırılmış biçimde yaz
-    const tree = files.slice(0, 400).join("\n");
+    const symbolFiles = files.filter((f) => SYMBOL_EXT.has(path.extname(f).toLowerCase()));
+    const index = [];
+    let used = 0;
+    for (const rel of symbolFiles) {
+      if (used >= budget) break;
+      const full = path.join(projectDir, rel);
+      let stat;
+      try { stat = fs.statSync(full); } catch { continue; }
+      if (!stat.isFile() || stat.size > 400_000) continue;
+      let symbols;
+      try { symbols = extractSymbols(fs.readFileSync(full, "utf8"), path.extname(rel).toLowerCase()); }
+      catch { continue; }
+      if (!symbols.length) continue;
+      const line = `${rel}: ${symbols.slice(0, 14).join(", ")}${symbols.length > 14 ? ` … +${symbols.length - 14}` : ""}`;
+      used += line.length + 1;
+      index.push(line);
+    }
 
-    // Kilit dosyaların kısa özetleri
+    const tree = files.slice(0, 260).join("\n");
     const keyFiles = ["README.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml", "Makefile"];
     let summaries = "";
     for (const kf of keyFiles) {
       const fp = path.join(projectDir, kf);
       if (fs.existsSync(fp)) {
-        try {
-          summaries += `\n--- ${kf} (özet) ---\n${truncate(fs.readFileSync(fp, "utf8"), 800)}\n`;
-        } catch {}
+        try { summaries += `\n--- ${kf} (özet) ---\n${truncate(fs.readFileSync(fp, "utf8"), 700)}\n`; } catch {}
       }
     }
 
-    const map = `# Repo haritası: ${projectDir}\nToplam dosya (ilk 400): ${files.length}\n\n${tree}\n${summaries}`;
+    const map = `# Repo haritası: ${projectDir}\n` +
+      `Toplam dosya: ${files.length} · sembol çıkarılan dosya: ${index.length}\n\n` +
+      (index.length
+        ? `## Sembol haritası (dosya: tanımlar@satır)\n` +
+          `Aradığın tanım burada görünüyorsa dosyanın TAMAMINI okumadan doğrudan o satıra git.\n` +
+          index.join("\n") + "\n\n"
+        : "") +
+      `## Dosya ağacı (ilk 260)\n${tree}\n${summaries}`;
     this.mapCache[projectDir] = { builtAt: Date.now(), map };
     return map;
   }

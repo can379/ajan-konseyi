@@ -41,10 +41,18 @@ export function completeMergeOrder(requested, memberIds) {
 }
 
 export function normalizeRoute(route, validMemberIds) {
-  const approach = route?.approach === "quick" ? "quick" : "council";
+  // L1 quick · L2 pair (uretici + bagimsiz denetci) · L3 council
+  let approach = ["quick", "pair", "council"].includes(route?.approach) ? route.approach : "council";
+  const member_id = validMemberIds.includes(route?.member_id) ? route.member_id : validMemberIds[0];
+  let reviewer_id = validMemberIds.includes(route?.reviewer_id) ? route.reviewer_id : null;
+  if (reviewer_id === member_id) reviewer_id = null;
+  // Denetci bulunamazsa ikinci uyeye dus; o da yoksa L1'e in.
+  if (approach === "pair" && !reviewer_id) reviewer_id = validMemberIds.find((id) => id !== member_id) || null;
+  if (approach === "pair" && !reviewer_id) approach = "quick";
   return {
     approach,
-    member_id: validMemberIds.includes(route?.member_id) ? route.member_id : validMemberIds[0],
+    member_id,
+    reviewer_id,
     mode: ["discussion", "split", "code"].includes(route?.mode) ? route.mode : "discussion",
     reason: String(route?.reason || ""),
   };

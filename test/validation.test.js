@@ -19,8 +19,27 @@ test("plan görevlerini ve bağımlılıklarını güvenli biçimde normalleşti
 
 test("bozuk yönlendirme güvenli council varsayılanına döner", () => {
   assert.deepEqual(normalizeRoute({}, ["m1"]), {
-    approach: "council", member_id: "m1", mode: "discussion", reason: "",
+    approach: "council", member_id: "m1", reviewer_id: null, mode: "discussion", reason: "",
   });
+});
+
+test("ikili inceleme (L2) üretici ve denetçiyi farklı üyelere ayırır", () => {
+  const route = normalizeRoute({ approach: "pair", member_id: "m1", reviewer_id: "m2" }, ["m1", "m2"]);
+  assert.equal(route.approach, "pair");
+  assert.equal(route.member_id, "m1");
+  assert.equal(route.reviewer_id, "m2");
+});
+
+test("denetçi verilmezse ikili inceleme başka üyeyi denetçi seçer", () => {
+  const route = normalizeRoute({ approach: "pair", member_id: "m1" }, ["m1", "m2"]);
+  assert.equal(route.reviewer_id, "m2");
+});
+
+test("üretici ile aynı üye denetçi olamaz; tek üye varsa L1'e düşer", () => {
+  assert.equal(normalizeRoute({ approach: "pair", member_id: "m1", reviewer_id: "m1" }, ["m1", "m2"]).reviewer_id, "m2");
+  const solo = normalizeRoute({ approach: "pair", member_id: "m1", reviewer_id: "m1" }, ["m1"]);
+  assert.equal(solo.approach, "quick");
+  assert.equal(solo.reviewer_id, null);
 });
 
 test("alt görevi olmayan plan reddedilir", () => {

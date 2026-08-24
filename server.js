@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { Store } from "./src/store.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
+import { copyCheckpoint } from "./src/checkpoints.js";
 import { MODEL_CATALOG, EFFORT_LEVELS } from "./src/models.js";
 import { detectMedia, MAX_UPLOAD_BYTES, PROVIDER_CAPABILITIES } from "./src/media.js";
 import { discoverCapabilities } from "./src/capabilityDiscovery.js";
@@ -67,7 +68,7 @@ function startDevSession(project){
   child.stdout.on("data",append);child.stderr.on("data",append);child.on("close",code=>{session.alive=false;session.exitCode=code;if(session.lease){try{workspaceState.releaseLease(session.lease.id,session.lease.token);}catch{}session.lease=null;}});devSessions.set(project.id,session);return session;
 }
 function devView(s){return s?{projectId:s.projectId,command:s.command,alive:s.alive,url:s.url,output:s.output.slice(-12000),startedAt:s.startedAt,exitCode:s.exitCode}:null;}
-function copyCheckpoint(source,target){fs.cpSync(source,target,{recursive:true,filter:(src)=>!src.split(path.sep).some((part)=>[".git","node_modules","dist","build",".next"].includes(part))});}
+
 function createTerminalSession(project) {
   const id = crypto.randomUUID();
   const child = spawn("/bin/zsh", ["-l"], { cwd:project.path, stdio:["pipe","pipe","pipe"], env:{ ...process.env, TERM:"xterm-256color", FORCE_COLOR:"0" } });

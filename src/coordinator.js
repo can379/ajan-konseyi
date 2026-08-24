@@ -79,12 +79,19 @@ Kullanılabilir üyeler (id | ad | sağlayıcı | rol):
 ${memberList}
 ${run.projectDir ? `Bağlı proje: ${run.projectDir}` : "Bağlı proje yok."}
 
-Karar ver:
-- "quick": mesaj tek bir üyenin doğrudan yanıtlayabileceği türde (soru, sohbet, açıklama, görüş). En uygun üyenin ID'sini seç.
-- "council": görev bölüşümü, çok yönlü analiz, tartışma veya KOD DEĞİŞİKLİĞİ gerektiriyor. Uygun modu seç (discussion|split|code). Kod değişikliği isteniyorsa ve proje bağlıysa mode "code" olmalı.
+Üç seviyeden BİRİNİ seç (gereğinden ağır seviye seçme; her seviye maliyeti artırır):
+- "quick" (L1): tek üye doğrudan yanıtlar. Sohbet, açıklama, görüş, basit soru, küçük bilgi.
+- "pair" (L2): bir üye üretir, BAŞKA bir üye bağımsız denetler ve gerekirse üretici bir kez düzeltir.
+  Tartışma/oylama yoktur. Somut ama tek uzmanlık gerektiren işler için: tek dosyalık analiz,
+  hata teşhisi, küçük/orta refactor önerisi, kısa doküman, tek konulu inceleme.
+- "council" (L3): tam konsey (görev bölüşümü, çapraz inceleme, tartışma, oylama).
+  Çok yönlü analiz, mimari karar, riskli veya geniş kapsamlı KOD DEĞİŞİKLİĞİ için.
+  Uygun modu seç (discussion|split|code); kod değişikliği isteniyorsa ve proje bağlıysa mode "code".
+
+"pair" seçersen member_id üretici, reviewer_id denetçi olsun ve ikisi FARKLI üye olsun.
 
 YALNIZCA şu şemada tek bir JSON nesnesi döndür:
-{"approach": "quick|council", "member_id": "üye id'si", "mode": "discussion|split|code", "reason": "tek cümle (Türkçe)"}`;
+{"approach": "quick|pair|council", "member_id": "üye id'si", "reviewer_id": "pair icin denetci uye id'si", "mode": "discussion|split|code", "reason": "tek cümle (Türkçe)"}`;
     return this.askJson(prompt, "yönlendirme", ctx);
   }
 
@@ -97,7 +104,7 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
       ? `\nPROJE HAFIZASI (geçmiş kararlar ve kurallar — bunlarla çelişme):\n${truncate(extra.memoryText, 4000)}\n`
       : "";
     const mapPart = extra.repoMap
-      ? `\nREPO HARİTASI (ajanlar keşfe zaman harcamasın diye görev istemlerine uygun kısımlarını ekle):\n${truncate(extra.repoMap, 5000)}\n`
+      ? `\nREPO HARİTASI (ajanlar keşfe zaman harcamasın diye görev istemlerine uygun kısımlarını ekle):\n${truncate(extra.repoMap, 8000)}\n`
       : "";
     const testFirstPart = extra.testFirst
       ? `\nTEST-ÖNCE modu açık: kod görevlerinde önce bir üyeye BAŞARISIZ testleri yazdır, sonra depends_on ile bağlı ayrı bir görevde başka üyeye testleri geçirecek kodu yazdır.\n`
