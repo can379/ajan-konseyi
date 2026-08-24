@@ -1075,11 +1075,26 @@ function renderDetails(run) {
     const budget=run.budget||{enabled:false,maxCalls:24,maxTokens:250000};
     const usedCalls=names.reduce((total,key)=>total+(usage[key].calls||0),0);
     const budgetPercent=Math.min(100,Math.max(Math.round((totIn+totOut)/(budget.maxTokens||250000)*100),Math.round(usedCalls/(budget.maxCalls||24)*100)));
-    $("tab-usage").innerHTML = budget.enabled?`<div class="budget-meter"><div><b>Yerel görev bütçesi</b><span>${usedCalls}/${budget.maxCalls||24} çağrı · ${(totIn+totOut).toLocaleString("tr")}/${(budget.maxTokens||250000).toLocaleString("tr")} token</span></div><i><b style="width:${budgetPercent}%"></b></i>${budget.stopped?`<strong>${esc(budget.reason||"Bütçe doldu")}</strong>`:""}</div>` + cards +
+    // Bağlam bütçesi: oturumun ne kadar dolduğu ve tazeleme
+    const ctx = run?.sessionContext || {};
+    const ctxCards = Object.entries(ctx).map(([id, c]) => {
+      const meta = metaFor(id);
+      const pct = c.pct == null ? null : c.pct;
+      const level = pct == null ? "" : pct >= 85 ? "critical" : pct >= 65 ? "warn" : "ok";
+      return `<div class="ctx-card ${level}">
+        <div class="ctx-head"><b class="c-${esc(meta.cls)}">${esc(meta.label)}</b><span>${pct == null ? "—" : pct + "%"}</span></div>
+        <div class="ctx-bar"><i style="width:${pct == null ? 0 : pct}%"></i></div>
+        <div class="ctx-meta">${(c.tokens || 0).toLocaleString("tr")} / ${c.limit ? c.limit.toLocaleString("tr") : "?"} token · tahmini${c.model ? " · " + esc(c.model) : ""}</div>
+        ${pct != null && pct >= 65 ? `<button class="btn-ghost small" data-refresh-session="${esc(id)}">♻️ Oturumu tazele</button>` : ""}
+      </div>`;
+    }).join("");
+    const ctxBlock = ctxCards ? `<h3>Bağlam bütçesi <small style="font-weight:400;color:var(--dim2)">(oturum doluluğu · tahmini)</small></h3>${ctxCards}` : "";
+
+    $("tab-usage").innerHTML = ctxBlock + (budget.enabled?`<div class="budget-meter"><div><b>Yerel görev bütçesi</b><span>${usedCalls}/${budget.maxCalls||24} çağrı · ${(totIn+totOut).toLocaleString("tr")}/${(budget.maxTokens||250000).toLocaleString("tr")} token</span></div><i><b style="width:${budgetPercent}%"></b></i>${budget.stopped?`<strong>${esc(budget.reason||"Bütçe doldu")}</strong>`:""}</div>` + cards +
       `<div class="usage-card"><div class="usage-total"><span>Toplam</span><span>${totIn.toLocaleString("tr")} girdi · ${totOut.toLocaleString("tr")} çıktı</span></div>
        <div class="muted" style="margin-top:4px">Abonelik oturumları kullanılır; API faturası oluşmaz. Tüketim, aboneliğin mesaj/kota limitlerinden düşer.</div></div>`:`<div class="budget-meter"><div><b>Yerel görev bütçesi kapalı</b><span>Kullanım uygulama tarafından durdurulmaz</span></div></div>` + cards +
       `<div class="usage-card"><div class="usage-total"><span>Toplam</span><span>${totIn.toLocaleString("tr")} girdi · ${totOut.toLocaleString("tr")} çıktı</span></div>
-       <div class="muted" style="margin-top:4px">Abonelik oturumları kullanılır; API faturası oluşmaz. Tüketim, aboneliğin mesaj/kota limitlerinden düşer.</div></div>`;
+       <div class="muted" style="margin-top:4px">Abonelik oturumları kullanılır; API faturası oluşmaz. Tüketim, aboneliğin mesaj/kota limitlerinden düşer.</div></div>`);
   } else {
     $("tab-usage").innerHTML = `<div class="muted">Kullanım verisi koşu sırasında birikir.</div>`;
   }
@@ -1408,6 +1423,23 @@ document.addEventListener("click", async (e) => {
       }
       closeModal(); $("f-request").focus(); autoGrow();
     }
+    return;
+  }
+
+  // oturum tazeleme (bağlam bütçesi)
+  const refreshSession = closest("[data-refresh-session]");
+  if (refreshSession) {
+    const memberId = refreshSession.dataset.refreshSession;
+    if (!confirm("Bu üyenin oturumu kapatılıp devir teslim notuyla yeniden başlatılsın mı?\n\nSohbet geçmişiniz korunur; yalnızca ajanın iç oturumu tazelenir.")) return;
+    refreshSession.disabled = true;
+    refreshSession.textContent = "Tazeleniyor…";
+    const resp = await fetch(`/api/runs/${selectedRun}/session/refresh`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memberId }),
+    });
+    const out = await resp.json();
+    if (out.error) alert(out.error);
+    fetchState();
     return;
   }
 

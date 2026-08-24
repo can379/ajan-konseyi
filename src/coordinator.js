@@ -251,7 +251,9 @@ YALNIZCA şu şemada tek bir JSON nesnesi döndür:
   digest(run, lastN = 12) {
     const msgs = run.messages.slice(-lastN);
     const lines = msgs.map(
-      (m) => `[${m.fromLabel || m.from} / ${m.kind}${m.taskId ? " / " + m.taskId : ""}]\n${truncate(m.content, 3500)}`
+      // Özet varsa tam metin yerine onu taşı: aynı içerik her turda yeniden
+      // kopyalanmasın (alt ajanların kısa özet döndürmesi deseni).
+      (m) => `[${m.fromLabel || m.from} / ${m.kind}${m.taskId ? " / " + m.taskId : ""}]\n${m.summary ? m.summary : truncate(m.content, 3500)}`
     );
     return `Ana istek: "${truncate(run.request, 1500)}"\n\nSon kayıtlar:\n${lines.join("\n\n")}`;
   }

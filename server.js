@@ -801,6 +801,20 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // ---- Oturum tazeleme (bağlam bütçesi) ----
+    const refreshMatch = p.match(/^\/api\/runs\/([\w-]+)\/session\/refresh$/);
+    if (req.method === "POST" && refreshMatch) {
+      const run = store.getRun(refreshMatch[1]);
+      if (!run) return json(res, 404, { error: "Koşu bulunamadı" });
+      const body = await readBody(req);
+      try {
+        const result = await orch.refreshMemberSession(run, body.memberId);
+        return json(res, 200, result);
+      } catch (e) {
+        return json(res, 400, { error: String(e.message || e) });
+      }
+    }
+
     // ---- Kesinti sonrası devam ----
     const resumeMatch = p.match(/^\/api\/runs\/([\w-]+)\/resume$/);
     if (req.method === "POST" && resumeMatch) {

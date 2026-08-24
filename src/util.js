@@ -129,3 +129,34 @@ export function distributeRunUsage(total = {}, exact = [], fallbackDays = []) {
   }));
   return [...exact, ...share];
 }
+
+// Alt gorev ciktilarindan yapisal ozet ayiklar. Sektor deseni: alt ajan ana
+// ajana TAM metni degil, kisa bir ozet dondurur; boylece ayni icerik inceleme,
+// tartisma ve sentez istemlerine defalarca kopyalanmaz.
+export const SUMMARY_OPEN = "<<<OZET>>>";
+export const SUMMARY_CLOSE = "<<<SON>>>";
+
+export function extractSummary(text) {
+  const value = String(text || "");
+  const start = value.indexOf(SUMMARY_OPEN);
+  if (start === -1) return null;
+  const from = start + SUMMARY_OPEN.length;
+  const end = value.indexOf(SUMMARY_CLOSE, from);
+  const body = (end === -1 ? value.slice(from) : value.slice(from, end)).trim();
+  return body ? truncate(body, 1600) : null;
+}
+
+// Ozet bloklari kullaniciya gosterilmez; yalniz ic baglam aktariminda kullanilir.
+export function stripSummaryBlock(text) {
+  const value = String(text || "");
+  const start = value.indexOf(SUMMARY_OPEN);
+  if (start === -1) return value;
+  const end = value.indexOf(SUMMARY_CLOSE, start);
+  const cleaned = end === -1 ? value.slice(0, start) : value.slice(0, start) + value.slice(end + SUMMARY_CLOSE.length);
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+export function summaryContract(maxWords = 120) {
+  return `\n\nYanıtının EN SONUNA şu bloğu ekle (kullanıcıya gösterilmez, diğer üyelerin bağlamı için kullanılır):\n` +
+    `${SUMMARY_OPEN}\n- Ne yaptın/ne buldun (en fazla ${maxWords} kelime)\n- Dokunduğun dosyalar veya kilit kanıtlar\n- Açık kalan konular\n${SUMMARY_CLOSE}`;
+}

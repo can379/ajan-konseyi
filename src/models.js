@@ -69,3 +69,21 @@ export const MODEL_CATALOG = {
     { value: "gpt-oss-120b-medium", label: "GPT-OSS 120B (Medium)" },
   ],
 };
+
+// Baglam penceresi TAHMINLERI. CLI'lar pencere boyutunu raporlamadigi icin
+// bunlar muhafazakar varsayimlardir; arayuzde "tahmini" olarak sunulur.
+// Doluluk olcumu: son cagrinin (input + cachedInput) degeri, o oturumda
+// yeniden gonderilen tum konusmayi temsil eder — pratikte iyi bir vekildir.
+export const CONTEXT_WINDOWS = {
+  claude: { default: 200_000, byModel: [[/fable/i, 1_000_000], [/opus|sonnet|haiku/i, 200_000]] },
+  codex: { default: 256_000, byModel: [[/gpt-5\.6|gpt-5\.5/i, 256_000], [/mini|luna/i, 128_000]] },
+  openrouter: { default: 1_000_000, byModel: [] },
+  antigravity: { default: 0, byModel: [] }, // kopru; kullanim verisi gelmez
+};
+
+export function contextWindowFor(provider, model = "") {
+  const entry = CONTEXT_WINDOWS[provider];
+  if (!entry) return 0;
+  for (const [pattern, size] of entry.byModel) if (pattern.test(String(model || ""))) return size;
+  return entry.default;
+}

@@ -10,8 +10,8 @@ import { OpenRouterAgent } from "./agents/openRouterAgent.js";
 import { readOpenRouterKey } from "./credentialStore.js";
 import { Coordinator } from "./coordinator.js";
 import { ProjectContext } from "./projectContext.js";
-import { TIER_MAP } from "./models.js";
-import { extractJson, now, truncate, uid, usageDayKey } from "./util.js";
+import { TIER_MAP, contextWindowFor } from "./models.js";
+import { extractJson, now, truncate, uid, usageDayKey, extractSummary, stripSummaryBlock, summaryContract } from "./util.js";
 import * as gitops from "./gitops.js";
 import { createCheckpoint, pruneAutoCheckpoints, shouldAutoCheckpoint } from "./checkpoints.js";
 import { completeMergeOrder, normalizePlan, normalizeRoute } from "./validation.js";
@@ -320,7 +320,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       memberId: member.id,
       model: selectedModel,
       effort: member.effort || undefined,
-      onUsage: (u) => this.accumUsage(run, member.id, u),
+      onUsage: (u) => { this.accumUsage(run, member.id, u); this.trackSessionContext(run, member, u); },
     };
     let res = await provider.send(effectivePrompt, providerOpts);
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
@@ -567,7 +567,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     return { provider: member.provider, model: model || null };
   }
 
-  memberMsg(run, member, kind, content, taskId = null, requestText = "") {
+  memberMsg(run, member, kind, content, taskId = null, requestText = "", summary = null) {
     let attachments = collectGeneratedAssets(content, this.rootDir);
     const wantsVector = /(?:\bsvg\b|vektör|vector)/i.test(String(requestText || ""));
     if (!wantsVector && attachments.some((a) => a.kind === "image" && a.mime !== "image/svg+xml")) {
@@ -594,7 +594,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     this.store.addMessage(run, {
       from: member.id, fromLabel: member.name, provider: member.provider,
       model: this.memberSignature(member).model,
-      kind, taskId, content: displayContent, attachments,
+      kind, taskId, content: displayContent, attachments, summary,
     });
     return attachments;
   }
@@ -804,6 +804,54 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
   }
 
+  // ---- Bağlam bütçesi izleme ----
+  // CLI oturumu her çağrıda TÜM konuşmayı yeniden gönderir; bu yüzden son
+  // çağrının (input + önbellekten okunan) toplamı, o oturumun güncel bağlam
+  // doluluğunun iyi bir vekilidir. Sağlayıcılar pencere doluluğunu
+  // raporlamadığı için ölçüm "tahmini" olarak sunulur.
+  trackSessionContext(run, member, usage) {
+    if (!usage) return;
+    const tokens = Number(usage.input || 0) + Number(usage.cachedInput || 0);
+    if (!tokens) return;
+    const model = member.model || this.pickTierModel(member.provider, "balanced") || "";
+    const limit = contextWindowFor(member.provider, model);
+    run.sessionContext = run.sessionContext || {};
+    run.sessionContext[member.id] = {
+      tokens, limit, model: model || null,
+      pct: limit ? Math.min(100, Math.round((tokens / limit) * 100)) : null,
+      at: new Date().toISOString(),
+    };
+    this.store.saveRun(run);
+  }
+
+  // Oturumu devir teslim özetiyle tazele: eski CLI oturumu kapatılır, yeni
+  // oturum kısa bir özetle tohumlanır. Sıkıştırma eşiğine gelmeden yapılırsa
+  // hem kalite korunur hem de tekrar tekrar tüm geçmişin gönderilmesi biter.
+  async refreshMemberSession(run, memberId) {
+    const member = this.memberById(memberId);
+    if (!member) throw new Error("Bilinmeyen üye");
+    const provider = this.providers[member.provider];
+    const key = this.sessionKeyFor(run, member);
+    if (!provider.sessions.get(key)) throw new Error(`${member.name} için açık oturum yok`);
+
+    const ask = "Bu sohbeti yeni bir oturumda kaldığın yerden sürdüreceksin. " +
+      "Devir teslim notu yaz: kullanıcının amacı, alınan kararlar, üzerinde çalışılan dosyalar ve açık işler. " +
+      "En fazla 250 kelime, madde madde, Türkçe. Başka hiçbir şey yazma.";
+    const res = await this.callMember(run, member, ask, { label: "devir teslim özeti" });
+    const handoff = res.ok ? truncate(res.text, 4000) : "";
+
+    provider.sessions.delete(key);
+    run.sessionHandoff = run.sessionHandoff || {};
+    if (handoff) run.sessionHandoff[member.id] = handoff;
+    if (run.sessionContext) delete run.sessionContext[member.id];
+    this.persistSessions(run);
+    this.store.addMessage(run, {
+      from: "sistem", kind: "info",
+      content: `♻️ ${member.name} oturumu tazelendi${handoff ? " (devir teslim notu aktarıldı)" : ""}. Bağlam sayacı sıfırlandı.`,
+    });
+    return { ok: true, handoff: Boolean(handoff) };
+  }
+
   // Kod tabani brifingi: sembol haritasi + KANIT KURALI.
   // Bu brifing yalniz planlama isteminde degil, hizli yanit ve DOGRUDAN MESAJ
   // yollarinda da verilir; aksi halde ajan kodu hic gormeden "su ozellik yok"
@@ -947,6 +995,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         (this.config.getProject(run.projectId)?.skills?.length ? `\n\nBu projede yeniden kullanılabilir çalışma yetenekleri:\n- ${this.config.getProject(run.projectId).skills.join("\n- ")}` : "") +
         (this.projectHistory(run) ? `\n\nProjede önceki sohbetlerden devralınan bağlam:\n${this.projectHistory(run)}` : "") +
         (this.projectContext.readMemory(run.projectId) ? `\n\nKalıcı proje hafızası:\n${truncate(this.projectContext.readMemory(run.projectId),4000)}` : "") +
+        (run.sessionHandoff?.[mem.id] ? `\n\nÖnceki oturumundan devir teslim notun:\n${run.sessionHandoff[mem.id]}` : "") +
         (history ? `\n\nSohbet geçmişi:\n${history}` : "") + brief + "\n\n--- KULLANICININ MESAJI ---\n";
     };
     const generatingImage = this.isImageGenerationRequest(text) || this.isImageRevisionRequest(run, text);
@@ -1332,7 +1381,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         return { ok:false, error:error?.message || String(error), raw:{ thrown:true } };
       }
     };
-    let res = await invokeMember(header + prepared.prompt, opts);
+    let res = await invokeMember(header + prepared.prompt + summaryContract(), opts);
     // Durdurulmuş eski bir sağlayıcı çağrısı, aynı koşu yeniden başlatıldıktan
     // sonra yeni görevin durumunu veya atamasını ezmemeli.
     if (res.cancelled) return;
@@ -1348,7 +1397,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         content:`${member.name} yanıtı alınamadı; aynı ajanla yeniden deneniyor (${attempt}/3).`,
       });
       await new Promise((resolve) => setTimeout(resolve, 350 * (attempt - 1)));
-      res = await invokeMember(header + prepared.prompt, { ...opts, fresh:true });
+      res = await invokeMember(header + prepared.prompt + summaryContract(), { ...opts, fresh:true });
       if (res.cancelled) return;
       if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
     }
@@ -1367,8 +1416,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     if (res.ok) {
       res.text = await this.guaranteeImageOutput(run, member, task.prompt, res.text, opts);
       task.status = "done";
-      task.result = res.text;
-      this.memberMsg(run, member, "result", res.text, task.id);
+      // Özet iç bağlam aktarımı için saklanır; kullanıcıya gösterilen metinden
+      // blok çıkarılır. Böylece aynı içerik inceleme/tartışma/sentez istemlerine
+      // tam metin olarak tekrar tekrar kopyalanmaz.
+      task.summary = extractSummary(res.text) || truncate(res.text, 700);
+      task.result = stripSummaryBlock(res.text);
+      this.memberMsg(run, member, "result", task.result, task.id, "", task.summary);
     } else {
       task.status = "failed";
       task.result = res.error;
@@ -1511,7 +1564,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const recent = run.messages
         .filter((m) => ["review", "debate", "result"].includes(m.kind) && m.from !== member.id)
         .slice(-4)
-        .map((m) => `[${m.fromLabel || m.from}]: ${truncate(m.content, 3000)}`)
+        .map((m) => `[${m.fromLabel || m.from}]: ${m.summary || truncate(m.content, 3000)}`)
         .join("\n\n");
       const prompt = this.roleHeader(member, run) +
         `TARTIŞMA TURU ${round}. Koordinatörün sorusu: ${debatePrompt}\n\n` +
@@ -1531,7 +1584,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const S = this.store;
     S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "info", content: "Tartışma tur sınırına ulaşıldı; rubrikli oylamaya geçiliyor." });
     const positions = run.tasks.filter((t) => t.status === "done")
-      .map((t) => `- "${t.assigneeName}" (${t.assignee}) yaklaşımı: ${truncate(t.result, 2000)}`).join("\n");
+      .map((t) => `- "${t.assigneeName}" (${t.assignee}) yaklaşımı: ${t.summary || truncate(t.result, 2000)}`).join("\n");
     const votes = [];
     await Promise.all(this.availableMembers().map(async (member) => {
       const prompt = this.roleHeader(member, run) +
