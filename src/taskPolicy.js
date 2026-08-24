@@ -1,8 +1,35 @@
-const CODE_ACTION = /\b(?:kod|code|source|implement|uygula|geliştir|düzelt|refactor|endpoint|api|component|fonksiyon|class|test yaz|migration|schema|css|html|javascript|typescript|python|swift|react|node)\b/i;
-const NON_CODE_SPECIALTY = /\b(?:araştır|research|web|kaynak|rakip|trend|görsel|fotoğraf|video|illüstrasyon|tasarım üret|canva|tarayıcıda test|kullanıcı deneyimi|içerik|metin|çeviri|özet)\b/i;
+// Turkce sozcukler ek alir: "kod" -> "kodu", "araştır" -> "araştırması".
+// Kaliplarin sonunda \b kullanilmasi bu eklerde eslesmeyi bozuyordu ve
+// davranis erratikti: "araştırıp" esliyor ("ı" ASCII olmadigi icin \b
+// tutuyor) ama "araştırması" eslesmiyordu. Bu yuzden kok eslesmesi yapilir;
+// bas sinirini koruyup son sinir birakilir, ekler serbest kalir.
+// Ayrica JS'de "\\b" Turkce harften ONCE de eslesmez: bosluk da "ö" de
+// sozcuk karakteri sayilmadigi icin sinir olusmaz. Bu yuzden "özet" ve
+// "çeviri" kokleri hicbir zaman tutmuyordu. Sinir Unicode harf/rakam
+// olumsuzlamasiyla kurulur.
+const stems = (list) => new RegExp(`(?<![\\p{L}\\p{N}_])(?:${list.join("|")})`, "iu");
+
+const CODE_ACTION = stems(["kod","code","source","implement","uygula","geliştir","düzelt","refactor",
+  "endpoint","api","component","fonksiyon","class","test yaz","migration","schema",
+  "css","html","javascript","typescript","python","swift","react","node"]);
+const NON_CODE_SPECIALTY = stems(["araştır","research","web","kaynak","rakip","trend","görsel",
+  "fotoğraf","video","illüstrasyon","tasarım üret","canva","tarayıcıda test",
+  "kullanıcı deneyimi","içerik","metin","çeviri","özet"]);
+
+// Salt okunur gorevlerin istemi "kod veya test yazma" gibi YASAK cumleleri
+// icerir. Kalip olumsuzlamayi goremedigi icin bu cumleler gorevi kod gorevi
+// gibi gosteriyor, arastirma isleri ucuz saglayiciya hic yonlenmiyordu.
+// Acik salt-okunur beyani her seyin onunde gelir.
+// Yalniz KESIN beyanlar sayilir. "kod yazma" veya "hiçbir dosyayı
+// değiştirme" gibi ifadeler gercek kod gorevlerinin "KATI SINIRLAR"
+// bolumunde de gecer ("baska dosyaya dokunma" anlaminda); onlari salt
+// okunur saymak kod gorevini kod yazamayan uyeye yollar. Olculdu ve
+// duzeltildi; asagidaki kalip gercek kosudan alinan iki istemle sinanir.
+const READ_ONLY_DECLARATION = /salt okunur|yalnızca oku ve raporla|sadece oku ve raporla/iu;
 
 export function requiresCodeAuthoring(task, mode = "discussion") {
   const text = `${task?.title || ""}\n${task?.prompt || ""}`;
+  if (READ_ONLY_DECLARATION.test(text)) return false;
   if (NON_CODE_SPECIALTY.test(text) && !CODE_ACTION.test(text)) return false;
   return CODE_ACTION.test(text) || (mode === "code" && !NON_CODE_SPECIALTY.test(text));
 }

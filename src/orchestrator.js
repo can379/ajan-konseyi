@@ -206,7 +206,10 @@ export class Orchestrator {
     const value = String(text || "");
     for (const member of list) {
       if (member.provider === "antigravity") {
-        const direct = /@?antigravit(?:y|iy)\b|\bantigravit(?:y|iy)\b.{0,32}\b(?:yapsın|yanıtlasın|devam etsin|çalışsın|üretsin|incelesin)\b/i;
+        // Adin metinde SADECE gecmesi yeterli degildir. Eskiden ciplak
+        // "antigravity" sozcugu bile turu tek uyeye indiriyordu; is bolumu
+        // anlatan bir istekte uye adlarini saymak butun turu cokertiyordu.
+        const direct = /@antigravit(?:y|iy)\b|\bantigravit(?:y|iy)\b.{0,32}\b(?:yapsın|yanıtlasın|devam etsin|çalışsın|üretsin|incelesin)\b|\b(?:bunu|işi|görevi)\s+antigravit(?:y|iy)\b/i;
         const denied = /\bantigravit(?:y|iy)\s+(?:değil|olmasın)\b/i;
         if (direct.test(value) && !denied.test(value)) return member;
       }
@@ -1121,7 +1124,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const avail = this.availableMembers(run);
       if (!avail.length) throw new Error("Ulaşılabilir üye yok (kenar çubuğundan üyeleri kontrol edin)");
 
-      const requestedMember = this.explicitlyRequestedMember(text, avail);
+      // Kullanici kod/isbolumu/tartisma modunu ACIKCA sectiyse konsey turu
+      // ister. Metinde gecen bir uye adi bu secimi ezmemelidir; ezerse
+      // calisma kopyalari, inceleme ve kanit kapisi sessizce devre disi
+      // kalir. Tek uyeye sormak icin bestecideki hedef secici kullanilir ve
+      // o yol buraya hic ugramaz.
+      const requestedMember = mode === "auto" ? this.explicitlyRequestedMember(text, avail) : null;
       let route;
       if (requestedMember) {
         route = { approach: "quick", member_id: requestedMember.id, explicit: true };
