@@ -85,6 +85,37 @@ npm run release:mac
 7. Kod değişiklikleri ayrı Git worktree’lerinde hazırlanır, test edilir ve güvenli biçimde bütünleştirilir.
 8. Koordinatör katkıları ve açık riskleri tek bir nihai raporda birleştirir.
 
+## MCP sunucu modu — konseyi Claude Code ve Codex içinden kullanma
+
+Ajan Konseyi bir MCP sunucusu olarak da çalışır. Böylece konseyi kendi arayüzüne
+girmeden, doğrudan Claude Code veya Codex oturumunun içinden çağırabilirsin.
+
+Kurulum (her ikisi için birer kez):
+
+```bash
+claude mcp add ajan-konseyi --scope user -- node /TAM/YOL/ajan/mcp-server.js
+codex mcp add ajan-konseyi -- node /TAM/YOL/ajan/mcp-server.js
+```
+
+Kullanım: Ajan Konseyi uygulaması **açıkken** editöründe şunu yazman yeterli —
+"bu diff'i konseye inceletir misin" ya da "buna Codex ne der, sor".
+
+| Araç | İşlevi |
+|------|--------|
+| `uye_sor` | Tek üyeye doğrudan soru — ikinci görüş almak için |
+| `konsey_incele` | Aynı kodu birden fazla sağlayıcıya bağımsız inceletir |
+| `konsey_sor` | Tam konsey turu: görev dağıtımı, tartışma, oylama, kanıt kapısı |
+| `kosu_durumu` | Başlatılan turun durumunu ve sonucunu getirir |
+| `konsey_bilgi` | Etkin üyeleri ve kayıtlı projeleri listeler |
+
+Konsey turları dakikalar sürdüğü ve MCP istemcilerinin araç zaman aşımları kısa
+olduğu için uzun işler hemen bir `runId` döndürür; sonuç `kosu_durumu` ile alınır.
+
+`mcp-server.js` bilerek ince bir köprüdür: kendi orkestratörünü kurmaz, işi
+çalışan uygulamanın yerel sunucusuna devreder. Aksi halde iki süreç aynı
+`config.json` ve `runs/` üzerinde çakışırdı. Bağlantı bilgisini uygulamanın veri
+dizinindeki `mcp-endpoint.json` dosyasından okur.
+
 ## Güvenlik ve gizlilik
 
 - Geliştirici API anahtarları ajan alt süreçlerinden temizlenir.

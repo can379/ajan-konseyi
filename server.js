@@ -293,6 +293,17 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- Durum ----
+    // MCP koprusu yalniz uye ve proje listesine ihtiyac duyar. /api/state
+    // kosu anlik goruntusuyle birlikte yarim megabayti asiyor; koprü her arac
+    // cagrisinda onu cekmesin diye hafif ve sabit sozlesmeli bir uc verilir.
+    if (req.method === "GET" && p === "/api/mcp/info") {
+      return json(res, 200, {
+        members: (config.data.members || []).filter((m) => m.enabled)
+          .map(({ id, name, provider, role, model }) => ({ id, name, provider, role, model })),
+        projects: (config.data.projects || []).map(({ id, name, path: dir }) => ({ id, name, path: dir })),
+      });
+    }
+
     if (req.method === "GET" && p === "/api/state") {
       return json(res, 200, {
         ...store.snapshot(url.searchParams.get("run")),
@@ -945,7 +956,25 @@ function serveFile(res, file) {
   }
 }
 
+// MCP koprusu ayri bir surectir ve portu/belirteci onceden bilemez. Sunucu
+// bunlari veri dizinine yazar; koprü okur. Dosya yalniz kullaniciya okunur
+// izinle olusturulur, cunku belirtec icerir.
+const MCP_ENDPOINT_FILE = path.join(DATA_ROOT, "mcp-endpoint.json");
+function writeMcpEndpoint() {
+  try {
+    fs.mkdirSync(DATA_ROOT, { recursive: true });
+    fs.writeFileSync(MCP_ENDPOINT_FILE,
+      JSON.stringify({ port: Number(PORT), token: UI_TOKEN || null, pid: process.pid, at: new Date().toISOString() }),
+      { mode: 0o600 });
+  } catch { /* el sikisma dosyasi yazilamazsa sunucu yine de calisir */ }
+}
+function removeMcpEndpoint() { try { fs.unlinkSync(MCP_ENDPOINT_FILE); } catch {} }
+for (const signal of ["exit", "SIGINT", "SIGTERM"]) {
+  process.on(signal, () => { removeMcpEndpoint(); if (signal !== "exit") process.exit(0); });
+}
+
 server.listen(PORT, "127.0.0.1", () => {
+  writeMcpEndpoint();
   console.log(`Ajan Konseyi hazır → http://localhost:${PORT}`);
   console.log(`Antigravity köprü talimatı: bridge/antigravity/INSTRUCTIONS.md`);
   // Açılışta ve her 10 dakikada bir CLI sağlık kontrolü

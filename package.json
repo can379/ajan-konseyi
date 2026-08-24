@@ -23,7 +23,8 @@
     "release:mac": "mkdir -p release && npm run desktop:build && codesign --force --deep --sign - --identifier com.selim.ajankonseyi.desktop 'dist/Ajan Konseyi-darwin-arm64/Ajan Konseyi.app' && ditto -c -k --sequesterRsrc --keepParent 'dist/Ajan Konseyi-darwin-arm64/Ajan Konseyi.app' 'release/Ajan-Konseyi-macOS-arm64.zip'",
     "test": "node --test test/*.test.js",
     "test:e2e": "AJAN_E2E=1 node --test --test-concurrency=1 test/project-chat-menu.test.js",
-    "test:all": "npm test && npm run test:e2e"
+    "test:all": "npm test && npm run test:e2e",
+    "mcp": "node mcp-server.js"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
