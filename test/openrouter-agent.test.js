@@ -343,3 +343,50 @@ test("toplam süre sınırı duraklama sınırından bağımsız uygulanır", as
     /zaman aşımı/,
   );
 });
+
+test("toplam süre duraklama sınırından kısaysa duraklama mesajı dönmez", async () => {
+  const events = Array.from({ length: 200 }, () =>
+    `data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:"düşünüyorum " } }] })}\n\n`);
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    fetchImpl: streamingFetch({ events, gapMs: 5 }),
+  });
+  agent.progress = () => {};
+  for (let i = 0; i < 5; i++) {
+    const err = await agent.invoke("Bitmeyen üretim",
+      { sessionKey:`race-${i}`, timeoutMs:80, stallTimeoutMs:10_000, retryDelaysMs:[] }).catch((e) => e);
+    assert.match(String(err), /zaman aşımı/);
+    assert.doesNotMatch(String(err), /saniyedir veri göndermiyor/,
+      "toplam sınır önce dolduğunda duraklama mesajı yanıltıcı olur");
+  }
+});
+
+test("gecmisteki kimlik tartismasi arastirma yanitini silmez", async () => {
+  const analiz = "Devin, Cursor, Codex ve Claude Code karşılaştırması: ".padEnd(3000, "detaylı analiz metni. ");
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    fetchImpl: streamingFetch({ events: [
+      `data: ${JSON.stringify({ choices:[{ delta:{ content: analiz } }] })}\n\n`, "data: [DONE]\n\n",
+    ] }),
+  });
+  agent.progress = () => {};
+  const promptWithHistory = "--- ORTAK SOHBET GEÇMİŞİ ---\nKullanıcı: sen kimsin\nOx Alpha: codex değilim\n--- GEÇMİŞ SONU ---\n\nbüyük yazılımları analiz et";
+  const res = await agent.invoke(promptWithHistory,
+    { sessionKey:"gecmis-kirli", routeText:"büyük yazılımları analiz et", retryDelaysMs:[] });
+  assert.match(res.text, /Devin, Cursor/, "analiz yanıtı korunmalı");
+  assert.doesNotMatch(res.text, /kimliğiyle sunulan Ox Alpha modeliyim/);
+});
+
+test("gercek kimlik sorusunda saglayici kimligi hala zorlanir", async () => {
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    fetchImpl: streamingFetch({ events: [
+      `data: ${JSON.stringify({ choices:[{ delta:{ content:"Ben Codex'im." } }] })}\n\n`, "data: [DONE]\n\n",
+    ] }),
+  });
+  agent.progress = () => {};
+  const res = await agent.invoke("Kullanıcı sordu: sen kimsin",
+    { sessionKey:"kimlik", routeText:"sen kimsin", retryDelaysMs:[] });
+  assert.match(res.text, /Ox Alpha modeliyim/);
+  assert.doesNotMatch(res.text, /Ben Codex'im/);
+});

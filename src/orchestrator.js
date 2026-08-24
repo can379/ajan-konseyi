@@ -219,8 +219,40 @@ export class Orchestrator {
   releaseAgentLease(lease){if(!lease||!this.resourceLeases)return;try{this.resourceLeases.releaseLease(lease.id,lease.token);}catch{}}
   exportArtifacts(run,stage="snapshot"){if(!this.artifactExporter)return null;try{return this.artifactExporter(run,stage);}catch(error){this.log(`artifact export başarısız: ${String(error.message||error)}`);return null;}}
 
+  // Ortak gecmis modele few-shot ornek gibi okunur. Bos yanitlar, sagayici
+  // hata satirlari ve ayni sorunun tekrarlari modeli yanlis ornege ozendirdigi
+  // icin baglama alinmaz; ayni soru yalniz son haliyle kalir.
+  conversationHistoryMessages(messages) {
+    const NOISE = /^(Tur hatayla bitti|.+ yanıt veremedi:|⏹ Durduruldu)/;
+    const usable = messages.filter((m) => {
+      const content = String(m?.content || "").trim();
+      if (!content) return false;
+      if (m.kind === "error") return false;
+      if (m.from === "sistem" && NOISE.test(content)) return false;
+      return true;
+    });
+    const lastUserAt = new Map();
+    usable.forEach((m, i) => {
+      if (m.from !== "kullanici") return;
+      lastUserAt.set(String(m.content || "").trim(), i);
+    });
+    // Yinelenen soru dusunce ona verilmis yanit da dusmeli; aksi halde eski
+    // yanit yetim kalip yeni istegin hemen onune gelir ve ornek gibi okunur.
+    const kept = [];
+    let dropping = false;
+    usable.forEach((m, i) => {
+      if (m.from === "kullanici") {
+        dropping = lastUserAt.get(String(m.content || "").trim()) !== i;
+        if (!dropping) kept.push(m);
+        return;
+      }
+      if (!dropping) kept.push(m);
+    });
+    return kept;
+  }
+
   sharedConversationContext(run, maxChars = 24_000) {
-    const messages = run.messages || [];
+    const messages = this.conversationHistoryMessages(run.messages || []);
     const lines = messages.map((m) => {
       const who = m.from === "kullanici" ? "Kullanıcı" : (m.fromLabel || this.memberById(m.from)?.name || "Sistem");
       const attachments = (m.attachments || []).map((a) => ` [Ek: ${a.name}, ${a.kind || a.mime}]`).join("");
@@ -313,7 +345,14 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const identityContract = identityQuestion
       ? `\n\n--- SAĞLAYICI KİMLİĞİ ---\n${verifiedMemberIdentity(member)} Bu kimliği değiştirme, başka bir sağlayıcı olduğunu iddia etme ve ortak köprü adına konuşma.\n--- KİMLİK SONU ---`
       : "";
-    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${prompt}${browserHelp}${hostHelp}\n\nÖnceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    // Gecmis blogu uzun oldugunda model, ayni sorunun gecmisteki hatali
+    // yanitini ornek alip tekrarlayabiliyor. Su anki istek acik sinirlarla
+    // isaretlenir ve gecmisin yalniz arka plan oldugu soylenir.
+    const requestBlock = history ? `--- ŞU ANKİ İSTEK ---\n${prompt}\n--- İSTEK SONU ---` : prompt;
+    const historyRule = history
+      ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
+      : "";
+    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     if (identityQuestion) effectivePrompt += identityContract;
     if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
     if (route?.mode === "shared" && !opts.isolated) {
@@ -342,6 +381,9 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const selectedModel = member.model || (suppressAntigravityTier ? "" : (opts.tierModel || undefined));
     const providerOpts = {
       ...effectiveOpts,
+      // Kimlik karari tek yerde uretilir; saglayici ajanlari bunu yeniden
+      // hesaplamak yerine devralir.
+      identityQuestion,
       fresh: identityQuestion ? true : effectiveOpts.fresh,
       sessionKey: opts.sessionKey || (route?.mode === "shared"
         ? `${this.sessionKeyFor(run, member)}#connector#${route.connector}`
@@ -2014,7 +2056,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       attachments = await enrichAttachments(attachments);
       const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
       const attachNote = attachments.length ? "\n" + attachments.map((a) => `📎 ${a.url || a.path}`).join("\n") : "";
-      S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${content || "Ek dosyaları incele."}`, attachments });
+      // Kullanici metni zaten "@Üye:" ile basliyorsa onek ikilenmesin.
+      const mention = new RegExp(`^\\s*@${member.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*`, "i");
+      const bareContent = String(content || "").replace(mention, "");
+      S.addMessage(run, { from: "kullanici", kind: "message", content: `@${member.name}: ${bareContent || "Ek dosyaları incele."}`, attachments });
       const imageNote = attachmentPrompt(attachments);
       const inherited=this.projectHistory(run);
       const memory=this.projectContext.readMemory(run.projectId);
@@ -2023,16 +2068,16 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const firstContact = !this.providers[member.provider].sessions.get(this.sessionKeyFor(run, member));
       const brief = firstContact ? await this.codebaseBrief(run) : "";
       const res = await this.callMember(run, member,
-        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}${brief}\n\n${content}${imageNote}`,
+        `Kullanıcıdan sana doğrudan bir mesaj geldi (konsey sohbeti bağlamında, Türkçe ve Markdown ile yanıtla).${inherited?`\n\nProjede önceki sohbetlerden devralınan bağlam:\n${inherited}`:""}${memory?`\n\nKalıcı proje hafızası:\n${truncate(memory,4000)}`:""}${brief}\n\n${bareContent}${imageNote}`,
         { label: "doğrudan mesaj", images, media: attachments, timeoutMs: member.provider === "antigravity" ? 12 * 60 * 1000 : undefined,
           // Sağlayıcı/bağlayıcı kararını proje hafızası veya önceki sohbetten
           // değil, yalnız kullanıcının bu turdaki gerçek mesajından üret.
           // Böylece geçmişte geçen "Codex" ya da "GitHub" sözcükleri Claude,
           // Antigravity ve Ox Alpha'yı ortak Codex köprüsüne taşıyamaz.
-          routeText: content,
+          routeText: bareContent,
           shouldStop: () => run.stopRequested });
       if (res.ok) {
-        res.text = await this.guaranteeImageOutput(run, member, content, res.text, { images, media:attachments });
+        res.text = await this.guaranteeImageOutput(run, member, bareContent, res.text, { images, media:attachments });
         this.memberMsg(run, member, "message", res.text);
       }
       else if (!run.stopRequested) S.addMessage(run, { from: "sistem", kind: "error", content: `${member.name} yanıt veremedi: ${res.error}` });

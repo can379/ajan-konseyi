@@ -31,6 +31,8 @@ const OX_ALPHA_IDENTITY = `You are Ox Alpha, the model reached through OpenRoute
 Your underlying developer/provider is anonymous during the OpenRouter preview. You must never claim that you are Codex, ChatGPT, an OpenAI model, Claude, Gemini, or any other named product/provider. "Ox Alpha" is not merely a UI alias for Codex.
 If asked who or what you are, answer that you are Ox Alpha and that your underlying provider is not publicly verified. Clearly distinguish verified facts from inference. Continue answering in the user's language.`;
 
+const IDENTITY_ANSWER_MAX_CHARS = 1_500;
+
 function isIdentityQuestion(prompt) {
   return /(?:kimsin|kimliğin|codex\s*mi|codex\s*değil|who are you|are you codex|what model)/iu.test(String(prompt));
 }
@@ -200,7 +202,13 @@ export class OpenRouterAgent extends BaseAgent {
     const apiKey = await this.keyProvider?.();
     if (!apiKey) throw new Error("OpenRouter API anahtarı ayarlanmamış");
     const sessionKey = opts.sessionKey || "global";
-    const identityQuestion = isIdentityQuestion(prompt);
+    // Dedektore tam istem verilirse ortak sohbet gecmisindeki eski kimlik
+    // tartismalari eslesir ve sira disi bir istek kimlik sorusu sanilir.
+    // Karari kullanicinin bu turdaki gercek mesajindan uret; orkestrator
+    // zaten hesapladiginda onun kararini kullan.
+    const identityQuestion = typeof opts.identityQuestion === "boolean"
+      ? opts.identityQuestion
+      : isIdentityQuestion(opts.routeText ?? prompt);
     // Kimlik tartışmalarındaki eski, hatalı asistan cevaplarını yeni isteğe taşımayın.
     const prior = opts.fresh || identityQuestion ? [] : boundedHistory(this.histories.get(sessionKey) || [], opts.historyChars);
     const conversation = [...prior, { role:"user", content:userContent(prompt, opts.images || []) }];
@@ -216,11 +224,14 @@ export class OpenRouterAgent extends BaseAgent {
     let stallTimer = null;
     const armStall = () => {
       clearTimeout(stallTimer);
+      // Kalan toplam sure duraklama sinirindan kisaysa once toplam sinir
+      // devreye girer. Duraklama sayacini o ana kadar kisaltmak iki sayaci
+      // yaristirir ve "N saniyedir veri yok" mesajini yanlis sureyle dondurur.
       const remaining = deadline - Date.now();
-      if (remaining <= 0) return;
+      if (remaining <= stallMs) return;
       stallTimer = setTimeout(
         () => controller.abort(new Error(`OpenRouter akışı ${Math.round(stallMs / 1_000)} saniyedir veri göndermiyor`)),
-        Math.min(stallMs, remaining));
+        stallMs);
     };
     armStall();
     // BaseAgent.stop(runId) bu iptal tutamacını da çocuk süreç gibi sonlandırır.
@@ -306,7 +317,10 @@ export class OpenRouterAgent extends BaseAgent {
       if (!text.trim()) throw emptyResponseError(truncated, maxTokens);
       // Stealth modeller öz-kimlik sorularında eğitim verilerinden yanlış ürün adı
       // üretebilir. Kullanıcıya yalnız doğrulanabilen sağlayıcı kimliğini gösterin.
-      if (identityQuestion && /\b(?:codex|chatgpt|openai|claude|gemini)\b/iu.test(text)) text = verifiedIdentityAnswer(prompt);
+      // Kimlik yaniti kisadir. Uzun ve icerikli bir cevabin icinde saglayici
+      // adi gecmesi kimlik iddiasi degil konu geregidir; onu silme.
+      if (identityQuestion && text.length <= IDENTITY_ANSWER_MAX_CHARS
+          && /\b(?:codex|chatgpt|openai|claude|gemini)\b/iu.test(text)) text = verifiedIdentityAnswer(opts.routeText ?? prompt);
       if (!opts.fresh) this.histories.set(sessionKey, [...conversation, { role:"assistant", content:text }].slice(-20));
       const usage = { input:payload.usage?.prompt_tokens || 0, cachedInput:0, output:payload.usage?.completion_tokens || 0, costUsd:payload.usage?.cost || 0 };
       (opts.onUsage || this.onUsage)?.(usage);
