@@ -55,3 +55,13 @@ test("sohbet menüsü viewport içinde fixed konumlanır ve masaüstünde paneli
   // Render sonrasi hover son fare konumundan geri kazanilir.
   assert.match(ui,/document\.elementFromPoint\(lastPointer\.x,lastPointer\.y\)/);
 });
+
+test("tüm ajanlar için canlı ve açılır çalışma akışı gösterilir",()=>{
+  assert.match(html,/id="work-activity" aria-live="polite"/);
+  assert.match(ui,/function renderWorkActivity\(run\)/);
+  assert.match(ui,/data-work-key="task-/);
+  assert.match(ui,/Kod değişiklikleri/);
+  assert.match(ui,/Çalışma özeti/);
+  assert.match(ui,/const allFinished=run\.tasks\.every/);
+  assert.match(ui,/openKeys\.has\(node\.dataset\.workKey\)/);
+});

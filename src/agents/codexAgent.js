@@ -64,7 +64,12 @@ export class CodexAgent extends BaseAgent {
     const useResume = !!sess;
     let args = useResume
       ? ["--search", "exec", "resume", ...common,
-          "-c", 'approval_policy="never"', "-c", 'sandbox_mode="workspace-write"', sess]
+          "-c", 'approval_policy="never"', "-c", 'sandbox_mode="workspace-write"',
+          // Resume calisma dizinini surecten alir; sandbox'in yazilabilir koku
+          // de acikca proje dizinine baglanir ki eski oturum yeni projeye
+          // yazabilsin.
+          ...(opts.cwd ? ["-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(opts.cwd)}]`] : []),
+          sess]
       : freshArgs;
 
     // Canlı akış: olaylar geldikçe kısmi çıktıyı yayınla
@@ -90,7 +95,7 @@ export class CodexAgent extends BaseAgent {
       }
     };
 
-    let result = await this.spawnCollect(this.bin, args, prompt, opts.timeoutMs, onLine, opts.sessionKey);
+    let result = await this.spawnCollect(this.bin, args, prompt, opts.timeoutMs, onLine, opts.sessionKey, opts.cwd);
     if (result.timedOut) throw new Error("Codex çağrısı zaman aşımına uğradı");
 
     // Resume başarısız olursa (oturum bulunamadı vb.) taze oturumla tekrar dene
@@ -99,7 +104,7 @@ export class CodexAgent extends BaseAgent {
       this.log("codex resume başarısız, yeni oturum deneniyor");
       this.clearSession(opts);
       live = ""; text = "";
-      result = await this.spawnCollect(this.bin, freshArgs, prompt, opts.timeoutMs, onLine, opts.sessionKey);
+      result = await this.spawnCollect(this.bin, freshArgs, prompt, opts.timeoutMs, onLine, opts.sessionKey, opts.cwd);
       if (result.timedOut) throw new Error("Codex çağrısı zaman aşımına uğradı");
     }
     if (result.code !== 0) {
@@ -123,10 +128,14 @@ export class CodexAgent extends BaseAgent {
     return { ok: true, text, raw: { thread_id: this.getSession(opts), usage: normUsage } };
   }
 
-  spawnCollect(bin, args, stdinText, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null, sessionKey = null) {
+  spawnCollect(bin, args, stdinText, timeoutMs = DEFAULT_TIMEOUT_MS, onLine = null, sessionKey = null, cwd = null) {
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, {
-        cwd: this.rootDir,
+        // Calisma dizini surec seviyesinde verilir. "-C" bayragi yalniz taze
+        // oturumda gecerlidir; "exec resume" onu kabul etmez. Yalniz -C'ye
+        // guvenilirse resume edilen her cagri sunucunun kendi dizinine duser
+        // ve workspace-write sandbox'i projeye yazmayi engeller.
+        cwd: cwd || this.rootDir,
         env: cleanEnv(),
         stdio: ["pipe", "pipe", "pipe"],
       });

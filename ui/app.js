@@ -345,6 +345,7 @@ function render() {
   renderCapabilities();
   const run = selectedRun ? state.runs[selectedRun] : null;
   renderChat(run);
+  renderWorkActivity(run);
   renderMessageQueue(run);
   renderLive();
   renderDetails(run);
@@ -948,6 +949,41 @@ function msgHTML(m) {
 // Titreme düzeltmesi: sohbet sıfırdan KURULMAZ; yalnızca yeni mesajlar eklenir.
 // Böylece açık <details> öğeleri kapanmaz, metin yanıp sönmez.
 let chatRunId = null, chatCount = 0;
+
+let workActivitySig = "";
+function renderWorkActivity(run) {
+  const el=$("work-activity");
+  if(!el)return;
+  if(!run?.tasks?.length){el.hidden=true;el.innerHTML="";workActivitySig="";return;}
+  const sig=[run.id,run.status,run.phase,run.tasks.map(task=>[task.id,task.status,task.startedAt,task.endedAt,String(task.result||"").length,String(task.error||"").length].join(":")),(run.files||[]).length,(run.diffs||[]).map(diff=>String(diff.diff||"").length),(run.tests||[]).map(test=>`${test.ok}:${String(test.output||"").length}`),(run.report||"").length,run.messages.length].flat().join("|");
+  if(sig===workActivitySig)return;
+  const openKeys=new Set([...el.querySelectorAll("details[open][data-work-key]")].map(node=>node.dataset.workKey));
+  workActivitySig=sig;
+  const labels={pending:"Bekliyor",active:"Çalışıyor",running:"Çalışıyor",review:"İncelemede",done:"Tamamlandı",failed:"Hatalı",waiting:"Bekliyor"};
+  const completed=run.tasks.filter(task=>task.status==="done").length;
+  const active=run.tasks.filter(task=>["active","running","review"].includes(task.status)).length;
+  const allFinished=run.tasks.every(task=>["done","failed"].includes(task.status));
+  const progress=Math.round(completed/run.tasks.length*100);
+  const taskRows=run.tasks.map((task,index)=>{
+    const owner=task.assigneeName||metaFor(task.assignee).label;
+    const result=task.result?`<div class="work-result"><b>Sonuç</b>${md(String(task.result).slice(0,6000))}</div>`:"";
+    const error=task.error?`<div class="work-error">${esc(task.error)}</div>`:"";
+    return `<details class="work-step ${esc(task.status)}" data-work-key="task-${esc(task.id)}"><summary><i>${task.status==="done"?"✓":task.status==="failed"?"!":index+1}</i><span><b>${esc(task.title)}</b><small>${esc(owner)} · ${esc(labels[task.status]||task.status)}</small></span><em>⌄</em></summary><div class="work-step-body">${task.prompt?`<div><b>Yapılacak</b><p>${esc(task.prompt)}</p></div>`:""}${task.workspace?.branch?`<div><b>Çalışma dalı</b><code>${esc(task.workspace.branch)}</code></div>`:""}${result}${error}</div></details>`;
+  }).join("");
+  const changes=[...(run.files||[])];
+  const diffs=(run.diffs||[]).filter(diff=>diff.diff);
+  const changeSection=(changes.length||diffs.length)?`<details class="work-group" data-work-key="changes"><summary><span><b>Kod değişiklikleri</b><small>${changes.length} dosya · ${diffs.length} diff</small></span><em>⌄</em></summary><div class="work-group-body">${changes.map(file=>`<div class="work-file"><code>${esc(file.path)}</code><span>${esc(file.change||file.agent||"Değiştirildi")}</span></div>`).join("")}${diffs.map((diff,index)=>`<details class="work-diff" data-work-key="diff-${index}"><summary>${esc(diff.branch||diff.agent||`Kod farkı ${index+1}`)}</summary><pre>${esc(String(diff.diff).slice(0,20000))}</pre></details>`).join("")}</div></details>`:"";
+  const tests=run.tests||[];
+  const testSection=tests.length?`<details class="work-group" data-work-key="tests"><summary><span><b>Testler</b><small>${tests.filter(test=>test.ok).length}/${tests.length} başarılı</small></span><em>⌄</em></summary><div class="work-group-body">${tests.map(test=>`<details class="work-test ${test.ok?"ok":"failed"}"><summary><i>${test.ok?"✓":"!"}</i><code>${esc(test.command)}</code></summary><pre>${esc(String(test.output||"Çıktı kaydedilmedi").slice(0,10000))}</pre></details>`).join("")}</div></details>`:"";
+  const finalMessage=[...(run.messages||[])].reverse().find(message=>["decision","result"].includes(message.kind)&&["koordinator","sistem"].includes(message.from));
+  const generatedSummary=allFinished?`### Tamamlanan çalışma\n${run.tasks.map(task=>`- **${task.title}:** ${String(task.result||task.error||(task.status==="done"?"Tamamlandı":"Başarısız")).replace(/\s+/g," ").slice(0,320)}`).join("\n")}`:"";
+  const finalText=run.report||(allFinished?finalMessage?.content:"")||generatedSummary;
+  const finalSection=finalText?`<details class="work-group work-final" data-work-key="final"><summary><span><b>Çalışma özeti</b><small>Tüm iş tamamlandıktan sonra oluşturuldu</small></span><em>⌄</em></summary><div class="work-group-body work-final-copy">${md(finalText)}</div></details>`:"";
+  el.innerHTML=`<header><span><b>Konsey çalışma akışı</b><small>${active?`${active} ajan çalışıyor`:allFinished?"Çalışma tamamlandı":labels[run.status]||run.status}</small></span><strong>${progress}%</strong></header><div class="work-progress"><i style="width:${progress}%"></i></div><div class="work-steps">${taskRows}</div>${changeSection}${testSection}${finalSection}`;
+  for(const node of el.querySelectorAll("details[data-work-key]"))node.open=openKeys.has(node.dataset.workKey);
+  el.hidden=false;
+}
+
 function renderChat(run) {
   const hasMsgs = run && run.messages.length;
   $("empty-state").hidden = !!hasMsgs;
