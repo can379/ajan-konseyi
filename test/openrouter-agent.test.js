@@ -221,7 +221,7 @@ test("Ox Alpha bütün bütçeyi akıl yürütmeye harcarsa bütçeyi büyütüp
   const result = await agent.invoke("Uzun analiz yaz", { sessionKey:"reasoning-budget", retryDelaysMs:[0, 0] });
   assert.equal(calls, 2);
   assert.equal(budgets[0], 32_000);
-  assert.equal(budgets[1], 128_000);
+  assert.equal(budgets[1], 64_000);
   assert.equal(result.text, "Geniş bütçeyle yanıt");
 });
 
@@ -273,4 +273,73 @@ test("Ox Alpha yalnız akıl yürütürken kartı boş bırakmaz", async () => {
   assert.deepEqual(labels[0], ["yanıtlıyor · akıl yürütüyor", ""]);
   // Ham akıl yürütme metni kullanıcıya akıtılmaz.
   assert.ok(labels.every(([, text]) => !String(text).includes("plan kuruyorum")));
+});
+
+// Akış üzerinden sürekli veri gelen bir yanıtı taklit eder; abort edilince
+// gerçek fetch gibi bekleyen read() reddedilir.
+function streamingFetch({ events, gapMs = 0, hangAfter = false }) {
+  const encoder = new TextEncoder();
+  return async (_url, options) => {
+    let index = 0;
+    return {
+      ok: true,
+      body: { getReader: () => ({
+        read: () => new Promise((resolve, reject) => {
+          const fail = () => reject(options.signal.reason || new Error("aborted"));
+          if (options.signal.aborted) return fail();
+          options.signal.addEventListener("abort", fail, { once: true });
+          if (index >= events.length) {
+            if (hangAfter) return; // sağlayıcı susuyor: yalnız abort bitirir
+            return setTimeout(() => resolve({ done: true }), gapMs);
+          }
+          setTimeout(() => resolve({ done: false, value: encoder.encode(events[index++]) }), gapMs);
+        }),
+      }) },
+    };
+  };
+}
+
+test("akış sürdükçe uzun yanıt duraklama sınırıyla kesilmez", async () => {
+  const events = Array.from({ length: 6 }, (_, i) =>
+    `data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:`adım ${i} ` } }] })}\n\n`);
+  events.push(`data: ${JSON.stringify({ choices:[{ delta:{ content:"Uzun düşünmenin ardından yanıt" } }] })}\n\n`);
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    // Her parça 30 ms arayla gelir; toplam süre 200 ms duraklama sınırını aşar
+    // ama tek bir sessizlik aralığı aşmaz.
+    fetchImpl: streamingFetch({ events, gapMs: 30 }),
+  });
+  agent.progress = () => {};
+
+  const result = await agent.invoke("Uzun analiz", { sessionKey:"long-stream", stallTimeoutMs:200 });
+  assert.equal(result.text, "Uzun düşünmenin ardından yanıt");
+});
+
+test("sağlayıcı akışın ortasında susarsa duraklama sınırı çağrıyı bitirir", async () => {
+  const events = [`data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:"düşünüyorum" } }] })}\n\n`];
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    fetchImpl: streamingFetch({ events, gapMs: 5, hangAfter: true }),
+  });
+  agent.progress = () => {};
+
+  await assert.rejects(
+    () => agent.invoke("Analiz", { sessionKey:"stalled", stallTimeoutMs:80, retryDelaysMs:[] }),
+    /veri göndermiyor/,
+  );
+});
+
+test("toplam süre sınırı duraklama sınırından bağımsız uygulanır", async () => {
+  const events = Array.from({ length: 200 }, () =>
+    `data: ${JSON.stringify({ choices:[{ delta:{ content:"", reasoning:"hâlâ düşünüyorum " } }] })}\n\n`);
+  const agent = new OpenRouterAgent(fakeStore(), process.cwd(), {
+    keyProvider: async () => "sk-test",
+    fetchImpl: streamingFetch({ events, gapMs: 5 }),
+  });
+  agent.progress = () => {};
+
+  await assert.rejects(
+    () => agent.invoke("Bitmeyen üretim", { sessionKey:"total-cap", timeoutMs:120, stallTimeoutMs:10_000, retryDelaysMs:[] }),
+    /zaman aşımı/,
+  );
 });

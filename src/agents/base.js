@@ -56,6 +56,14 @@ export class BaseAgent {
 
   // ---- Kota / durum ----
   _checkQuota(errMsg) {
+    // Ust saglayicinin anlik yogunlugu (429 "sağlayıcı şu an yoğun") HESAP
+    // kotasi degildir: uyeyi 10 dakika konseyden dusurmek yanlis olur.
+    // Adaptor zaten uzun merdivenle yeniden denedi; burada yalniz durum
+    // mesaji verilir, soguma uygulanmaz.
+    if (/sağlayıcı şu an yoğun|provider returned error/i.test(errMsg)) {
+      this.store.setAgentStatus(this.name, "idle", "sağlayıcı yoğun — tekrar deneyebilirsiniz");
+      return false;
+    }
     if (/rate.?limit|quota|kota|429|too many|limit (reached|exceeded)|usage limit/i.test(errMsg)) {
       this.cooldownUntil = Date.now() + 10 * 60 * 1000;
       const until = new Date(this.cooldownUntil).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" });

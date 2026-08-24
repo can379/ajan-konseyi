@@ -8,9 +8,21 @@ const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 // ile biter. Butceyi modelin 1M baglamina yarasir bicimde genis tut.
 const DEFAULT_MAX_OUTPUT_TOKENS = 32_000;
 const IDENTITY_MAX_OUTPUT_TOKENS = 4_000;
-const MAX_OUTPUT_TOKENS_CEILING = 128_000;
+const MAX_OUTPUT_TOKENS_CEILING = 64_000;
+// Akil yurutme + uzun uretim birlikte dakikalar surer: olculen tek bir cagri
+// 24.860 token uretimi icin ~8 dakika aldi. Toplam sinir bu gercege gore genis,
+// ama BaseAgent watchdog'unun (15 dk) altinda kalir. Asil koruma "durma"
+// siniridir: veri akmayi birakirsa toplam siniri beklemeden hemen biter.
+const DEFAULT_TIMEOUT_MS = 12 * 60_000;
+const DEFAULT_STALL_TIMEOUT_MS = 2 * 60_000;
 const DEFAULT_HISTORY_CHARS = 24_000;
 const DEFAULT_RETRY_DELAYS_MS = [1_200, 2_500, 5_000];
+// 429 genelde HESAP kotasi degil, ust saglayicinin anlik yogunlugudur
+// ("Provider returned error"). ~9 saniyelik kisa merdiven bunu asmaya
+// yetmiyordu; 429'a ozel, daha uzun ve jitter'li bir merdiven kullanilir.
+// Jitter, ayni anda calisan uyelerin ayni saniyede tekrar denemesini onler.
+const RATE_LIMIT_RETRY_DELAYS_MS = [2_000, 6_000, 15_000, 30_000];
+const jitter = (ms) => Math.round(ms * (0.85 + Math.random() * 0.3));
 const RETRYABLE_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 const OX_ALPHA_IDENTITY = `You are Ox Alpha, the model reached through OpenRouter with the public model id stealth/ox-alpha.
 Your underlying developer/provider is anonymous during the OpenRouter preview. You must never claim that you are Codex, ChatGPT, an OpenAI model, Claude, Gemini, or any other named product/provider. "Ox Alpha" is not merely a UI alias for Codex.
@@ -61,13 +73,20 @@ function boundedHistory(history, maxChars = DEFAULT_HISTORY_CHARS) {
   return picked;
 }
 
-function retryAfterMs(response, fallback) {
+function retryAfterMs(response, fallback, cap = 15_000) {
   const raw = response?.headers?.get?.("retry-after");
   if (!raw) return fallback;
   const seconds = Number(raw);
-  if (Number.isFinite(seconds)) return Math.min(15_000, Math.max(0, seconds * 1_000));
+  if (Number.isFinite(seconds)) return Math.min(cap, Math.max(0, seconds * 1_000));
   const date = Date.parse(raw);
-  return Number.isFinite(date) ? Math.min(15_000, Math.max(0, date - Date.now())) : fallback;
+  return Number.isFinite(date) ? Math.min(cap, Math.max(0, date - Date.now())) : fallback;
+}
+
+// Hesap kotasinin gercekten dolmasi ile ust saglayicinin anlik mesguliyetini
+// ayirt et: ilki uzun soguma gerektirir, ikincisi yalnizca beklemeyi.
+function isUpstreamBusy(status, detail) {
+  if (status !== 429) return false;
+  return !/free-models-per-day|per-day|daily limit|credits|insufficient|quota exceeded/i.test(String(detail || ""));
 }
 
 function waitWithSignal(ms, signal) {
@@ -178,7 +197,23 @@ export class OpenRouterAgent extends BaseAgent {
     const conversation = [...prior, { role:"user", content:userContent(prompt, opts.images || []) }];
     const messages = [{ role:"system", content:OX_ALPHA_IDENTITY }, ...conversation];
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("OpenRouter zaman aşımı")), opts.timeoutMs || 3 * 60_000);
+    const totalMs = Math.max(1, Number(opts.timeoutMs) || DEFAULT_TIMEOUT_MS);
+    const stallMs = Math.max(1, Number(opts.stallTimeoutMs) || DEFAULT_STALL_TIMEOUT_MS);
+    const deadline = Date.now() + totalMs;
+    const totalTimer = setTimeout(
+      () => controller.abort(new Error(`OpenRouter zaman aşımı (${Math.round(totalMs / 60_000)} dk)`)), totalMs);
+    // Model dusunurken de token akar. Akis surdugu surece cagriyi kesme;
+    // yalnizca gercekten susarsa (baglanti dustu, saglayici takildi) bitir.
+    let stallTimer = null;
+    const armStall = () => {
+      clearTimeout(stallTimer);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return;
+      stallTimer = setTimeout(
+        () => controller.abort(new Error(`OpenRouter akışı ${Math.round(stallMs / 1_000)} saniyedir veri göndermiyor`)),
+        Math.min(stallMs, remaining));
+    };
+    armStall();
     // BaseAgent.stop(runId) bu iptal tutamacını da çocuk süreç gibi sonlandırır.
     // Böylece HTTP/SSE isteği görsel veya metin bitene kadar arka planda kalmaz.
     const cancellation = { _sessionKey:sessionKey, _noForceKill:true, kill:() => controller.abort(new Error("Durduruldu")) };
@@ -205,14 +240,23 @@ export class OpenRouterAgent extends BaseAgent {
         if (!response.ok) {
           const errorPayload = await response.json().catch(() => ({}));
           const detail = errorPayload?.error?.message || response.statusText;
-          const canRetry = RETRYABLE_STATUS.has(response.status) && attempt < retryDelays.length;
-          if (!canRetry) throw new Error(`OpenRouter ${response.status}: ${detail}`);
-          await waitWithSignal(retryAfterMs(response, retryDelays[attempt]), controller.signal);
+          // Ust saglayici mesgulse daha uzun ve jitter'li merdivene gec.
+          const busy = isUpstreamBusy(response.status, detail);
+          const ladder = busy ? RATE_LIMIT_RETRY_DELAYS_MS : retryDelays;
+          const canRetry = RETRYABLE_STATUS.has(response.status) && attempt < ladder.length;
+          if (!canRetry) {
+            throw new Error(busy
+              ? `OpenRouter ${response.status}: sağlayıcı şu an yoğun (${detail}). Birkaç dakika sonra tekrar deneyin; hesap kotanızla ilgili değildir.`
+              : `OpenRouter ${response.status}: ${detail}`);
+          }
+          const wait = busy ? jitter(ladder[attempt]) : ladder[attempt];
+          await waitWithSignal(retryAfterMs(response, wait, busy ? 60_000 : 15_000), controller.signal);
           continue;
         }
 
         try {
           payload = await readStream(response, (partial, thinking) => {
+            armStall();
             if (opts.silent) return;
             // Model dakikalarca yalnız akıl yürütebilir. Kartı boş bırakmak
             // yerine durumu bildir; ham akıl yürütme metnini kullanıcıya dökme.
@@ -231,7 +275,10 @@ export class OpenRouterAgent extends BaseAgent {
           // Bu geçici bir sunucu hatası olmadığı için beklemeden, daha geniş
           // bütçeyle hemen yeniden dene.
           truncated = (payload?.finishReason ?? choice?.finish_reason) === "length";
-          if (truncated && maxTokens < ceiling && attempt < retryDelays.length) {
+          // Yeniden deneme ilk cagri kadar surer. Pencerenin buyuk kismi
+          // tukendiyse buyutup denemek kullaniciyi bosuna bekletir; net hata ver.
+          const roomToRetry = deadline - Date.now() > totalMs * 0.4;
+          if (truncated && maxTokens < ceiling && attempt < retryDelays.length && roomToRetry) {
             maxTokens = Math.min(ceiling, maxTokens * 4);
             this.log(`ox-alpha akıl yürütmede tükendi; token bütçesi ${maxTokens} yapıldı`);
             payload = null;
@@ -257,7 +304,8 @@ export class OpenRouterAgent extends BaseAgent {
       if (!opts.silent) this.progress(opts.label || "", text, opts.memberId);
       return { ok:true, text, raw:{ id:payload.id, usage } };
     } finally {
-      clearTimeout(timeout);
+      clearTimeout(totalTimer);
+      clearTimeout(stallTimer);
       this.children.delete(cancellation);
     }
   }
