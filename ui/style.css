@@ -1012,14 +1012,26 @@ body.split-resizing iframe,body.split-resizing webview{pointer-events:none!impor
 /* Araç paneli açıkken sohbet kullanılmaz ölçüye kadar sıkışmaz. Geniş
    pencerelerde panel kalan alana uyar; orta boy pencerelerde üstte açılır. */
 @media (min-width:1101px) and (max-width:1350px){
-  #app:not(:has(#sidebar.hidden)) #tool-panel:not(.closed){width:540px!important;flex-basis:540px!important}
+  /* Genislik SABITLENMEZ: kullanicinin surukledigi olcu (--tool-width)
+     korunur, yalniz sohbet kullanilmaz hale gelmesin diye ust sinir konur.
+     Eskiden burada 540px!important vardi ve surukleme hicbir sey yapmiyordu. */
+  #app:not(:has(#sidebar.hidden)) #tool-panel:not(.closed){
+    width:min(var(--tool-width),calc(100vw - var(--sidebar-width) - 360px))!important;
+    flex-basis:min(var(--tool-width),calc(100vw - var(--sidebar-width) - 360px))!important}
   #app:has(#tool-panel:not(.closed)) #mode-row .segmented button:not(.active),
   #app:has(#tool-panel:not(.closed)) #btn-templates{display:none}
   #app:has(#tool-panel:not(.closed)) #btn-project{min-width:0;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 }
 @media (min-width:761px) and (max-width:1100px){
-  #tool-resizer{display:none}
-  #tool-panel:not(.closed){position:fixed!important;right:0!important;top:0!important;bottom:0!important;width:min(72vw,620px)!important;flex-basis:min(72vw,620px)!important;box-shadow:-24px 0 70px rgba(0,0,0,.5)}
+  /* Panel ustte acilir ama yine de yeniden boyutlandirilabilir olmali;
+     tutamak gizlenince kullanici genisligi hic degistiremiyordu. Ustte
+     acildigi icin tutamak panelin sol kenarina sabitlenir. */
+  #tool-resizer{position:fixed;top:0;bottom:0;z-index:41;
+    right:min(var(--tool-width),72vw);display:block}
+  #app:has(#tool-panel.closed) #tool-resizer{display:none}
+  #tool-panel:not(.closed){position:fixed!important;right:0!important;top:0!important;bottom:0!important;
+    width:min(var(--tool-width),72vw)!important;flex-basis:min(var(--tool-width),72vw)!important;
+    box-shadow:-24px 0 70px rgba(0,0,0,.5)}
 }
 /* Daralan sohbet kutusunda ikincil seçenekler kesilmek yerine sadeleşir. */
 @container (max-width:520px){
@@ -1348,3 +1360,21 @@ body.split-resizing iframe,body.split-resizing webview{pointer-events:none!impor
 .ctx-meta{font-size:10.5px;color:var(--dim2)}
 .ctx-card button{margin-top:7px}
 .provider-badge.handoff{margin-left:4px;border-style:dashed;opacity:.92}
+
+
+/* ---- Sohbet yatay kaymasin ---- */
+/* Kapanmayan bir satir ici etiket (or. dengesiz "**") mesaji saran ek bir
+   flex ogesi yaratabiliyor; min-width:auto tasidigi icin kutu icerigin
+   min-content genisligine kilitleniyor ve sohbet yatay kayiyordu. Kok neden
+   md() ve mesaj basina render ile giderildi; bu kural yapisal guvenlik agi:
+   hicbir mesaj cocugu kapsayicisini genisletemez. */
+.msg > *, .msg .m-body > *, .m-content > * { min-width: 0; max-width: 100%; }
+#chat, #live, #typing { overflow-x: clip; }
+/* Uzun icerik kendi kutusunda kayar, sayfayi kaydirmaz. */
+.m-content pre, .m-content .codeblock, .m-content .tbl-wrap { max-width: 100%; overflow-x: auto; }
+.m-content { overflow-wrap: anywhere; }
+
+/* Metin sag kenara yapismasin: dar pencerede de saglam bir nefes payi kalir. */
+@media (min-width:761px){
+  #workspace { padding-right: 34px; }
+}

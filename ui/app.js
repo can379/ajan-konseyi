@@ -174,7 +174,12 @@ function md(src) {
   t = esc(t);
   // 2) Satır içi öğeler
   t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-  t = t.replace(/\*\*([^*\n][^*]*?)\*\*/g, "<b>$1</b>");
+  // Kalın işaretleme SATIR içinde kalmalıdır. Eskiden içerik kalıbı yeni
+  // satıra izin veriyordu; kapanmayan bir "**" paragrafları aşıp bloklara
+  // bölünüyor, <b> iç içe geçip açık kalıyordu. Açık kalan etiket kendinden
+  // SONRAKİ tüm mesajları sarıyor ve onları tek bir flex öğesine çevirdiği
+  // için sohbet yatay kayıyordu.
+  t = t.replace(/\*\*([^*\n][^*\n]*?)\*\*/g, "<b>$1</b>");
   t = t.replace(/(^|[\s(>])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/gm, "$1<i>$2</i>");
   t = t.replace(/!\[([^\]]*)\]\((\/uploads\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
   t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
@@ -1000,7 +1005,13 @@ function renderChat(run) {
       chatCount = 0;
     }
     if (run.messages.length > chatCount) {
-      el.insertAdjacentHTML("beforeend", run.messages.slice(chatCount).map(msgHTML).join(""));
+      // Mesajlar TEK TEK eklenir. Birleştirilmiş tek bir HTML dizesinde
+      // kapanmayan bir etiket sonraki mesajları da sarıyordu; ayrı ayrı
+      // eklenince tarayıcı her mesajın sonunda etiketi kapatır ve hasar o
+      // mesajla sınırlı kalır.
+      for (const message of run.messages.slice(chatCount)) {
+        el.insertAdjacentHTML("beforeend", msgHTML(message));
+      }
       chatCount = run.messages.length;
     }
   }
