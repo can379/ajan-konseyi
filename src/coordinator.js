@@ -1,4 +1,5 @@
 import { extractJson, truncate } from "./util.js";
+import { providerAllowed } from "./providerPolicy.js";
 
 // Koordinatör: görevleri analiz eden, bölen, dağıtan ve sonuçları birleştiren
 // "beyin". Hangi yapay zekânın (claude/codex/antigravity) koordinatör olacağına
@@ -10,9 +11,15 @@ export class Coordinator {
     this.getCfg = getCfg;         // () => config.data.coordinator
   }
 
-  agentFor() {
+  agentFor(ctx = {}) {
     const cfg = this.getCfg?.() || {};
-    return this.providers[cfg.provider] || this.providers.claude;
+    const available = Object.entries(this.providers)
+      .filter(([provider, agent]) => providerAllowed(ctx, provider) && agent?.isAvailable?.())
+      .map(([, agent]) => agent);
+    const configured = providerAllowed(ctx, cfg.provider) ? this.providers[cfg.provider] : null;
+    if (configured?.isAvailable?.()) return configured;
+    if (available.length) return available[0];
+    throw new Error("Koordinatör için izinli ve kullanılabilir sağlayıcı yok");
   }
 
   // orkestratörün oturum/durdurma erişimi için
@@ -43,11 +50,12 @@ export class Coordinator {
     };
     this.store.setAgentStatus("koordinator", "busy", label || "");
     try {
-      let res = await this.agentFor().send(prompt, opts);
+      const agent = this.agentFor(ctx);
+      let res = await agent.send(prompt, opts);
       if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
       let json = extractJson(res.text);
       if (!json) {
-        res = await this.agentFor().send(
+        res = await agent.send(
           "Önceki yanıtın geçerli JSON içermiyordu. Aynı içeriği, açıklama olmadan YALNIZCA tek bir JSON nesnesi olarak tekrar ver.",
           opts
         );

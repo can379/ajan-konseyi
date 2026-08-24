@@ -1,0 +1,8 @@
+[
+  {"id":"exclude-claude","kind":"provider-policy","excluded":["claude"],"provider":"claude","expected":false},
+  {"id":"allow-codex","kind":"provider-policy","excluded":["claude"],"provider":"codex","expected":true},
+  {"id":"normalize-policy","kind":"provider-policy","excluded":["CLAUDE","claude","unknown"],"provider":"claude","expected":false},
+  {"id":"identity-antigravity-ok","kind":"identity","provider":"antigravity","text":"Ben Antigravity'yim.","expected":true},
+  {"id":"identity-antigravity-drift","kind":"identity","provider":"antigravity","text":"Ben Codex'im.","expected":false},
+  {"id":"evidence-missing-visible","kind":"test-evidence","required":["npm test","npm run lint"],"executions":[{"command":"npm test","ok":true,"output":"pass"}],"expected":[{"command":"npm test","ran":true,"ok":true},{"command":"npm run lint","ran":false,"ok":false}]}
+]

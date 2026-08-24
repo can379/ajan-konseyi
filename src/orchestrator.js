@@ -24,6 +24,8 @@ import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuth
 import { normalizeTaskContract } from "./taskContract.js";
 import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
 import { assertEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
+import { appendRunEvent, recordTestExecution, testEvidenceFromEvents } from "./runEvents.js";
+import { assertProviderAllowed, providerAllowed } from "./providerPolicy.js";
 
 const exec = promisify(execFile);
 const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
@@ -35,6 +37,17 @@ export function reportsBlockedResult(text){return /^\s*(?:#{1,3}\s*)?(?:durum\s*
 
 export function isIdentityQuestion(text) {
   return /(?:^|\s)(?:sen\s+)?kim(?:sin|dir)?(?:\s|[?.!,]|$)|kendini\s+tan[ıi]t|hangi\s+(?:yapay\s+zek[âa]|model|sağlayıcı)/i.test(String(text || ""));
+}
+
+// Uye cagrisinin calisma dizini. Cagri noktalarinin cogu (dogrudan mesaj,
+// ikili inceleme, tartisma, oylama) cwd gecirmiyordu; bu durumda ajan
+// sunucunun kendi dizininde calisiyor, projeyi goremiyor ve ona yazamiyordu.
+// Iki istisna korunur: izole incelemeler yalniz kanit paketiyle calisir ve
+// kod modunda ayri calisma kopyasi olmayan gorevler ana agaca yazmamalidir.
+export function resolveMemberCwd(run, opts = {}) {
+  if (opts.cwd !== undefined) return opts.cwd;
+  if (opts.isolated || opts.noProjectCwd) return undefined;
+  return run?.projectDir || undefined;
 }
 
 export function verifiedMemberIdentity(member) {
@@ -132,8 +145,8 @@ export class Orchestrator {
     return true;
   }
 
-  availableMembers() {
-    return this.members().filter((m) => m.enabled && this.providerAvailable(m.provider));
+  availableMembers(run = null) {
+    return this.members().filter((m) => m.enabled && providerAllowed(run, m.provider) && this.providerAvailable(m.provider));
   }
 
   mediaCapableMembers(attachments, list = this.availableMembers()) {
@@ -144,7 +157,7 @@ export class Orchestrator {
     if(!run||run.titleManual)return null;
     const originalTitle=run.title;
     const candidates=["antigravity","claude","codex"]
-      .map((provider)=>this.availableMembers().find((m)=>m.provider===provider)).filter(Boolean);
+      .map((provider)=>this.availableMembers(run).find((m)=>m.provider===provider)).filter(Boolean);
     const prompt=`Bu konuşma için Türkçe, doğal ve açıklayıcı 3-7 kelimelik bir başlık üret. Yalnız başlığı yaz; tırnak, Markdown, emoji, noktalama veya açıklama ekleme. Kullanıcının cümlesinin başını kopyalama; konuşmanın gerçek amacını özetle.\n\nKullanıcının isteği:\n${truncate(userText,1800)}`;
     for(const member of candidates){
       if(run.titleManual)return null;
@@ -294,6 +307,11 @@ export class Orchestrator {
       endedAt: new Date().toISOString(),
     };
     run.envelopes.push(envelope);
+    appendRunEvent(run, "provider.finished", {
+      envelopeId: envelope.id, requestedProvider: envelope.requestedProvider,
+      actualProvider: envelope.actualProvider, actualModel: envelope.actualModel,
+      substituted: envelope.substituted, ok: envelope.ok,
+    }, envelope.endedAt);
     if (run.envelopes.length > 400) run.envelopes = run.envelopes.slice(-400);
     // Kalicilik istege baglidir: zarf zaten run nesnesinde. Minimal bir store
     // (testler, gomulu kullanim) cagri yolunu dusurmemeli.
@@ -302,6 +320,7 @@ export class Orchestrator {
   }
 
   async callMember(run, member, prompt, opts = {}) {
+    assertProviderAllowed(run, member?.provider);
     const used=Object.values(run.usage||{}).reduce((sum,item)=>({calls:sum.calls+(item.calls||0),tokens:sum.tokens+(item.input||0)+(item.output||0)}),{calls:0,tokens:0});
     const budget=run.budget||{enabled:false,maxCalls:24,maxTokens:250000};
     if(budget.enabled&&!opts.ignoreBudget&&(used.calls>=budget.maxCalls||used.tokens>=budget.maxTokens)){
@@ -311,10 +330,14 @@ export class Orchestrator {
     // Bağlayıcı seçimini zenginleştirilmiş prompttan/sohbet geçmişinden yapma.
     // Aksi halde geçmişte geçen "GitHub" gibi bir sözcük, sıradan Ox Alpha
     // mesajını Codex bağlayıcısına yönlendirip yanlış sağlayıcı çalıştırır.
+    const resolvedCwd = resolveMemberCwd(run, opts);
+    if (resolvedCwd !== opts.cwd) opts = { ...opts, cwd: resolvedCwd };
+
     const routeText = opts.routeText ?? prompt;
     const identityQuestion = isIdentityQuestion(routeText);
     // Kimlik soruları hiçbir bağlayıcıya veya ortak Codex köprüsüne devredilemez.
     const route = identityQuestion ? null : connectorRoute(member.provider, routeText);
+    if (route?.mode === "shared") assertProviderAllowed(run, route.provider);
     const provider = this.providers[route?.mode === "shared" ? route.provider : member.provider];
     let connectorLease=null;
     const connectorMode=connectorAccessMode(route?.connector,routeText);
@@ -1033,6 +1056,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   coordCtx(run) {
     return {
       runId: run.id,
+      excludedProviders: run.excludedProviders || [],
       stopCheck: () => run.stopRequested,
       onUsage: (u) => this.accumUsage(run, "koordinator", u),
     };
@@ -1094,7 +1118,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     S.addMessage(run, { from: "kullanici", kind: "message", content: text || "Ek dosyaları incele.", attachments });
 
     try {
-      const avail = this.availableMembers();
+      const avail = this.availableMembers(run);
       if (!avail.length) throw new Error("Ulaşılabilir üye yok (kenar çubuğundan üyeleri kontrol edin)");
 
       const requestedMember = this.explicitlyRequestedMember(text, avail);
@@ -1184,7 +1208,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
     if (!res.ok && !run.stopRequested && allowFallback) {
-      const alt = this.availableMembers().find((m) => m.id !== member.id && m.provider !== "antigravity");
+      const alt = this.availableMembers(run).find((m) => m.id !== member.id && m.provider !== "antigravity");
       if (alt) {
         S.addMessage(run, { from: "sistem", kind: "info", content: `${member.name} yanıt veremedi (${truncate(res.error, 100)}); ${alt.name} devralıyor.` });
         member = alt;
@@ -1276,7 +1300,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       S.addMessage(run, { from: "kullanici", kind: "message", content: run.request, attachments: run.attachments || [] });
     }
 
-    const avail = this.availableMembers();
+    const avail = this.availableMembers(run);
     if (!avail.length) throw new Error("Ulaşılabilir üye yok");
     if (this.members().some((m) => m.enabled && m.provider === "antigravity") &&
         !avail.some((m) => m.provider === "antigravity") && !resume && !chatTurn) {
@@ -1355,8 +1379,13 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         S.addMessage(run, { from: "sistem", kind: "info", content: `✓ ${run.projectDir} içinde git deposu başlatıldı.` });
       }
       if (!run.targetBranch) run.targetBranch = await gitops.currentBranch(run.projectDir);
+      // Antigravity kod yazan uye degildir ama kod modunda arastirma ve
+      // dogrulama gorevleri alir. Kopya verilmezse calisma dizini bos kalir,
+      // projeyi hic goremez ve gorevini yapamaz. Kopyada calistigi olculdu;
+      // urettigi bir degisiklik olursa da diger uyeler gibi kanit kapisindan
+      // gecer. Birlestirme yalniz gercekten diff ureten dallar icin islenir.
       const involved = [...new Set(run.tasks.map((t) => t.assignee))]
-        .map((id) => this.memberById(id)).filter((m) => m && m.provider !== "antigravity");
+        .map((id) => this.memberById(id)).filter(Boolean);
       for (const m of involved) {
         worktrees[m.id] = await gitops.createWorktree(run.projectDir, S.runsDir, run.id, m.id);
       }
@@ -1390,7 +1419,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       await Promise.allSettled(ready.map(async (task) => {
         try {
           await this.runTask(run, task, worktrees);
-          if (task.status === "done" && this.availableMembers().length > 1 && (run.reviewRounds ?? 1) > 0) {
+          if (task.status === "done" && this.availableMembers(run).length > 1 && (run.reviewRounds ?? 1) > 0) {
             const already = run.reviews.some((r) => r.taskId === task.id);
             if (!already) reviewPromises.push(this.reviewTask(run, task, worktrees));
           }
@@ -1419,7 +1448,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     let voteInfo = null;
     const activeMembers = [...new Set(doneTasks.map((t) => t.assignee))]
       .map((id) => this.memberById(id)).filter(Boolean);
-    if (this.availableMembers().length > 1) {
+    if (this.availableMembers(run).length > 1) {
       let round = 0;
       while (round < run.maxDebateRounds) {
         this.checkStop(run);
@@ -1441,7 +1470,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
 
     // ---- 4. DOĞRULAYICI TURU ----
-    if (this.availableMembers().length > 1 && !run.stopRequested) {
+    if (this.availableMembers(run).length > 1 && !run.stopRequested) {
       await this.verifyRound(run, worktrees);
       await this.revalidateChangedReviews(run,worktrees);
     }
@@ -1484,7 +1513,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   async runTask(run, task, worktrees) {
     const S = this.store;
     let member = this.memberById(task.assignee);
-    const avail = this.availableMembers();
+    const avail = this.availableMembers(run);
     if (requiresCodeAuthoring(task, run.mode) && !canAuthorCode(member)) {
       const coder = preferredCoder(avail, Object.fromEntries(avail.map((m) => [m.id, run.tasks.filter((t) => t.assignee === m.id).length])));
       if (!coder) { task.status="failed"; task.result="Kod yazabilecek etkin Claude veya Codex üyesi yok."; S.updateRun(run); return; }
@@ -1521,6 +1550,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       timeoutMs: agSleeping ? 5 * 60 * 1000 : undefined,
       codeMode: run.mode === "code",
       cwd: worktrees[member.id]?.wtDir || (run.mode !== "code" ? run.projectDir || undefined : undefined),
+      // Kod modunda ayri calisma kopyasi yoksa ajan ANA agaca yazmamalidir.
+      // Bu, cwd'nin bos birakilmasinin kasitli oldugunu belirtir; asagidaki
+      // proje dizini varsayilani bu durumda devreye girmez.
+      noProjectCwd: run.mode === "code" && !worktrees[member.id]?.wtDir,
       tierModel: this.pickTierModel(member.provider, task.tier),
       images, media: run.attachments || [],
       shouldStop: () => run.stopRequested,
@@ -1620,7 +1653,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   async reviewTask(run, task, worktrees) {
     const S = this.store;
     const author = this.memberById(task.assignee);
-    const reviewers = selectTaskReviewers(task, author, this.availableMembers(), run.reviewRounds ?? 1);
+    const reviewers = selectTaskReviewers(task, author, this.availableMembers(run), run.reviewRounds ?? 1);
     const authorWorktree=worktrees?.[task.assignee]?.wtDir;
     let authorEvidence;
     if(authorWorktree) authorEvidence=await gitops.createImmutableSnapshot(authorWorktree,`ajan review: ${task.id}`);
@@ -1629,7 +1662,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const digest=crypto.createHash("sha256").update(result).digest("hex");
       authorEvidence={commit:`artifact-sha256:${digest}`,parentCommit:"",tree:`artifact-tree:${digest}`,diff:result};
     }
-    authorEvidence.tests=(run.tests||[]).filter((test)=>!test.taskId||test.taskId===task.id);
+    const eventTests=testEvidenceFromEvents(run,task.id);
+    authorEvidence.tests=eventTests.length?eventTests:(run.tests||[]).filter((test)=>!test.taskId||test.taskId===task.id);
     const packet=createReviewPacket({taskId:task.id,contract:task.contract,author:authorEvidence});
     await Promise.all(reviewers.map(async (reviewer) => {
       const prompt=isolatedReviewPrompt(packet,reviewer.name);
@@ -1691,7 +1725,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const feedback=run.reviews.filter((r)=>r.taskId===task.id && (r.agreement<=3 || r.severity==="yuksek"));
       if(!feedback.length) continue;
       let author=this.memberById(task.assignee);
-      if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers());
+      if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers(run));
       if(!author) continue;
       const peerText=feedback.map((r)=>`### ${r.reviewerName} (${r.agreement}/5, ${r.severity})\n${r.points.map((p)=>`- ${p}`).join("\n")}`).join("\n\n");
       const prompt=this.roleHeader(author,run)+
@@ -1733,7 +1767,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
   async debateRound(run, debatePrompt, round) {
     const S = this.store;
-    await Promise.all(this.availableMembers().map(async (member) => {
+    await Promise.all(this.availableMembers(run).map(async (member) => {
       const recent = run.messages
         .filter((m) => ["review", "debate", "result"].includes(m.kind) && m.from !== member.id)
         .slice(-4)
@@ -1759,7 +1793,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const positions = run.tasks.filter((t) => t.status === "done")
       .map((t) => `- "${t.assigneeName}" (${t.assignee}) yaklaşımı: ${t.summary || truncate(t.result, 2000)}`).join("\n");
     const votes = [];
-    await Promise.all(this.availableMembers().map(async (member) => {
+    await Promise.all(this.availableMembers(run).map(async (member) => {
       const prompt = this.roleHeader(member, run) +
         `OYLAMA. Anlaşmazlık: ${assess.summary}\n\nYaklaşımlar:\n${positions}\n\n` +
         `Bir üyeye (id ile) veya "karma"ya oy ver. YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
@@ -1786,7 +1820,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const S = this.store;
     this.checkStop(run);
     S.setPhase(run, "verify");
-    const avail = this.availableMembers();
+    const avail = this.availableMembers(run);
     let verifier = avail.find((m) => m.role === "denetci");
     if (!verifier) {
       const counts = Object.fromEntries(avail.map((m) => [m.id, run.tasks.filter((t) => t.assignee === m.id).length]));
@@ -1815,7 +1849,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const counts = {};
       for (const t of run.tasks) counts[t.assignee] = (counts[t.assignee] || 0) + 1;
       const authorId = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0];
-      const author = this.availableMembers().find((m) => m.id === authorId);
+      const author = this.availableMembers(run).find((m) => m.id === authorId);
       if (author) {
         const fixPrompt = this.roleHeader(author, run) +
           `Doğrulayıcı (${verifier.name}) çözümde şu sorunları buldu:\n` +
@@ -1927,7 +1961,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           } else {
             S.addMessage(run, { from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "info", content: "Testler kırıldı; onaylanan düzeltme turu başlıyor." });
             const fixerId = [...diffs].sort((a, b) => b.diff.length - a.diff.length)[0]?.memberId;
-            const fixer = this.availableMembers().find((m) => m.id === fixerId);
+            const fixer = this.availableMembers(run).find((m) => m.id === fixerId);
             if (fixer) {
               // Bu projede daha once cozulmus benzer hatalar varsa ipucu olarak ver.
               const firstFailure = testResult.output;
@@ -2009,13 +2043,13 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         cwd: testDir, timeout: 10 * 60 * 1000, maxBuffer: 20 * 1024 * 1024,
       });
       const output = truncate(stdout + "\n" + stderr, 12000);
-      run.tests.push({ ts: new Date().toISOString(), command: run.testCommand, ok: true, output });
+      recordTestExecution(run,{command:run.testCommand,ok:true,output,cwd:testDir});
       S.addMessage(run, { from: "sistem", kind: "info", content: "✓ Testler başarılı.\n" + truncate(stdout, 3000) });
       S.updateRun(run);
       return { ok: true, output };
     } catch (err) {
       const output = truncate((err.stdout || "") + "\n" + (err.stderr || err.message), 12000);
-      run.tests.push({ ts: new Date().toISOString(), command: run.testCommand, ok: false, output });
+      recordTestExecution(run,{command:run.testCommand,ok:false,output,cwd:testDir});
       S.addMessage(run, { from: "sistem", kind: "error", content: "✗ Testler BAŞARISIZ:\n" + truncate(output, 3000) });
       S.updateRun(run);
       return { ok: false, output };

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { uid, now, truncate, conversationTitle } from "./util.js";
+import { normalizeExcludedProviders } from "./providerPolicy.js";
 
 // Ortak hafıza: çalışma kayıtları, mesajlar, görevler, kararlar, onaylar.
 // Her koşu (run) diske runs/<id>/ altında JSONL + JSON olarak yazılır.
@@ -50,6 +51,7 @@ export class Store extends EventEmitter {
         }
         // Eski kayıtlarda olmayan alanları tamamla
         run.reviews ??= []; run.diffs ??= []; run.usage ??= {}; run.usageDaily ??= {}; run.verify ??= null; run.evidenceGate ??= null;
+        run.events ??= []; run.envelopes ??= []; run.excludedProviders = normalizeExcludedProviders(run.excludedProviders);
         run.pinned ??= false; run.archived ??= false; run.tags ??= []; run.deletedAt ??= null; run.diffComments ??= []; run.autoResume ??= run.kind!=="chat";
         run.budget ??= {enabled:false,maxCalls:24,maxTokens:250000,stopped:false};
         // Eski sürümlerde varsayılan 250 bin token sınırı abonelik kotası gibi
@@ -97,7 +99,7 @@ export class Store extends EventEmitter {
   }
 
   // ---- Koşular ----
-  createRun({ request, mode, agents, projectId, projectDir, testCommand, maxDebateRounds, attachments, kind }) {
+  createRun({ request, mode, agents, projectId, projectDir, testCommand, maxDebateRounds, attachments, kind, excludedProviders }) {
     const id = uid("run-");
     const run = {
       id,
@@ -119,6 +121,9 @@ export class Store extends EventEmitter {
       reviews: [],             // {taskId, reviewer, agreement, severity, points}
       files: [],               // {agent, path, change}
       tests: [],               // {ts, command, ok, output}
+      events: [],              // hash-zincirli çalıştırma/test/kanıt olayları
+      envelopes: [],           // gerçek sağlayıcı/model çalıştırma zarfları
+      excludedProviders: normalizeExcludedProviders(excludedProviders),
       diffs: [],               // {agent, branch, diff}
       usage: {},               // agent -> {input, cachedInput, output, calls, costUsd}
       usageDaily: {},          // "YYYY-MM-DD" -> agent -> {input,cachedInput,output,calls,costUsd}

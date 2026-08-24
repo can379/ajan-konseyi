@@ -14,6 +14,7 @@ import { BrowserBridge } from "./src/browserBridge.js";
 import { WorkspaceState } from "./src/workspaceState.js";
 import { saveOpenRouterKey, deleteOpenRouterKey, openRouterStatus } from "./src/credentialStore.js";
 import { exportRunArtifacts } from "./src/artifactExport.js";
+import { excludedProvidersFromText, normalizeExcludedProviders } from "./src/providerPolicy.js";
 import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -717,6 +718,7 @@ const server = http.createServer(async (req, res) => {
         testCommand: body.testCommand?.trim() || null,
         maxDebateRounds: Math.max(1, Math.min(Number(body.maxDebateRounds) || 2, 4)),
         attachments: sanitizeAttachments(body.attachments),
+        excludedProviders: normalizeExcludedProviders([...(Array.isArray(body.excludedProviders) ? body.excludedProviders : []), ...excludedProvidersFromText(body.request)]),
       });
       run.testFirst = !!body.testFirst;
       run.budget={enabled:body.budget?.enabled===true,maxCalls:Math.max(1,Math.min(Number(body.budget?.maxCalls)||24,200)),maxTokens:Math.max(1000,Number(body.budget?.maxTokens)||250000),stopped:false};
@@ -757,6 +759,7 @@ const server = http.createServer(async (req, res) => {
           testCommand: body.testCommand?.trim() || null,
           maxDebateRounds: Math.max(1, Math.min(Number(body.maxDebateRounds) || 2, 4)),
           attachments: [],
+          excludedProviders: normalizeExcludedProviders([...(Array.isArray(body.excludedProviders) ? body.excludedProviders : []), ...excludedProvidersFromText(text)]),
         });
         run.status = "idle";
         run.title = conversationTitle(text);
