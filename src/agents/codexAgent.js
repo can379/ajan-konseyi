@@ -1,11 +1,40 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { BaseAgent } from "./base.js";
 import { cleanEnv, uid } from "../util.js";
+import { promisify } from "node:util";
 import { CODEX_EFFORT } from "../models.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+const run = promisify(execFile);
+
+// Codex'in workspace-write kum havuzu ".git" altina yazmayi varsayilan olarak
+// reddeder; bu, "git apply", "git commit", "git checkout" gibi her islemi
+// "Operation not permitted" ile dusurur. Ilgili dizinler writable_roots'a
+// acikca eklendiginde izin verilir.
+//
+// Ayri calisma kopyalarinda (worktree) ".git" bir DOSYADIR ve ana deponun
+// ".git/worktrees/<ad>" dizinini gosterir; bu yuzden hem git dizini hem de
+// ortak git dizini eklenir.
+const gitRootCache = new Map();
+async function gitWritableRoots(cwd) {
+  if (!cwd) return [];
+  if (gitRootCache.has(cwd)) return gitRootCache.get(cwd);
+  let roots = [];
+  try {
+    const { stdout } = await run("git", ["-C", cwd, "rev-parse", "--git-dir", "--git-common-dir"]);
+    roots = stdout.trim().split("\n").map((line) => line.trim()).filter(Boolean)
+      .map((dir) => path.resolve(cwd, dir))
+      .filter((dir) => fs.existsSync(dir));
+    roots = [...new Set(roots)];
+  } catch {
+    // Git deposu degilse yazilabilir kok eklenmez; dosya yazimi zaten calisir.
+    roots = [];
+  }
+  gitRootCache.set(cwd, roots);
+  return roots;
+}
 
 // OpenAI Codex CLI adaptörü.
 // ChatGPT abonelik girişi ile "codex exec --json" çağırır;
@@ -44,6 +73,12 @@ export class CodexAgent extends BaseAgent {
     // Yerleşik web araması ve otomatik güvenlik incelemesi; kullanıcının mevcut
     // Codex MCP, eklenti ve skill yapılandırması aynen yüklenmeye devam eder.
     const common = ["--json", "--skip-git-repo-check", "-o", lastMsgFile];
+    // Kum havuzunun yazilabilir kokleri: calisma dizini ve deposunun git
+    // dizinleri. Boylece ajan hem dosya yazabilir hem git islemi yapabilir.
+    if (opts.cwd) {
+      const roots = [opts.cwd, ...(await gitWritableRoots(opts.cwd))];
+      common.push("-c", `sandbox_workspace_write.writable_roots=${JSON.stringify(roots)}`);
+    }
     if (model) common.push("-m", model);
     const effort = opts.effort ?? this.getEffort?.();
     if (effort && CODEX_EFFORT[effort]) {
@@ -64,11 +99,12 @@ export class CodexAgent extends BaseAgent {
     const useResume = !!sess;
     let args = useResume
       ? ["--search", "exec", "resume", ...common,
-          "-c", 'approval_policy="never"', "-c", 'sandbox_mode="workspace-write"',
-          // Resume calisma dizinini surecten alir; sandbox'in yazilabilir koku
-          // de acikca proje dizinine baglanir ki eski oturum yeni projeye
-          // yazabilsin.
-          ...(opts.cwd ? ["-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(opts.cwd)}]`] : []),
+          // "exec resume" --approve-for-me bayragini kabul etmez; onun config
+          // karsiligi budur. approval_policy="never" ise onay isteyen her
+          // komutu REDDEDER ("rm -f style commands are not permitted" gibi),
+          // yani resume edilen oturum taze oturumdan daha yeteneksiz kalirdi.
+          "-c", 'approval_policy="on-request"', "-c", 'approvals_reviewer="auto_review"',
+          "-c", 'sandbox_mode="workspace-write"',
           sess]
       : freshArgs;
 

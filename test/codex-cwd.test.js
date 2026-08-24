@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { CodexAgent } from "../src/agents/codexAgent.js";
+
+function readRoots(args) {
+  const entry = args.find((a) => typeof a === "string" && a.startsWith("sandbox_workspace_write.writable_roots="));
+  return entry ? JSON.parse(entry.slice(entry.indexOf("=") + 1)) : [];
+}
 
 // Codex alt sureci gercekten calistirilmaz: spawnCollect degistirilip
 // _invoke'un ona ne gecirdigi olculur. Regresyon tam burada yasiyordu.
@@ -45,19 +51,61 @@ test("resume edilen oturumda da calisma dizini projeye baglanir", async () => {
   assert.equal(call.cwd, "/tmp/proje-b", "cwd surec seviyesinde verilmeli");
 });
 
-test("resume sandbox yazilabilir koku proje dizinine baglanir", async () => {
+test("resume sandbox modu workspace-write kalir", async () => {
   const { agent, calls } = harness({ resume: true });
   await agent._invoke("selam", { sessionKey: "s1", cwd: "/tmp/proje-c" });
+  assert.match(calls[0].args.join(" "), /sandbox_mode="workspace-write"/);
+});
+
+// Taze oturum --approve-for-me kullanir. "exec resume" bu bayragi kabul
+// etmedigi icin config karsiligi verilmelidir; approval_policy="never" onay
+// isteyen komutlari reddeder ve resume edilen oturumu yeteneksiz birakir.
+test("resume onay politikasi taze oturumla ayni yetkiye sahiptir", async () => {
+  const { agent, calls } = harness({ resume: true });
+  await agent._invoke("selam", { sessionKey: "s1", cwd: "/tmp/proje-d" });
   const config = calls[0].args.join(" ");
-  assert.match(config, /sandbox_mode="workspace-write"/);
-  assert.match(config, /sandbox_workspace_write\.writable_roots=\["\/tmp\/proje-c"\]/);
+  assert.match(config, /approval_policy="on-request"/);
+  assert.match(config, /approvals_reviewer="auto_review"/);
+  assert.doesNotMatch(config, /approval_policy="never"/);
+});
+
+// Codex'in workspace-write kum havuzu ".git" altina yazmayi varsayilan olarak
+// reddeder, bu da "git apply" ve "git commit" islemlerini
+// "Operation not permitted" ile dusurur. Git dizinleri yazilabilir koklere
+// eklenmezse ajan projeye kurulum yapamaz.
+test("git dizinleri yazilabilir koklere eklenir", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "codex-repo-"));
+  execFileSync("git", ["-C", repo, "init", "-q"]);
+  const { agent, calls } = harness({ resume: true });
+  await agent._invoke("selam", { sessionKey: "s1", cwd: repo });
+  const roots = readRoots(calls[0].args);
+  assert.ok(roots.includes(repo), "calisma dizini yazilabilir olmali");
+  assert.ok(roots.some((r) => r.endsWith(".git")), `git dizini eklenmeli: ${JSON.stringify(roots)}`);
+});
+
+// Ayri calisma kopyasinda ".git" bir dosyadir ve ana depoyu gosterir; ajanin
+// git islemi yapabilmesi icin ORTAK git dizini de yazilabilir olmalidir.
+test("worktree icin ortak git dizini de eklenir", async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "codex-wt-"));
+  execFileSync("git", ["-C", repo, "init", "-q", "-b", "main"]);
+  fs.writeFileSync(path.join(repo, "a.txt"), "a");
+  execFileSync("git", ["-C", repo, "add", "-A"]);
+  execFileSync("git", ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "ilk"]);
+  const wt = path.join(repo, "..", path.basename(repo) + "-wt");
+  execFileSync("git", ["-C", repo, "worktree", "add", "-q", wt, "-b", "dal"]);
+
+  const { agent, calls } = harness({ resume: true });
+  await agent._invoke("selam", { sessionKey: "s1", cwd: wt });
+  const roots = readRoots(calls[0].args);
+  assert.ok(roots.some((r) => r.includes("worktrees")), `worktree git dizini eklenmeli: ${JSON.stringify(roots)}`);
+  assert.ok(roots.some((r) => r === path.join(fs.realpathSync(repo), ".git") || r.endsWith(`${path.basename(repo)}/.git`)),
+    `ortak git dizini eklenmeli: ${JSON.stringify(roots)}`);
 });
 
 test("cwd verilmezse kok dizine dusulur", async () => {
   const { agent, calls, rootDir } = harness({ resume: true });
   await agent._invoke("selam", { sessionKey: "s1" });
   assert.equal(calls[0].cwd, undefined, "cwd yoksa spawnCollect varsayilana duser");
-  assert.ok(!calls[0].args.join(" ").includes("writable_roots"),
-    "proje yoksa yazilabilir kok zorlanmamali");
+  assert.equal(readRoots(calls[0].args).length, 0, "proje yoksa yazilabilir kok zorlanmamali");
   assert.ok(fs.existsSync(rootDir));
 });
