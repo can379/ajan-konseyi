@@ -1227,9 +1227,7 @@ function usageProvider(name){return (state.config.members||[]).find(member=>memb
 let openQuotaProvider="";
 function quotaWindowLabel(minutes){if(minutes>=10080)return"Haftalık kota";if(minutes>=1440)return`${Math.round(minutes/1440)} günlük kota`;if(minutes>=60)return minutes===300?"5 saatlik kota":`${Math.round(minutes/60)} saatlik kota`;return"Kullanım kotası";}
 function providerQuotaLogo(provider){
-  if(provider==="claude")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3v26M5.7 8.8l20.6 14.4M3.5 19.5l25-7M9.2 27l13.6-22M4 13.2l24 5.6M10.6 4l10.8 24"/></svg>`;
-  if(provider==="codex")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 4.2a7.3 7.3 0 0 1 12.3 5.3 7.3 7.3 0 0 1-1.1 12.3A7.3 7.3 0 0 1 16 28a7.3 7.3 0 0 1-12.3-5.3A7.3 7.3 0 0 1 4.8 10.4 7.3 7.3 0 0 1 16 4.2Z"/><path d="m10.4 11.1 5.6-3.2 5.6 3.2v9.8L16 24.1l-5.6-3.2v-6.5l8.5-4.9"/></svg>`;
-  if(provider==="antigravity")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3c1.4 7.4 5.6 11.6 13 13-7.4 1.4-11.6 5.6-13 13-1.4-7.4-5.6-11.6-13-13C10.4 14.6 14.6 10.4 16 3Z"/><path d="M25 3.5c.5 2.4 2.1 4 4.5 4.5-2.4.5-4 2.1-4.5 4.5-.5-2.4-2.1-4-4.5-4.5 2.4-.5 4-2.1 4.5-4.5Z"/></svg>`;
+  if(["claude","codex","antigravity"].includes(provider))return `<img class="provider-logo" src="/assets/provider-${provider}.png" alt="" aria-hidden="true" draggable="false">`;
   if(provider==="openrouter")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 10h9c4 0 5 6 9 6h6M4 22h9c4 0 5-6 9-6"/><path d="m24 12 4 4-4 4"/></svg>`;
   if(provider==="koordinator")return `<svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="8" r="3.5"/><circle cx="8" cy="23" r="3.5"/><circle cx="24" cy="23" r="3.5"/><path d="m14.4 11.1-4.8 8.8m8-8.8 4.8 8.8M11.5 23h9"/></svg>`;
   if(provider==="sistem")return `<svg viewBox="0 0 32 32" aria-hidden="true"><path d="m16 3 10 5.6v7.2c0 6.3-4 10.5-10 13.2-6-2.7-10-6.9-10-13.2V8.6L16 3Z"/><path d="M11 16h2.5l1.7-4 2.4 8 1.7-4H22"/></svg>`;

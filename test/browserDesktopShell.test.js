@@ -65,3 +65,12 @@ test("tüm ajanlar için canlı ve açılır çalışma akışı gösterilir",()
   assert.match(ui,/const allFinished=run\.tasks\.every/);
   assert.match(ui,/openKeys\.has\(node\.dataset\.workKey\)/);
 });
+
+test("Claude Codex ve Antigravity gönderilen görsel logoları ortak kaynaktan kullanır",()=>{
+  for(const provider of ["claude","codex","antigravity"]){
+    assert.ok(fs.existsSync(new URL(`../assets/provider-${provider}.png`,import.meta.url)));
+  }
+  assert.match(ui,/\["claude","codex","antigravity"\]\.includes\(provider\)/);
+  assert.match(ui,/src="\/assets\/provider-\$\{provider\}\.png"/);
+  assert.doesNotMatch(ui,/if\(provider==="claude"\)return `<svg/);
+});

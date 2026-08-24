@@ -325,6 +325,10 @@ button { font: inherit; cursor: pointer; }
   font-size: 12px; font-weight: 800; color: #fff; margin-top: 2px;
 }
 .agent-glyph{display:grid;width:72%;height:72%;place-items:center;line-height:0}
+.provider-logo{display:block;width:100%;height:100%;object-fit:contain}
+.agent-glyph:has(.provider-logo){width:100%;height:100%}
+.bg-claude:has(.provider-logo),.bg-codex:has(.provider-logo),.bg-antigravity:has(.provider-logo),.claude .image-agent-mark:has(.provider-logo),.codex .image-agent-mark:has(.provider-logo),.antigravity .image-agent-mark:has(.provider-logo){background:transparent;box-shadow:none}
+.quota-avatar:has(.provider-logo){overflow:hidden;padding:0;background:transparent!important;box-shadow:none}
 .agent-glyph svg{width:100%;height:100%;overflow:visible;fill:none;stroke:currentColor;stroke-width:2.05;stroke-linecap:round;stroke-linejoin:round}
 .bg-antigravity .agent-glyph svg{fill:currentColor;stroke:none}
 .bg-claude .agent-glyph svg{stroke-width:2.45}

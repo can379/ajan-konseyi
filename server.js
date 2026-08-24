@@ -265,7 +265,7 @@ function providerQuotas(){
   providerQuotaCache={at:Date.now(),value};return value;
 }
 
-const MIME = { ".html": "text/html", ".htm":"text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/markdown", ".svg":"image/svg+xml", ".json":"application/json" };
+const MIME = { ".html": "text/html", ".htm":"text/html", ".js": "text/javascript", ".css": "text/css", ".md": "text/markdown", ".svg":"image/svg+xml", ".png":"image/png", ".json":"application/json" };
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
@@ -278,6 +278,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && (p === "/app.js" || p === "/style.css" || p === "/studio.css")) {
       return serveFile(res, path.join(ROOT, "ui", p));
+    }
+    if (req.method === "GET" && ["/assets/provider-claude.png","/assets/provider-codex.png","/assets/provider-antigravity.png"].includes(p)) {
+      return serveFile(res, path.join(ROOT, p));
     }
 
     // ---- SSE olay akışı ----
