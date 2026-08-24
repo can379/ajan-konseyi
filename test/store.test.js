@@ -29,6 +29,9 @@ test("yeniden başlatma idle sohbette takılı canlı turu temizler", (t) => {
   assert.equal(restored.status, "idle");
   assert.equal(restored.turnActive, false);
   assert.equal(restored.directActive, false);
+  const persisted = JSON.parse(fs.readFileSync(path.join(root, "runs", run.id, "state.json"), "utf8"));
+  assert.equal(persisted.turnActive, false);
+  assert.equal(persisted.directActive, false);
 });
 
 test("yeniden başlatma çalışan toplu görevde canlı işaretini temizler", (t) => {
@@ -41,4 +44,7 @@ test("yeniden başlatma çalışan toplu görevde canlı işaretini temizler", (
   const restored = new Store(root).getRun(run.id);
   assert.equal(restored.status, "interrupted");
   assert.equal(restored.turnActive, false);
+  const persisted = JSON.parse(fs.readFileSync(path.join(root, "runs", run.id, "state.json"), "utf8"));
+  assert.equal(persisted.status, "interrupted");
+  assert.equal(persisted.turnActive, false);
 });

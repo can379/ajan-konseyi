@@ -8,6 +8,8 @@ import { now } from "../util.js";
 // Aynı üyeye çağrılar sıraya girer; FARKLI üyeler aynı sağlayıcıda
 // paralel çalışır (sağlayıcı başına eşzamanlılık sınırıyla).
 const PROVIDER_CONCURRENCY = 4;
+const DEFAULT_WATCHDOG_MS = 15 * 60 * 1000;
+const WATCHDOG_GRACE_MS = 5 * 1000;
 
 export class BaseAgent {
   constructor(name, store, rootDir) {
@@ -16,6 +18,8 @@ export class BaseAgent {
     this.rootDir = rootDir;
     this.sessions = new Map();   // sessionKey -> CLI oturum kimliği
     this.queues = new Map();     // sessionKey -> sıra zinciri
+    this.queueEpochs = new Map();// stop sonrası eski sıra zincirini geçersiz kılar
+    this.cancelWaiters = new Map();// sessionKey -> çalışan çağrıyı hemen uyandıran iptaller
     this.children = new Set();   // canlı alt süreçler (sessionKey etiketli)
     this.busyCount = 0;
     this._sem = { active: 0, waiters: [] };
@@ -96,9 +100,19 @@ export class BaseAgent {
   // ---- Çağrı: üye başına sıra, sağlayıcı başına sınırlı paralellik ----
   send(prompt, opts = {}) {
     const key = opts.sessionKey || "global";
+    const epoch = this.queueEpochs.get(key) || 0;
     const prev = this.queues.get(key) || Promise.resolve();
-    const job = prev.then(() => this._run(prompt, opts));
-    this.queues.set(key, job.then(() => {}, () => {}));
+    const job = prev.then(() => {
+      if ((this.queueEpochs.get(key) || 0) !== epoch) {
+        return { ok: false, text: "", error: "Durduruldu", cancelled: true };
+      }
+      return this._run(prompt, { ...opts, sessionKey: key });
+    });
+    const settled = job.then(() => {}, () => {});
+    this.queues.set(key, settled);
+    settled.finally(() => {
+      if (this.queues.get(key) === settled) this.queues.delete(key);
+    });
     return job;
   }
 
@@ -123,18 +137,48 @@ export class BaseAgent {
   async _run(prompt, opts) {
     await this._acquire(PROVIDER_CONCURRENCY);
     this._setBusy();
+    const key = opts.sessionKey || "global";
+    let cancel;
+    let timer;
+    const cancelled = new Promise((_, reject) => {
+      cancel = () => {
+        const err = new Error("Durduruldu");
+        err.code = "AGENT_CANCELLED";
+        reject(err);
+      };
+      const waiters = this.cancelWaiters.get(key) || new Set();
+      waiters.add(cancel);
+      this.cancelWaiters.set(key, waiters);
+    });
     try {
-      const result = await this.invoke(prompt, opts);
+      const invocation = Promise.resolve().then(() => this.invoke(prompt, opts));
+      // Sağlayıcının alt süreci kapanış olayı üretmezse üye kuyruğu sonsuza
+      // kadar kilitlenmesin. Adaptör zaman aşımından kısa bir ek pay sonra
+      // bağımsız watchdog devreye girer.
+      const timeoutMs = Math.max(1, Number(opts.timeoutMs) || DEFAULT_WATCHDOG_MS) + WATCHDOG_GRACE_MS;
+      const deadline = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          const err = new Error(`${this.name} çağrısı ${Math.round(timeoutMs / 1000)} saniyede sonuçlanmadı`);
+          err.code = "AGENT_WATCHDOG_TIMEOUT";
+          reject(err);
+        }, timeoutMs);
+      });
+      const result = await Promise.race([invocation, cancelled, deadline]);
       this._setFree(false);
       return result;
     } catch (err) {
       const msg = String(err.message || err);
       // Kullanıcının durdurması hata değildir; çip kırmızıya düşmesin
-      const stopped = opts.shouldStop?.() === true;
+      const stopped = err?.code === "AGENT_CANCELLED" || opts.shouldStop?.() === true;
+      if (err?.code === "AGENT_WATCHDOG_TIMEOUT") this.stop(key);
       if (!stopped) this._checkQuota(msg);
       this._setFree(!stopped, stopped ? "" : msg);
-      return { ok: false, text: "", error: msg };
+      return { ok: false, text: "", error: msg, cancelled: stopped };
     } finally {
+      clearTimeout(timer);
+      const waiters = this.cancelWaiters.get(key);
+      waiters?.delete(cancel);
+      if (waiters?.size === 0) this.cancelWaiters.delete(key);
       this._release();
     }
   }
@@ -146,6 +190,14 @@ export class BaseAgent {
 
   // key verilirse yalnız o sohbetin/üyenin süreçleri öldürülür
   stop(key) {
+    const matches = (sessionKey) => !key || sessionKey === key || sessionKey.startsWith(key + "#");
+    const knownKeys = new Set([...this.queues.keys(), ...this.cancelWaiters.keys()]);
+    for (const sessionKey of knownKeys) {
+      if (!matches(sessionKey)) continue;
+      this.queueEpochs.set(sessionKey, (this.queueEpochs.get(sessionKey) || 0) + 1);
+      this.queues.delete(sessionKey);
+      for (const cancel of this.cancelWaiters.get(sessionKey) || []) cancel();
+    }
     for (const child of this.children) {
       if (key && child._sessionKey && !child._sessionKey.startsWith(key)) continue;
       try { child.kill("SIGTERM"); } catch {}

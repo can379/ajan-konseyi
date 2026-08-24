@@ -1060,11 +1060,22 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         run.tasks.filter((t) => t.status === "pending").forEach((t) => (t.dependsOn = []));
         continue;
       }
-      await Promise.all(ready.map(async (task) => {
-        await this.runTask(run, task, worktrees);
-        if (task.status === "done" && this.availableMembers().length > 1 && (run.reviewRounds ?? 1) > 0) {
-          const already = run.reviews.some((r) => r.taskId === task.id);
-          if (!already) reviewPromises.push(this.reviewTask(run, task, worktrees));
+      // Tek bir sağlayıcı çağrısının reddedilmesi diğer hazır görevlerin
+      // sonuçlarını yutmasın ve bütün koşuyu "çalışıyor" durumunda bırakmasın.
+      await Promise.allSettled(ready.map(async (task) => {
+        try {
+          await this.runTask(run, task, worktrees);
+          if (task.status === "done" && this.availableMembers().length > 1 && (run.reviewRounds ?? 1) > 0) {
+            const already = run.reviews.some((r) => r.taskId === task.id);
+            if (!already) reviewPromises.push(this.reviewTask(run, task, worktrees));
+          }
+        } catch (err) {
+          if (run.stopRequested) return;
+          task.status = "failed";
+          task.endedAt = new Date().toISOString();
+          task.result = String(err?.message || err);
+          S.addMessage(run, { from: "sistem", kind: "error", taskId: task.id, content: `${task.assigneeName || task.assignee} görevi beklenmedik biçimde durdu: ${task.result}` });
+          S.updateRun(run);
         }
       }));
     }
@@ -1201,6 +1212,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     const prepared=preparePrompt(task.prompt,opts.cwd);
     const header = this.roleHeader(member, run) + depContext + imageNote;
     let res = await this.callMember(run, member, header + prepared.prompt, opts);
+    // Durdurulmuş eski bir sağlayıcı çağrısı, aynı koşu yeniden başlatıldıktan
+    // sonra yeni görevin durumunu veya atamasını ezmemeli.
+    if (res.cancelled) return;
     if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
     if(prepared.inputDir)fs.rmSync(prepared.inputDir,{recursive:true,force:true});
 
@@ -1227,6 +1241,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         res = await this.callMember(run, member, header + fallbackPrepared.prompt, {
           ...opts, routeText: task.prompt, cwd: fallbackCwd, tierModel: this.pickTierModel(fb.provider, task.tier),
         });
+        if (res.cancelled) return;
         if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
         if(fallbackPrepared.inputDir)fs.rmSync(fallbackPrepared.inputDir,{recursive:true,force:true});
       }

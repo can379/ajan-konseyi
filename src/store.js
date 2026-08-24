@@ -23,6 +23,7 @@ export class Store extends EventEmitter {
       const file = path.join(this.runsDir, dir, "state.json");
       try {
         const run = JSON.parse(fs.readFileSync(file, "utf8"));
+        let recovered = false;
         if (run.status === "running") {
           if (run.kind === "chat") {
             // Sohbetler kesintiden etkilenmez; yarım kalan tur düşer, sohbet sürer
@@ -36,11 +37,13 @@ export class Store extends EventEmitter {
           run.stopRequested = false;
           run.turnActive = false;
           run.directActive = false;
+          recovered = true;
         }
         // Masaüstü/sunucu kapanınca canlı alt işlem artık yoktur. Eski bazı
         // sohbetler status=idle iken directActive=true kaydedilebildiği için
         // arayüz sonsuza kadar "üretiyor" kartı gösteriyordu.
         if (run.kind === "chat") {
+          recovered ||= Boolean(run.stopRequested || run.turnActive || run.directActive);
           run.stopRequested = false;
           run.turnActive = false;
           run.directActive = false;
@@ -55,6 +58,12 @@ export class Store extends EventEmitter {
         if (run.kind === "chat" && (!run.title || run.title.startsWith("@") || run.title === String(run.request || "").slice(0, 80))) {
           const firstUser = (run.messages || []).find((message) => message.from === "kullanici")?.content || run.request;
           run.title = conversationTitle(firstUser);
+          const temp = file + ".tmp";
+          fs.writeFileSync(temp, JSON.stringify(run, null, 2));
+          fs.renameSync(temp, file);
+          recovered = false;
+        }
+        if (recovered) {
           const temp = file + ".tmp";
           fs.writeFileSync(temp, JSON.stringify(run, null, 2));
           fs.renameSync(temp, file);
