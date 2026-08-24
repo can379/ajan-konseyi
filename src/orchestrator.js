@@ -266,6 +266,7 @@ export class Orchestrator {
       try{connectorLease=this.acquireAgentLease(run,leaseMember,"external-service",route.connector,opts.label||"connector");}
       catch(error){this.store.setAgentStatus(member.id,"error",String(error.message).slice(0,80));return{ok:false,error:error.message,orchestrationError:true};}
     }
+    try {
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
     // Eski yanlış yönlendirmeler oturum geçmişine "Ben Codex'im" yazmış olabilir.
     // Kimlik doğrulamasını kirlenmiş geçmişten tamamen ayır.
@@ -353,8 +354,12 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
     if (route && res?.raw) res.raw.connectorRoute = route;
-    this.releaseAgentLease(connectorLease);
     return res;
+    } finally {
+      // Sağlayıcı, görsel çözümleyici veya araç köprüsü beklenmedik biçimde
+      // hata atsa bile dış servis kilidi sonraki ajanları engellememeli.
+      this.releaseAgentLease(connectorLease);
+    }
   }
 
   isImageGenerationRequest(text) {
@@ -1211,39 +1216,41 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     };
     const prepared=preparePrompt(task.prompt,opts.cwd);
     const header = this.roleHeader(member, run) + depContext + imageNote;
-    let res = await this.callMember(run, member, header + prepared.prompt, opts);
+    const invokeMember = async (prompt, callOpts) => {
+      try {
+        return await this.callMember(run, member, prompt, callOpts);
+      } catch (error) {
+        return { ok:false, error:error?.message || String(error), raw:{ thrown:true } };
+      }
+    };
+    let res = await invokeMember(header + prepared.prompt, opts);
     // Durdurulmuş eski bir sağlayıcı çağrısı, aynı koşu yeniden başlatıldıktan
     // sonra yeni görevin durumunu veya atamasını ezmemeli.
     if (res.cancelled) return;
     if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
     if(prepared.inputDir)fs.rmSync(prepared.inputDir,{recursive:true,force:true});
 
+    // Bir üyenin görevi hata verdiğinde başka sağlayıcıya geçirip sonucu o üye
+    // üretmiş gibi göstermeyiz. Geçici köprü/sağlayıcı hatalarında aynı üyeyi,
+    // temiz bir oturumla sınırlı sayıda yeniden deneriz.
+    for (let attempt = 2; !res.ok && !run.stopRequested && attempt <= 3; attempt++) {
+      S.addMessage(run, {
+        from:"sistem", kind:"info", taskId:task.id,
+        content:`${member.name} yanıtı alınamadı; aynı ajanla yeniden deneniyor (${attempt}/3).`,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt - 1)));
+      res = await invokeMember(header + prepared.prompt, { ...opts, fresh:true });
+      if (res.cancelled) return;
+      if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
+    }
+
     if (!res.ok && !run.stopRequested) {
-      S.addMessage(run, { from: "sistem", kind: "error", taskId: task.id, content: `${member.name} görevi tamamlayamadı: ${res.error}` });
+      S.addMessage(run, { from:"sistem", kind:"error", taskId:task.id, content:`${member.name} üç denemede de görevi tamamlayamadı: ${res.error}` });
       if (member.provider === "antigravity") {
         S.addMessage(run, {
-          from: "koordinator", kind: "info", taskId: task.id,
-          content: `⚠ ${member.name} (Antigravity) görüşü alınamadı — sentez bu görüş EKSİK olarak yapılacak. Köprüyü uyandırmak için Antigravity'de ajana "inbox'u kontrol et" deyin.`,
+          from:"koordinator", kind:"info", taskId:task.id,
+          content:`⚠ ${member.name} (Antigravity) görüşü üç denemede de alınamadı; görev başka bir yapay zekâ adına tamamlanmış sayılmayacak.`,
         });
-      }
-      const fb = requiresCodeAuthoring(task, run.mode)
-        ? this.availableMembers().find((m) => m.id !== member.id && canAuthorCode(m))
-        : this.availableMembers().find((m) => m.id !== member.id);
-      if (fb) {
-        S.addMessage(run, { from: "koordinator", kind: "info", taskId: task.id, content: `Görev ${fb.name} üyesine yeniden atandı.` });
-        member = fb; task.assignee = fb.id; task.assigneeName = fb.name;
-        if(run.mode==="code"&&run.projectDir&&!worktrees[fb.id]&&canAuthorCode(fb)){
-          worktrees[fb.id]=await gitops.createWorktree(run.projectDir,S.runsDir,run.id,fb.id);
-        }
-        const fallbackCwd=worktrees[fb.id]?.wtDir;
-        if(fallbackCwd)task.workspace={branch:worktrees[fb.id].branch,path:fallbackCwd,isolated:true};
-        const fallbackPrepared=preparePrompt(task.prompt,fallbackCwd);
-        res = await this.callMember(run, member, header + fallbackPrepared.prompt, {
-          ...opts, routeText: task.prompt, cwd: fallbackCwd, tierModel: this.pickTierModel(fb.provider, task.tier),
-        });
-        if (res.cancelled) return;
-        if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
-        if(fallbackPrepared.inputDir)fs.rmSync(fallbackPrepared.inputDir,{recursive:true,force:true});
       }
     }
 

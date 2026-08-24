@@ -29,10 +29,24 @@ export function requestedConnector(text) {
   // söylendiğinde ya da e-posta nesnesi üzerinde gerçek bir kullanıcı eylemi
   // istendiğinde seçilir.
   const gmailMention=/\bgmail\b|mail kutu(?:su|sunu|sunda)?/iu.test(value);
-  const configurationOnly=/\buser\.email\b|\bgit\s+(?:-c\s+[^\s]+\s+)*config\b/iu.test(value);
-  const mailObject=/\be-?posta[^\s,.;:!?)]*|\b(?:mail|email)(?:i|leri|lerimi)?\b/iu.test(value);
-  const mailAction=/(?:ara|bul|oku|listele|kontrol et|incele|özetle|göster|gönder|yolla|yanıtla|cevapla|sil|arşivle|taslak|oluştur|yaz)/iu.test(value);
-  if(gmailMention||(!configurationOnly&&mailObject&&mailAction))return "gmail";
+  if(gmailMention)return "gmail";
+
+  // Nesne ve eylemi bütün prompt boyunca bağımsız aramak tehlikelidir. Örneğin
+  // bir proje raporundaki `user.email` ile başka paragraftaki "hatayı düzelt"
+  // birleşip sahte bir Gmail yazma görevi oluşturuyordu. E-posta bağlayıcısını
+  // yalnız aynı kısa cümlede gerçekten e-posta nesnesine uygulanan bir kullanıcı
+  // eylemi varsa seç.
+  const mailObject=/\be-?posta[^\s,.;:!?)]*|\b(?:mail|email)(?:i|leri|lerimi)?\b/iu;
+  const mailAction=/(?:ara|bul|oku|listele|kontrol\s+et|incele|özetle|göster|gönder|yolla|yanıtla|cevapla|sil|arşivle|taslak\s+(?:oluştur|yaz))/iu;
+  const mailIntent=value
+    .split(/[\n.!?;]+/u)
+    .map((part)=>part.trim())
+    .filter((part)=>part.length>0&&part.length<=320)
+    .some((part)=>{
+      if(/\buser\.email\b|\bgit\s+(?:-c\s+[^\s]+\s+)*config\b|\bemail\s+(?:alanı|field|property|değişken|tipi)\b/iu.test(part))return false;
+      return mailObject.test(part)&&mailAction.test(part);
+    });
+  if(mailIntent)return "gmail";
   return Object.entries(CONNECTORS)
     .filter(([id])=>id!=="gmail")
     .find(([, item]) => item.pattern.test(value))?.[0] || null;
