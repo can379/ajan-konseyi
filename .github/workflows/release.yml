@@ -1,0 +1,87 @@
+# "v" ile baslayan bir etiket gonderildiginde macOS paketini derler, imzalar
+# ve GitHub Release'e varlik olarak ekler. Boylece surum yayinlamak icin elle
+# dosya yuklemek gerekmez; uygulama ici guncelleyici de varligi bulur.
+name: Sürüm yayınla
+
+on:
+  push:
+    tags: ["v*"]
+  # Etiket zaten gonderilmisse elle de tetiklenebilsin.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Yayınlanacak etiket (örn. v0.3.1)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    # Apple Silicon kosucusu: paket arm64 olarak uretilir.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Bağımlılıklar
+        run: npm install --no-audit --no-fund
+
+      - name: Testler
+        # E2E testleri gercek pencere/fare gerektirdigi icin bu pakette
+        # zaten atlanir; birim testleri kosar.
+        run: npm test
+
+      - name: Paketi derle ve imzala
+        run: npm run release:mac
+
+      - name: Sürüm bilgisi
+        id: bilgi
+        run: |
+          ETIKET="${{ github.event.inputs.tag || github.ref_name }}"
+          SURUM="${ETIKET#v}"
+          DOSYA="release/Ajan-Konseyi-${SURUM}-macOS-arm64.zip"
+          mv "release/Ajan-Konseyi-macOS-arm64.zip" "$DOSYA"
+          echo "etiket=$ETIKET" >> "$GITHUB_OUTPUT"
+          echo "surum=$SURUM" >> "$GITHUB_OUTPUT"
+          echo "dosya=$DOSYA" >> "$GITHUB_OUTPUT"
+          echo "sha=$(shasum -a 256 "$DOSYA" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Sürüm notları
+        id: notlar
+        run: |
+          ONCEKI="$(git describe --tags --abbrev=0 "${{ steps.bilgi.outputs.etiket }}^" 2>/dev/null || true)"
+          {
+            echo "notlar<<AJAN_EOF"
+            if [ -n "$ONCEKI" ]; then
+              echo "## Değişiklikler ($ONCEKI → ${{ steps.bilgi.outputs.etiket }})"
+              echo
+              git log --no-merges --pretty='- %s' "$ONCEKI..${{ steps.bilgi.outputs.etiket }}"
+            else
+              echo "## Ajan Konseyi ${{ steps.bilgi.outputs.surum }}"
+            fi
+            echo
+            echo "SHA-256: \`${{ steps.bilgi.outputs.sha }}\`"
+            echo
+            echo "> macOS Apple Silicon (arm64) paketi, yerel olarak ad-hoc imzalanmıştır; Apple tarafından notarize edilmemiştir."
+            echo "AJAN_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Yayınla
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ETIKET="${{ steps.bilgi.outputs.etiket }}"
+          if gh release view "$ETIKET" >/dev/null 2>&1; then
+            gh release upload "$ETIKET" "${{ steps.bilgi.outputs.dosya }}" --clobber
+          else
+            gh release create "$ETIKET" "${{ steps.bilgi.outputs.dosya }}" \
+              --title "Ajan Konseyi ${{ steps.bilgi.outputs.surum }}" \
+              --notes "${{ steps.notlar.outputs.notlar }}"
+          fi
