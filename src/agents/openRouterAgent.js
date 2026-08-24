@@ -14,7 +14,10 @@ const MAX_OUTPUT_TOKENS_CEILING = 64_000;
 // ama BaseAgent watchdog'unun (15 dk) altinda kalir. Asil koruma "durma"
 // siniridir: veri akmayi birakirsa toplam siniri beklemeden hemen biter.
 const DEFAULT_TIMEOUT_MS = 12 * 60_000;
-const DEFAULT_STALL_TIMEOUT_MS = 2 * 60_000;
+// Akil yurutme modelleri uzun sure yalniz dusunebilir. Keep-alive tespiti
+// artik calistigi icin bu esik GERCEK sessizligi olcer; yine de guvenli bir
+// pay birakilir.
+const DEFAULT_STALL_TIMEOUT_MS = 4 * 60_000;
 const DEFAULT_HISTORY_CHARS = 24_000;
 const DEFAULT_RETRY_DELAYS_MS = [1_200, 2_500, 5_000];
 // 429 genelde HESAP kotasi degil, ust saglayicinin anlik yogunlugudur
@@ -127,7 +130,11 @@ function emptyResponseError(truncated, budget) {
     : "Ox Alpha boş yanıt döndürdü");
 }
 
-async function readStream(response, onDelta) {
+// onAlive: baglantinin YASADIGINI bildirir. OpenRouter uzun akil yurutme
+// bekleyislerinde ": OPENROUTER PROCESSING" gibi SSE YORUM satirlari gonderir;
+// bunlar "data:" ile baslamadigi icin eskiden tamamen atlanip stall sayacini
+// sifirlamiyordu ve saglikli baglanti 120 sn'de olduruluyordu.
+async function readStream(response, onDelta, onAlive) {
   if (!response.body?.getReader) return null;
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -140,6 +147,8 @@ async function readStream(response, onDelta) {
   let streamError = null;
   while (true) {
     const { done, value } = await reader.read();
+    // Bayt geldiyse baglanti canli: icerik olsun olmasin sayaci sifirla.
+    if (value?.length) onAlive?.();
     buffer += decoder.decode(value || new Uint8Array(), { stream:!done });
     const lines = buffer.split(/\r?\n/);
     buffer = done ? "" : (lines.pop() || "");
@@ -262,7 +271,7 @@ export class OpenRouterAgent extends BaseAgent {
             // yerine durumu bildir; ham akıl yürütme metnini kullanıcıya dökme.
             if (partial) this.progress(opts.label || "", partial, opts.memberId);
             else if (thinking) this.progress(`${opts.label || "yanıtlıyor"} · akıl yürütüyor`, "", opts.memberId);
-          });
+          }, armStall);
           // Test doubles and older fetch implementations may not expose a readable stream.
           if (!payload) payload = await response.json().catch(() => ({}));
           const choice = payload?.choices?.[0];

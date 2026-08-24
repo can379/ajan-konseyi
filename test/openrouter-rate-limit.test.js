@@ -35,3 +35,15 @@ test("geçici sağlayıcı yoğunluğu üyeyi 10 dakika devre dışı bırakmaz"
   assert.match(base, /setAgentStatus\(this\.name, "idle", "sağlayıcı yoğun/);
   assert.match(base, /return false;\s*\n\s*\}\s*\n\s*if \(\/rate\.\?limit/);
 });
+
+test("SSE keep-alive yorumları bağlantıyı canlı sayar (akış boşuna öldürülmez)", () => {
+  // OpenRouter uzun akıl yürütmede ": OPENROUTER PROCESSING" yorum satırı gönderir.
+  // Bunlar "data:" ile başlamadığı için eskiden atlanıyor ve stall sayacı
+  // sıfırlanmıyordu; sağlıklı bağlantı 120 sn'de öldürülüyordu.
+  assert.match(src, /async function readStream\(response, onDelta, onAlive\)/);
+  assert.match(src, /if \(value\?\.length\) onAlive\?\.\(\)/);
+  // Çağrı tarafı canlılık sinyalini stall sayacına bağlar
+  assert.match(src, /\}, armStall\);/);
+  // Akıl yürütme modelleri için tolerans artırıldı
+  assert.match(src, /DEFAULT_STALL_TIMEOUT_MS = 4 \* 60_000/);
+});
