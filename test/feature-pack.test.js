@@ -86,7 +86,7 @@ test("mikrofon yerel kayit yapip sunucuda cozumletir (Google ucnoktasina bagli d
   assert.match(srv, /p === "\/api\/speech"/, "sunucu ucu olmali");
   const sp = oku("src/speech.js");
   assert.match(sp, /SFSpeechRecognizer/, "macOS yerel tanima kullanilmali");
-  assert.match(sp, /"open", \["-W", "-a", this\.appDir/, "TCC icin LaunchServices ile baslatilmali");
+  assert.ok(sp.includes('"/usr/bin/open", ["-W", "-a", this.appDir'), "TCC icin LaunchServices ile baslatilmali");
   assert.match(oku("package.json"), /extend-info\.plist/, "izin aciklamalari uygulama plistine girmeli");
   assert.match(sp, /tr-TR/, "varsayilan dil Turkce olmali");
 });
