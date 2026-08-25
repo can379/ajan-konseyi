@@ -746,10 +746,11 @@ const server = http.createServer(async (req, res) => {
       let createdConversation = false;
       if (run && run.kind !== "chat") run = null;
       const approach = ["quick", "pair", "council"].includes(body.approach) ? body.approach : null;
+      const intensity = ["ekonomik", "dengeli", "titiz"].includes(body.intensity) ? body.intensity : null;
       if (run?.turnActive || run?.directActive) {
         const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
         const queued = orch.enqueueMessage(run, {
-          target: "konsey", text, mode: chatMode, approach,
+          target: "konsey", text, mode: chatMode, approach, intensity,
           attachments: sanitizeAttachments(body.attachments),
         });
         return json(res, 202, { runId: run.id, queued: true, queueId: queued.id });
@@ -777,7 +778,7 @@ const server = http.createServer(async (req, res) => {
       run.budget={enabled:body.budget?.enabled===true,maxCalls:Math.max(1,Math.min(Number(body.budget?.maxCalls)||24,200)),maxTokens:Math.max(1000,Number(body.budget?.maxTokens)||250000),stopped:false,reason:null};
       run.testFirst = !!body.testFirst;
       const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
-      orch.continueChat(run, text, sanitizeAttachments(body.attachments), chatMode, { approach })
+      orch.continueChat(run, text, sanitizeAttachments(body.attachments), chatMode, { approach, intensity })
         .then(()=>createdConversation?orch.generateConversationTitle(run,text):null)
         .catch(() => {});
       return json(res, 200, { runId: run.id });

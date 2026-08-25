@@ -51,6 +51,34 @@ export function isIdentityQuestion(text) {
 // Kullanici modu acikca sectiyse ve sonuc konseyse, koordinator baska mod
 // onerse bile KULLANICININ modu korunur; kucuk isler ise quick/pair'e inerek
 // tam turun maliyetinden kacinir (kademeli acilim).
+// Yogunluk kademeleri: kullanicinin "kac yapay zeka, ne kadar toren"
+// sorusuna tek gorunur ayarla verdigi cevap. Ekonomik kademe tartisma ve
+// dogrulayici maliyetini kisar; Titiz kademe supheli islerde teker teker
+// denetimi artirir. Dengeli mevcut varsayilan davranistir.
+export const INTENSITY_PROFILES = {
+  ekonomik: { debateCap: 1, reviewRounds: 1, verify: false },
+  dengeli:  {},
+  titiz:    { debateFloor: 3, reviewRounds: 2, verify: true },
+};
+
+export function applyIntensity(run) {
+  const profile = INTENSITY_PROFILES[run?.intensity] || INTENSITY_PROFILES.dengeli;
+  let debate = Number(run?.maxDebateRounds) || 2;
+  if (profile.debateCap) debate = Math.min(debate, profile.debateCap);
+  if (profile.debateFloor) debate = Math.max(debate, profile.debateFloor);
+  return {
+    maxDebateRounds: debate,
+    reviewRounds: profile.reviewRounds ?? (Number(run?.reviewRounds) || 1),
+    verify: profile.verify !== false,
+  };
+}
+
+// Ikili inceleme konseye tirmanmali mi? Denetci "buyut" bayragini yalniz is
+// ikili incelemenin tasiyabileceginden genis/riskli oldugunda doner.
+export function shouldEscalatePair(verdict) {
+  return verdict?.buyut === true;
+}
+
 export function resolveTurnRoute({ mode = "auto", forced = null, requestedMemberId = null, routed = null } = {}) {
   const explicitMode = ["discussion", "split", "code"].includes(mode) ? mode : null;
   if (forced === "quick") return { approach: "quick", member_id: requestedMemberId || routed?.member_id || null, explicit: true };
@@ -973,8 +1001,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   // degistirmeye baslamadan ONCE alinir; kullanici "Kontrol noktaları"
   // ekranindan tek tikla o ana donebilir. Maliyet kontrolu: yalniz kod
   // modunda, en fazla 10 dakikada bir, son 3 otomatik kopya saklanir.
-  async autoCheckpoint(run) {
-    if (run.mode !== "code" || !run.projectId || !run.projectDir) return null;
+  async autoCheckpoint(run, { force = false } = {}) {
+    // force: kucuk-is yollari run.mode'u degistirmeden ana agaca yazabilir;
+    // mod denetimi o cagrilar icin atlanir.
+    if ((!force && run.mode !== "code") || !run.projectId || !run.projectDir) return null;
     const project = this.config.getProject(run.projectId);
     if (!project) return null;
     const dir = path.join(this.rootDir, "checkpoints");
@@ -1096,6 +1126,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       ts: new Date().toISOString(),
       target: item.target || "konsey",
       approach: ["quick", "pair", "council"].includes(item.approach) ? item.approach : null,
+      intensity: ["ekonomik", "dengeli", "titiz"].includes(item.intensity) ? item.intensity : null,
       text: item.text,
       attachments: item.attachments || [],
       mode: item.mode || "auto",
@@ -1111,7 +1142,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     this.store.updateRun(run);
     queueMicrotask(() => {
       const job = next.target === "konsey"
-        ? this.continueChat(run, next.text, next.attachments, next.mode, { approach: next.approach })
+        ? this.continueChat(run, next.text, next.attachments, next.mode, { approach: next.approach, intensity: next.intensity })
         : this.directMessage(run, next.target, next.text, next.attachments);
       job.catch((err) => this.store.addMessage(run, {
         from: "sistem", kind: "error", content: "Sıradaki mesaj işlenemedi: " + String(err.message || err),
@@ -1130,6 +1161,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     run.reviews = [];
     run.votes = [];
     run.verify = null;
+    // Yogunluk sohbet duzeyinde kalicidir; her mesajla degistirilebilir.
+    if (["ekonomik", "dengeli", "titiz"].includes(opts.intensity)) run.intensity = opts.intensity;
+    const intensity = applyIntensity(run);
+    run.maxDebateRounds = intensity.maxDebateRounds;
+    run.reviewRounds = intensity.reviewRounds;
     S.updateRun(run, { status: "running", phase: "thinking" });
     const ctx = this.coordCtx(run);
     this.restoreSessions(run);
@@ -1159,11 +1195,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         // (kademeli acilim). Konsey secilirse kullanicinin modu korunur.
         routed = normalizeRoute(
           await this.coordinator.routeTurn(run, this.memberListText(avail), ctx,
-            mode !== "auto" ? { selectedMode: mode } : {}),
+            { ...(mode !== "auto" ? { selectedMode: mode } : {}), intensity: run.intensity || null }),
           avail.map((m) => m.id));
         this.checkStop(run);
       }
-      const route = resolveTurnRoute({ mode, forced, requestedMemberId: requestedMember?.id || null, routed });
+      let route = resolveTurnRoute({ mode, forced, requestedMemberId: requestedMember?.id || null, routed });
       // Kucuk-is yoluna inildiginde kullanici bunu keyfi sanmasin: tek satir
       // gerekce dusulur ve buyutme kestirmesi hatirlatilir.
       if (mode !== "auto" && !forced && route.approach !== "council") {
@@ -1184,16 +1220,43 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         if (!capable.length) throw new Error("Seçili medya türlerini okuyabilen etkin bir ajan yok");
         if (route.approach === "quick" && !capable.some((m) => m.id === route.member_id)) route.member_id = capable[0].id;
       }
+      // Kod modunda kucuk-is yollari ANA agaca yazar; konseydeki worktree
+      // korumasi burada yoktur. Dosyalara dokunulmadan geri donulebilir bir
+      // nokta birakilir (shouldAutoCheckpoint araligi zaten kisitlar).
+      if (mode === "code" && route.approach !== "council") await this.autoCheckpoint(run, { force: true });
+
       if (route.approach === "quick") {
-        let member = avail.find((m) => m.id === route.member_id) || avail[0];
+        const member = avail.find((m) => m.id === route.member_id) || avail[0];
         await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit });
-      } else if (route.approach === "pair") {
+        // Tur ici tirmanma: uye isi uygulayamadan bloke bildirdiyse tur
+        // sessizce "bitti" sayilmaz; baska bir uye uretici olur, ikili yol
+        // devreye girer.
+        const last = [...run.messages].reverse().find((m) => m.from === member.id && m.kind === "message")?.content;
+        if (last && reportsBlockedResult(last) && avail.length > 1 && !run.stopRequested) {
+          const producer = avail.find((m) => m.id !== member.id);
+          const reviewer = avail.find((m) => m.id !== producer.id) || member;
+          S.addMessage(run, { from: "sistem", kind: "info",
+            content: `⤴ İkiliye genişletildi: ${member.name} işi uygulayamadan bloke bildirdi; ${producer.name} üretecek, ${reviewer.name} denetleyecek.` });
+          route = { approach: "pair", member_id: producer.id, reviewer_id: reviewer.id, escalated: true };
+        }
+      }
+      if (route.approach === "pair") {
         const producer = avail.find((m) => m.id === route.member_id) || avail[0];
         const reviewer = avail.find((m) => m.id === route.reviewer_id && m.id !== producer.id)
           || avail.find((m) => m.id !== producer.id);
+        let pairOut = null;
         if (!reviewer) await this.quickReply(run, producer, text, attachments, { allowFallback: !route.explicit });
-        else await this.pairReply(run, producer, reviewer, text, attachments);
-      } else {
+        else pairOut = await this.pairReply(run, producer, reviewer, text, attachments);
+        // Tur ici tirmanma: denetci isin ikiliyi astigini bildirirse ayni
+        // istek tam konseyle yeniden ele alinir; kullanicinin sectigi mod
+        // korunur.
+        if (pairOut?.escalate && !run.stopRequested) {
+          S.addMessage(run, { from: "sistem", kind: "info",
+            content: `⤴ Konseye genişletildi: ${pairOut.reason || "iş ikili incelemeyi aşıyor"}` });
+          route = { approach: "council", mode: ["discussion", "split", "code"].includes(mode) ? mode : (routed?.mode || "discussion") };
+        }
+      }
+      if (route.approach === "council") {
         run.mode = ["discussion", "split", "code"].includes(route.mode) ? route.mode : "discussion";
         run.tasks = [];
         await this.runPipeline(run, false, true);
@@ -1296,14 +1359,19 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       `Denetlenecek yanıt:\n${truncate(answer, 6000)}\n\n` +
       `Yalnız SONUCU DEĞİŞTİRECEK sorunları bildir (hata, eksik, yanlış varsayım, risk). ` +
       `Üslup/biçim tercihi bildirme. Kod veya dosya hakkında iddia üretmeden önce güncel hâlini oku ve dosya:satır kanıtı ver.\n` +
+      `İş ikili incelemenin taşıyabileceğinden GENİŞ veya RİSKLİYSE (çok yönlü analiz, mimari karar, geniş kod değişikliği) "buyut":true döndür; konsey devralır.\n` +
       `YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
-      `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme"}`;
+      `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme","buyut":false}`;
     const res = await this.callMember(run, reviewer, reviewPrompt, {
       label: "ikili inceleme", shouldStop: () => run.stopRequested,
     });
     if (!res.ok || run.stopRequested) return;
 
     const verdict = extractJson(res.text) || { verdict: "onay", issues: [], summary: res.text };
+    if (shouldEscalatePair(verdict)) {
+      this.memberMsg(run, reviewer, "review", `🔍 İkili inceleme — iş ikiliyi aşıyor\n${verdict.summary || ""}`);
+      return { escalate: true, reason: verdict.summary || null };
+    }
     const issues = Array.isArray(verdict.issues) ? verdict.issues.filter(Boolean) : [];
     const needsFix = verdict.verdict === "duzeltme" && issues.length > 0;
     this.memberMsg(run, reviewer, "review",
@@ -1495,7 +1563,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     let voteInfo = null;
     const activeMembers = [...new Set(doneTasks.map((t) => t.assignee))]
       .map((id) => this.memberById(id)).filter(Boolean);
-    if (this.availableMembers(run).length > 1) {
+    // Tek uye urettiyse gorus ayriligi olusamaz; koordinatore sormak bosuna
+    // sure ve kota harcar.
+    if (this.availableMembers(run).length > 1 && activeMembers.length > 1) {
       let round = 0;
       while (round < run.maxDebateRounds) {
         this.checkStop(run);
@@ -1518,8 +1588,12 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
     // ---- 4. DOĞRULAYICI TURU ----
     if (this.availableMembers(run).length > 1 && !run.stopRequested) {
-      await this.verifyRound(run, worktrees);
-      await this.revalidateChangedReviews(run,worktrees);
+      if (applyIntensity(run).verify) {
+        await this.verifyRound(run, worktrees);
+        await this.revalidateChangedReviews(run,worktrees);
+      } else {
+        S.addMessage(run, { from: "sistem", kind: "info", content: "Ekonomik yoğunluk: doğrulayıcı turu atlandı." });
+      }
     }
 
     // ---- 5. KOD BÜTÜNLEŞTİRME ----

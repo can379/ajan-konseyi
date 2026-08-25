@@ -105,10 +105,17 @@ async function run(win) {
     return {sohbetMenusuAcik:!rm.hidden, projeMenusuKapali:pm.hidden};
   })()`);
 
-  // 7) Fare tamamen uzaklasinca menu kapanmali
+  // 7) Fare tamamen uzaklasinca menu kapanmali. Kapanma 260ms'lik bir
+  // zamanlayiciyla olur; makine yuku altinda sabit bekleme yaristigi icin
+  // acilis kontrolu gibi YOKLANIR (kontrol zayiflamaz: kapanmasi sarttir,
+  // yalniz suresi esnektir).
   await moveTo(900, 500);
-  await sleep(600);
-  results.uzaklasinca = await js(`(()=>{const rm=document.getElementById('run-context-menu');return {kapandi:rm.hidden};})()`);
+  let kapandi = false;
+  for (let i = 0; i < 12 && !kapandi; i++) {
+    await sleep(250);
+    kapandi = await js(`document.getElementById('run-context-menu').hidden`);
+  }
+  results.uzaklasinca = { kapandi };
 
   // 8) TIKLAMA: sohbet acilmali, sol panel acik kalmali.
   // Once cok sayida render yapip tiklama sayacini kurariz: dinleyici
@@ -135,10 +142,11 @@ async function run(win) {
 }
 
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ width: 1440, height: 900, show: true, webPreferences: { sandbox: false } });
+  const win = new BrowserWindow({ width: 1440, height: 900, show: true, webPreferences: { sandbox: false, backgroundThrottling: false } });
   win.setAlwaysOnTop(true);
   let out;
   try {
+    win.focus();
     await win.loadURL(URL_TO_TEST);
     // Yuk altinda ilk kare gecikebilir: gorunur+odakli olmasini ve satirlarin
     // gercekten render edilmesini bekle.

@@ -93,9 +93,10 @@ async function run(win) {
 }
 
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ width: 1440, height: 900, show: true, webPreferences: { sandbox: false } });
+  const win = new BrowserWindow({ width: 1440, height: 900, show: true, webPreferences: { sandbox: false, backgroundThrottling: false } });
   let out = { ok: false };
   try {
+    win.focus();
     await win.loadURL(URL_TO_TEST);
     // Arayuz gercekten cizilene kadar bekle (did-finish-load beklenmez).
     for (let i = 0; i < 60; i++) {

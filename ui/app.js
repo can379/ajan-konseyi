@@ -2100,6 +2100,16 @@ cmdPalette.addEventListener("mousedown", (e) => {
 });
 
 ta.addEventListener("input", () => { autoGrow(); renderTopbar(); cmdIndex = 0; updateCmdPalette(); });
+
+// Yogunluk secimi sohbetler arasi kalicidir.
+{
+  const intensitySel = $("f-intensity");
+  if (intensitySel) {
+    const saved = localStorage.getItem("ajan.intensity");
+    if (["ekonomik", "dengeli", "titiz"].includes(saved)) intensitySel.value = saved;
+    intensitySel.addEventListener("change", () => localStorage.setItem("ajan.intensity", intensitySel.value));
+  }
+}
 ta.addEventListener("keydown", (e) => {
   if (!cmdPalette.hidden && cmdMatches.length) {
     if (e.key === "ArrowDown") { e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdMatches.length; return updateCmdPalette(); }
@@ -2284,6 +2294,7 @@ async function send() {
       text: messageText,
       mode: sendMode,
       approach: sendApproach,
+      intensity: $("f-intensity")?.value || "dengeli",
       projectId: activeProjectId(),
       testCommand: $("f-test").value,
       maxDebateRounds: $("f-rounds").value,

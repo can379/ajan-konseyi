@@ -73,7 +73,12 @@ export class Coordinator {
   }
 
   // ---- Sohbet turu yönlendirme ----
-  async routeTurn(run, memberList, ctx, { selectedMode = null } = {}) {
+  async routeTurn(run, memberList, ctx, { selectedMode = null, intensity = null } = {}) {
+    const intensityNote = intensity === "ekonomik"
+      ? '\nKullanıcı EKONOMİK yoğunluk seçti: şüphede kaldığında EN KÜÇÜK kademeyi seç.\n'
+      : intensity === "titiz"
+        ? '\nKullanıcı TİTİZ yoğunluk seçti: şüphede kaldığında bir ÜST kademeyi seç.\n'
+        : "";
     // Kullanici arayuzden acikca mod sectiyse koordinator bunu bilir: konsey
     // gerekiyorsa o mod korunur, ama is kucukse quick/pair ile zaman kazanilir.
     const modeNote = selectedMode
@@ -92,7 +97,7 @@ Kullanılabilir üyeler (id | ad | sağlayıcı | rol):
 ${memberList}
 ${run.projectDir ? `Bağlı proje: ${run.projectDir}` : "Bağlı proje yok."}
 
-${modeNote}Üç seviyeden BİRİNİ seç (gereğinden ağır seviye seçme; her seviye maliyeti artırır):
+${modeNote}${intensityNote}Üç seviyeden BİRİNİ seç (gereğinden ağır seviye seçme; her seviye maliyeti artırır):
 - "quick" (L1): tek üye doğrudan yanıtlar. Sohbet, açıklama, görüş, basit soru, küçük bilgi.
 - "pair" (L2): bir üye üretir, BAŞKA bir üye bağımsız denetler ve gerekirse üretici bir kez düzeltir.
   Tartışma/oylama yoktur. Somut ama tek uzmanlık gerektiren işler için: tek dosyalık analiz,

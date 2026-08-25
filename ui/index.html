@@ -221,6 +221,7 @@
         </div>
         <div id="advanced-row" hidden>
           <input id="f-test" placeholder="Test komutu (örn: npm test)">
+          <label class="rounds" title="Konsey ne kadar tören yapar: Ekonomik az üye ve az denetim, Titiz çok denetim">Yoğunluk <select id="f-intensity"><option value="dengeli">Dengeli</option><option value="ekonomik">Ekonomik</option><option value="titiz">Titiz</option></select></label>
           <label class="rounds">Tur sınırı <input id="f-rounds" type="number" value="2" min="1" max="4"></label>
           <label class="adv-check" title="Yalnız bu görev için yerel harcama sınırı uygular; abonelik kotası değildir"><input type="checkbox" id="f-budget-enabled"> Görev bütçesi</label>
           <label class="rounds" title="Bütçe etkinse yapılabilecek en fazla model çağrısı">Çağrı <input id="f-budget-calls" type="number" value="24" min="1" max="200"></label>
