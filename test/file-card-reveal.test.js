@@ -49,7 +49,7 @@ test("dosya karti reveal niteligi tasir ve isleyici yedekli calisir", () => {
 // parcalari ise olmamali.
 test("mutlak yol kod parcasi tiklanabilir, siradan kod degil", () => {
   const app = fs.readFileSync(path.join(ROOT, "ui", "app.js"), "utf8");
-  assert.match(app, /data-reveal-path="\$\{code\.trim\(\)\}"/, "yol kod parcasina nitelik eklenmeli");
+  assert.match(app, /data-reveal-path="\$\{value\}"/, "yol kod parcasina nitelik eklenmeli");
   assert.match(app, /code\[data-reveal-path\]/, "yol tiklamasi dinlenmeli");
 });
 
