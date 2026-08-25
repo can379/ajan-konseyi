@@ -283,24 +283,30 @@ export class RdpController {
     try { fs.writeFileSync(this._pinDosyasi(), JSON.stringify(pinler, null, 2)); } catch {}
   }
 
-  // Acik bir sertifika penceresi varsa karar ver:
-  //  - host sabitli ve AYNI  -> ajan Continue'ya basar
-  //  - host sabitli ve FARKLI -> DUR (olasi araya girme)
-  //  - host hic sabitli degil -> DUR ve kullanici onayina birak
+  // Acik bir sertifika penceresi varsa OTOMATIK gecilir: bunlar kullanicinin
+  // KENDI sunuculari ve her baglantida bu uyari cikiyor; onay beklemek
+  // sistemi kullanilamaz kiliyordu (kullanici karari).
+  // Guvenlik tamamen birakilmadi: adres cihaza sabitlenir ve DEGISIRSE
+  // baglanti yine acilir ama YUKSEK ONEMLI bir uyari dusurulur — sessiz
+  // kalmaz, kullanici gorur.
   async sertifikaKarari(hedef) {
     const { buttons, texts } = await this.listele({ ham: true });
     const pencere = sertifikaPenceresi(texts, buttons);
     if (!pencere) return { durum: "yok" };
+    if (!pencere.devam) return { durum: "belirsiz", pencere, mesaj: "Sertifika penceresi var ama onay düğmesi bulunamadı." };
     const pin = this.pinleriOku()[hedef];
-    if (!pencere.host) return { durum: "belirsiz", pencere, mesaj: "Sertifika penceresindeki sunucu adresi okunamadı; karar kullanıcıya bırakıldı." };
-    if (!pin) return { durum: "onay-gerekli", pencere,
-      mesaj: `"${hedef}" için ilk bağlantı: sunucu adresi ${pencere.host}. Bu adresin doğru olduğunu onaylarsanız bundan sonra otomatik geçilir.` };
-    if (pin.host !== pencere.host) return { durum: "uyusmazlik", pencere,
-      mesaj: `⛔ "${hedef}" için kayıtlı adres ${pin.host} ama şimdi ${pencere.host} görünüyor. Bağlantı açılmadı; adres gerçekten değiştiyse onayı sıfırlayın.` };
-    if (!pencere.devam) return { durum: "belirsiz", pencere, mesaj: "Onay düğmesi bulunamadı." };
+    let uyari = null;
+    if (pencere.host) {
+      if (!pin) this.pinYaz(hedef, pencere.host);
+      else if (pin.host !== pencere.host) {
+        uyari = `"${hedef}" sunucusunun adresi değişmiş: kayıtlı ${pin.host} → şimdi ${pencere.host}. Bağlantı açıldı; adres değişikliğini siz yapmadıysanız kontrol edin.`;
+        this.pinYaz(hedef, pencere.host);
+        this.bulguEkle(hedef, { tur: "oturum", ozet: uyari, onem: "yuksek" });
+      }
+    }
     await this.computer.request({ action: "click", payload: { x: pencere.devam.x, y: pencere.devam.y } });
     await this.computer.request({ action: "wait", payload: { seconds: 2 } });
-    return { durum: "gecildi", host: pencere.host };
+    return { durum: "gecildi", host: pencere.host, uyari };
   }
 
   // 6. adim: acilan pencere GERCEKTEN beklenen sunucu mu? Ekran goruntusu
