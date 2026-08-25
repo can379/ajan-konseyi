@@ -491,7 +491,10 @@ export class Orchestrator {
     // isolated'dan farki: izolasyon araclari da kapatir, lean yalniz istemi
     // inceltir. Olculen sorun: 5 KB'lik dosyanin denetimine 73k girdi token.
     const history = opts.isolated || opts.lean || identityQuestion ? "" : this.sharedConversationContext(run);
-    const images = opts.isolated ? [] : this.referencedImages(run, prompt, opts.images || []);
+    // Izole cagri GECMISTEN gorsel toplamaz; ama cagiran ACIKCA gorsel
+    // verdiyse o gecer. Aksi halde ekran gozlemi korlesir: uye "görüntü yok"
+    // deyip kimligi dogrulayamiyordu (canli olculdu).
+    const images = opts.isolated ? (opts.images || []) : this.referencedImages(run, prompt, opts.images || []);
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları proje bağlıysa PROJENİN İÇİNE (tercihen <proje>/cikti/ altına), proje yoksa ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.

@@ -166,3 +166,12 @@ test("erisilebilirlik ANA yontem, koordinat son care", () => {
   assert.match(kaynak, /Sabit koordinat  <-- yalniz son care/);
   assert.match(kaynak, /AXUIElementCreateApplication/, "AX agaci gercekten okunmali");
 });
+
+test("izole cagri ACIKCA verilen gorseli dusurmez (ekran gozlemi korlesmesin)", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /opts\.isolated \? \(opts\.images \|\| \[\]\)/,
+    "izole cagride cagiranin verdigi gorsel gecmeli");
+  // Canli hata: uye "Görüntü olmadığı için kimlik doğrulanamaz" dedi ve
+  // guvenli varsayilan devreye girip oturum kapandi.
+  assert.match(orch, /uye "görüntü yok"/, "sebep koda not dusulmus olmali");
+});
