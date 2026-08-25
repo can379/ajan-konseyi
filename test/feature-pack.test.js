@@ -122,3 +122,29 @@ test("dosya haritasinin yazan sutunu diff'ten tamamlanir (dolayli yazimlar kacma
   assert.match(orch, /Yazari diff kaydindan tamamla/, "diff dosyalari haritaya yazar olarak islenmali");
   assert.match(orch, /kayit\.yazan\.push\(yazarAd\)/, "yazar adi eklenmali");
 });
+
+// ---- Bilgisayar kullanma araci TUM uyelere acilir ----
+
+test("bilgisayar araci devam cumlelerinde de acilir (her uye icin ayni)", async () => {
+  const { Orchestrator } = await import("../src/orchestrator.js");
+  const o = Object.create(Orchestrator.prototype);
+  o.computerBridge = {};
+  const run = { messages: [{ from: "kullanici", content: "bilgisarımdan windows app uygulamsına girip ebay mesajlarını kontrol et" }] };
+  // Kullanici ikinci uyeye "sen de yap" dediginde cumlede anahtar kelime yok;
+  // baglama bakilmazsa uye "bende bu yetki yok" diyor (canli gozlem).
+  assert.equal(o.bilgisayarIstegiVar(run, "@Antigravity: şimdi aynı şeyi bide sen yap"), true);
+  assert.equal(o.bilgisayarIstegiVar({ _computerOnay: true, messages: [] }, "devam et"), true, "onayli turda acik kalmali");
+  assert.equal(o.bilgisayarIstegiVar({ messages: [{ from: "kullanici", content: "testleri koş" }] }, "bileşeni yeniden yaz"), false,
+    "normal kod isteginde kapali kalmali");
+  assert.equal(o.bilgisayarIstegiVar.call({ computerBridge: null }, run, "ekran görüntüsü al"), false, "kopru yoksa tanitilmaz");
+});
+
+test("arac yardimi uyeye ozel degil: saglayici ayrimi yapilmaz", () => {
+  const orch = oku("src/orchestrator.js");
+  const parca = orch.slice(orch.indexOf("const computerHelp="), orch.indexOf("--- BİLGİSAYAR ARACI SONU ---"));
+  for (const saglayici of ["claude", "codex", "antigravity", "openrouter"]) {
+    assert.ok(!parca.includes(`"${saglayici}"`), `${saglayici} icin ozel dal olmamali`);
+  }
+  assert.match(orch, /const computerHelp=\(!opts\.lean&&!opts\.isolated&&this\.computerBridge&&bilgisayarIstegi\)/,
+    "yalniz lean/isolated ayrimi olmali, uye ayrimi degil");
+});

@@ -319,6 +319,21 @@ export class Orchestrator {
     return `${run.id}#${member.id}`;
   }
 
+  // Bilgisayar kullanma araci HANGI istekte tanitilir?
+  // Yalniz o anki cumleye bakmak yetmiyordu: kullanici "@Antigravity: simdi
+  // ayni seyi bide sen yap" dediginde cumlede ekran/uygulama gecmedigi icin
+  // arac tanitilmiyor ve uye "bende bu yetki yok" diyordu (canli gozlem).
+  // Bu yuzden son kullanici mesajlarina da bakilir; ayrica bu turda zaten
+  // onaylanmis bir bilgisayar erisimi varsa arac acik kalir.
+  bilgisayarIstegiVar(run, prompt) {
+    if (!this.computerBridge) return false;
+    if (run?._computerOnay === true) return true;
+    const desen = /(?:ekran|bilgisa|masa ?üst|masaust|pencere|uygulam|\bapp\b|program|tıkla|tikla|çift tık|fare|imleç|klavye|erişilebilir|erisilebilir|windows|uzak ?masa|remote ?desktop|finder|safari|chrome|whatsapp|telegram|outlook|mail\b|excel|word\b)/iu;
+    if (desen.test(String(prompt || ""))) return true;
+    const sonKullanici = (run?.messages || []).filter((m) => m.from === "kullanici").slice(-3);
+    return sonKullanici.some((m) => desen.test(String(m.content || "")));
+  }
+
   acquireAgentLease(run,member,type,resource,label,ttlMs=15*60_000){
     if(!this.resourceLeases)return null;
     return this.resourceLeases.acquireLease({type,resource,owner:{runId:run.id,taskId:String(label||""),agentId:member?.id||"system",label:member?.name||label||"Ajan Konseyi"},ttlMs,metadata:{provider:member?.provider||"system"}});
@@ -469,7 +484,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // Kok esleme BILEREK gevsek: kullanici hizli yazarken "bilgisarımdan",
     // "uygulamsına" gibi yazim kaymalari oluyor ve arac hic tanitilmayinca
     // uye tarayici koprusune sapip bosa dusuyordu (canli gozlem).
-    const bilgisayarIstegi=/(?:ekran|bilgisa|masa ?üst|masaust|pencere|uygulam|\bapp\b|program|tıkla|tikla|çift tık|fare|imleç|klavye|erişilebilir|erisilebilir|windows|uzak ?masa|remote ?desktop|finder|safari|chrome|whatsapp|telegram|outlook|mail\b|excel|word\b)/iu.test(String(prompt||""));
+    const bilgisayarIstegi=this.bilgisayarIstegiVar?.(run,prompt)===true;
     const computerHelp=(!opts.lean&&!opts.isolated&&this.computerBridge&&bilgisayarIstegi)?`\n\n--- BİLGİSAYAR KULLANMA ARACI ---\nKullanıcının EKRANINI görmen veya fare/klavye kullanman gerekiyorsa (uygulama penceresi incele, düğmeye tıkla, forma yaz) yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_BILGISAYAR>>>{"action":"screenshot","payload":{}}<<<END>>>\nEylemler: screenshot {}, click {x,y}, double_click {x,y}, type {text}, key {key,cmd,shift,option,ctrl}, open_app {name}.\nÇalışma düzeni: önce screenshot al, dönen PNG yolunu KENDİ dosya okuma aracınla açıp incele, koordinatı hesapla, sonra click gönder. Retina ekranda EKRAN NOKTASI = GÖRÜNTÜ PİKSELİ / 2.\nİlk eylemde kullanıcıdan onay istenir; onaylanmazsa iş bu yoldan yürütülemez.\nParola, kullanıcı adı, OTP ve ödeme alanlarını ASLA doldurma; oraya gelince dur ve kullanıcıdan iste.\n--- BİLGİSAYAR ARACI SONU ---`:"";
     // Uyeler arasi soru koprusu: birden fazla etkin uye varsa tanitilir.
     const digerUyeler=(this.config?.data?.members||[]).filter((m)=>m.enabled&&m.id!==member.id).map((m)=>`${m.name} (${m.id})`).join(", ");
