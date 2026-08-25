@@ -75,3 +75,19 @@ test("canli varsayilan gorunum ozet; ham akis acilir-kapanir pencerede", async (
   const css = fs.readFileSync(new URL("../ui/style.css", import.meta.url), "utf8");
   assert.match(css, /\.live-detail\[open\]/, "acik/kapali durumu gorsel isaretli olmali");
 });
+
+test("ozetler alt alta birikir ve koordinator JSON'u da ozetlenir", async () => {
+  const fs = await import("node:fs");
+  const app = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+  assert.match(app, /oz\.items\.push\(aday\)/, "yeni ozet alta eklenmeli, oncekini silmemeli");
+  assert.match(app, /Görevleri dağıtıyor/, "saf JSON plan akisinda gorev basliklarindan ozet cikmali");
+  assert.match(app, /live-summary-line/, "her ozet ayri satir olmali");
+});
+
+test("kisa dosya:satir referanslari kutusuz dipnot olur", async () => {
+  const fs = await import("node:fs");
+  const app = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+  assert.match(app, /code-ref/, "kisa referans sinifi olmali");
+  const css = fs.readFileSync(new URL("../ui/style.css", import.meta.url), "utf8");
+  assert.match(css, /code\.code-ref\{background:none/, "referans kutusuz cizilmeli");
+});

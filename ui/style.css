@@ -1578,3 +1578,11 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .live-detail[open]>summary::before{content:"⌄ "}
 .live-detail>summary:hover{color:#c8cec9}
 .live-detail .live-text{margin-top:6px;padding-left:10px;border-left:1px solid #2a302c}
+
+/* Ozet satirlari alt alta birikir; en yeni satir belirgin, eskiler soluk. */
+.live-summary-line{color:#9aa39d;font-size:13px;line-height:1.5;margin:2px 0}
+.live-summary-line:last-child{color:#c8cec9;font-size:13.5px}
+
+/* Dosya:satir referansi — kutu degil, sonuk dipnot gorunumu. */
+.m-content code.code-ref{background:none;border:none;padding:0;border-radius:0;
+  color:var(--dim2);font-size:.86em;white-space:nowrap}

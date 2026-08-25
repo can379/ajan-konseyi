@@ -191,9 +191,11 @@ function md(src) {
       return `<a class="code-link" href="${value}" target="_blank" rel="noopener">${code}</a>`;
     }
     const isPath = /^\/(?:Users|private|tmp|Volumes)\/.{2,400}$/.test(value);
-    return isPath
-      ? `<code data-reveal-path="${value}" class="code-link">${code}</code>`
-      : `<code>${code}</code>`;
+    if (isPath) return `<code data-reveal-path="${value}" class="code-link">${code}</code>`;
+    // Kisa dosya:satir referanslari ("index.html:1040") koca kutular halinde
+    // dizilince maddeleri boguyordu; kucuk ve sonuk satir ici nota iner.
+    if (/^[\w./-]{1,80}\.[a-z]{1,6}(?::\d{1,6})?$/i.test(value)) return `<code class="code-ref">${code}</code>`;
+    return `<code>${code}</code>`;
   });
   // Kalın işaretleme SATIR içinde kalmalıdır. Eskiden içerik kalıbı yeni
   // satıra izin veriyordu; kapanmayan bir "**" paragrafları aşıp bloklara
@@ -419,16 +421,40 @@ function renderLive() {
       .filter((ln) => !/^\s*["'{}\[\]]/.test(ln) && !/"[\w-]+"\s*:/.test(ln) && ln.trim())
       .join(" ");
     const cumleler = duzYazi.match(/[^.!?…]{8,}[.!?…]/g) || [];
-    const aday = (cumleler[cumleler.length - 1] || "").trim().slice(0, 180);
-    const oz = liveSummaries[a] ||= { text: "", at: 0 };
-    // Aralikli guncelleme: yeni cumle en erken 4 sn'de bir gecer — goz yetisir.
-    if (aday && aday !== oz.text && Date.now() - oz.at > 4000) { oz.text = aday; oz.at = Date.now(); }
+    let aday = (cumleler[cumleler.length - 1] || "").trim().slice(0, 180);
+    // Koordinator plani saf JSON akitir; duz cumle hic olmayabilir. O zaman
+    // ozet JSON'un ICINDEN cikar: alt gorev basliklari sayilir ve listelenir
+    // ("ozet cikarmadan gorev dagitti" gorunmesin).
+    if (!aday) {
+      const basliklar = [...akan.matchAll(/"title"\s*:\s*"([^"]{3,60})"/g)].map((m) => m[1]);
+      if (basliklar.length) aday = `Görevleri dağıtıyor (${basliklar.length}): ${basliklar.join(" · ")}`.slice(0, 180);
+    }
+    const oz = liveSummaries[a] ||= { items: [], at: 0 };
+    // Ozetler BIRIKIR: yeni cumle alta eklenir, oncekiler kaybolmaz.
+    // Aralikli ekleme: en erken 4 sn'de bir — goz yetisir. Ayni cumlenin
+    // buyumus hali (gorev listesi uzadikca) son satiri gunceller, coğaltmaz.
+    if (aday && Date.now() - oz.at > 4000) {
+      const sonOzet = oz.items[oz.items.length - 1] || "";
+      if (aday !== sonOzet) {
+        if (sonOzet && (aday.startsWith(sonOzet.slice(0, 40)) && sonOzet.length > 30)) oz.items[oz.items.length - 1] = aday;
+        else oz.items.push(aday);
+        oz.at = Date.now();
+        if (oz.items.length > 8) oz.items.shift();
+      }
+    }
     const ozetEl = card.querySelector(".live-summary");
-    ozetEl.hidden = !oz.text;
-    if (oz.text && ozetEl.textContent !== oz.text) {
-      ozetEl.textContent = oz.text;
-      // Yeni ozet kayarak girsin: animasyonu yeniden tetikle.
-      ozetEl.classList.remove("flow-in"); void ozetEl.offsetWidth; ozetEl.classList.add("flow-in");
+    ozetEl.hidden = !oz.items.length;
+    // Alt alta satirlar: var olan dugumler korunur, yeni satir kayarak girer.
+    // Fazla dugum ONCE atilir (liste basi kaydiginda satirlar dogru esler).
+    while (ozetEl.children.length > oz.items.length) ozetEl.firstElementChild.remove();
+    for (let i = 0; i < oz.items.length; i++) {
+      const mevcut = ozetEl.children[i];
+      if (!mevcut) {
+        const satir = document.createElement("div");
+        satir.className = "live-summary-line flow-in";
+        satir.textContent = oz.items[i];
+        ozetEl.append(satir);
+      } else if (mevcut.textContent !== oz.items[i]) mevcut.textContent = oz.items[i];
     }
     // Ham akis, acilir-kapanir pencerede yasar; acik/kapali durumu kart
     // yeniden kurulmadigi icin kendiliginden korunur.
