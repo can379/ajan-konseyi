@@ -1543,3 +1543,20 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .live-text p{margin:0 0 6px}
 .live-current{margin:4px 0 2px;color:#8b948f;font-size:12px;
   font-family:ui-monospace,SFMono-Regular,monospace;opacity:.6;animation:step-nabiz 1.4s ease-in-out infinite}
+
+/* ---- Kenar cubugu "is yapiliyor" animasyonu ---- */
+/* Aktif ajan calisan sohbet/proje satirinda kucuk ekolayzer cubuklari oynar;
+   satirin kendisi de hafifce nefes alir. Nokta durgun durumlar icin kalir. */
+.work-eq{display:inline-flex;align-items:flex-end;gap:2px;height:10px;margin-right:2px;vertical-align:-1px}
+.p-name .work-eq{margin-left:7px}
+.work-eq i{width:2.5px;border-radius:2px;background:var(--warn,#f0b949);animation:work-eq-bar 1s ease-in-out infinite}
+.work-eq i:nth-child(1){height:5px;animation-delay:0s}
+.work-eq i:nth-child(2){height:9px;animation-delay:.18s}
+.work-eq i:nth-child(3){height:6px;animation-delay:.36s}
+@keyframes work-eq-bar{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(1)}}
+.run-item.working{position:relative}
+.run-item.working::before{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(90deg,transparent,#f0b94912,transparent);animation:work-breathe 2.4s ease-in-out infinite}
+.project-item.working .p-name{color:#eef1ef}
+@keyframes work-breathe{0%,100%{opacity:.25}50%{opacity:1}}
+@media (prefers-reduced-motion: reduce){.work-eq i,.run-item.working::before{animation:none}}

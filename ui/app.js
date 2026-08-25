@@ -418,9 +418,9 @@ function renderConversations() {
   const runs = Object.values(state.runs)
     .filter((run) => run.kind === "chat" && !run.projectId && !run.deletedAt && (showArchivedChats||!run.archived) && (!query || runSearchText(run).includes(query)))
     .sort((a, b) => (Number(b.pinned)-Number(a.pinned))||String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
+  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""} ${run.status==="running"?"working":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
     <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
-    <div class="r-meta"><span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
+    <div class="r-meta">${run.status==="running"?workingEqHTML():`<span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>`}${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
   </div>`).join("") : `<div class="conversation-empty">${query ? "Eşleşen sohbet bulunamadı." : "Henüz sohbet yok."}</div>`;
   bindRunContextMenu(el);
 }
@@ -488,15 +488,20 @@ function syncToggles() {
   document.querySelector(".notification-preferences")?.classList.toggle("disabled",!state.config.notifications);
 }
 
+// Kenar cubugunda "is yapiliyor" gostergesi: kucuk ekolayzer cubuklari.
+// Nokta yerine hareketli cubuklar — aktif is uzaktan bir bakista belli olur.
+function workingEqHTML(title = "Bir ajan çalışıyor") {
+  return `<span class="work-eq" title="${esc(title)}" aria-label="${esc(title)}"><i></i><i></i><i></i></span>`;
+}
 function renderProjects() {
   const list = state.config.projects;
   const sortedRunIds = Object.keys(state.runs).filter((id)=>!state.runs[id].deletedAt&&(showArchivedChats||!state.runs[id].archived))
     .sort((a, b) => (Number(state.runs[b].pinned)-Number(state.runs[a].pinned))||state.runs[b].createdAt.localeCompare(state.runs[a].createdAt));
   const runHTML = (id) => {
     const r=state.runs[id];
-    return `<div class="run-item ${id === selectedRun ? "selected" : ""} ${r.pinned?"pinned":""} ${r.archived?"archived":""}" data-run="${id}" title="${esc(r.title || r.request)}">
+    return `<div class="run-item ${id === selectedRun ? "selected" : ""} ${r.pinned?"pinned":""} ${r.archived?"archived":""} ${r.status==="running"?"working":""}" data-run="${id}" title="${esc(r.title || r.request)}">
       <div class="r-title">${esc(r.title || r.request)}</div>
-      <div class="r-meta"><span class="status-dot ${r.status === "idle" ? "done" : r.status}"></span>${r.status === "running" ? esc(PHASE_TR[r.phase] || r.phase) : esc(PHASE_TR[r.status] || r.status)}</div>
+      <div class="r-meta">${r.status==="running"?workingEqHTML():`<span class="status-dot ${r.status === "idle" ? "done" : r.status}"></span>`}${r.status === "running" ? esc(PHASE_TR[r.phase] || r.phase) : esc(PHASE_TR[r.status] || r.status)}</div>
     </div>`;
   };
   const projectHTML = (p) => {
@@ -504,10 +509,13 @@ function renderProjects() {
     const ids=sortedRunIds.filter((id)=>state.runs[id].projectId===p.id&&(!query||runSearchText(state.runs[id]).includes(query)));
     const limit=projectRunLimits.get(p.id)||5;
     const selectedBelongs=selectedRun&&state.runs[selectedRun]?.projectId===p.id;
+    // Projede AKTIF calisan sohbet varsa proje basliginda da belli olur
+    // (arama/limit suzgecinden bagimsiz: gizli satirda is olsa da gorunur).
+    const calisiyor=Object.values(state.runs).some((r)=>r.projectId===p.id&&!r.deletedAt&&r.status==="running");
     return `<div class="project-group ${selectedBelongs?"has-selected":""}">
-      <div class="project-item ${p.id === activeProjectId() ? "active" : ""}" data-proj="${p.id}">
+      <div class="project-item ${p.id === activeProjectId() ? "active" : ""} ${calisiyor?"working":""}" data-proj="${p.id}">
         <span class="p-ico" aria-hidden="true"></span>
-        <span class="p-info"><div class="p-name">${esc(p.name)}${state.devServers?.[p.id]?.alive ? '<span class="dev-dot" title="Geliştirme sunucusu çalışıyor"></span>' : ""}</div><div class="p-path">${esc(p.path)}</div></span>
+        <span class="p-info"><div class="p-name">${esc(p.name)}${calisiyor?workingEqHTML("Bu projede bir ajan çalışıyor"):""}${state.devServers?.[p.id]?.alive ? '<span class="dev-dot" title="Geliştirme sunucusu çalışıyor"></span>' : ""}</div><div class="p-path">${esc(p.path)}</div></span>
       </div>
       <div class="project-runs">${ids.slice(0,limit).map(runHTML).join("")}
         ${ids.length>limit?`<button class="project-more" data-more-project="${p.id}">Daha fazla göster <span>${ids.length-limit}</span></button>`:""}
