@@ -269,3 +269,30 @@ test("AX yardimcisi kaynak degisince yeniden derlenir (eski ikili takili kalmasi
   // Canli hata: yeni alanlar (dialog dugmeleri/metinleri) hic gelmedi cunku
   // "dosya var mi" kontrolu eski ikiliyi kullanmaya devam ediyordu.
 });
+
+// ---- Kimlik: AX pencere basligi (kesin), model yorumu yedek ----
+test("oturum penceresi basligi cihaz adiyla birebir eslesmeli", async () => {
+  const { oturumPenceresi } = await import("../src/rdpController.js");
+  assert.equal(oturumPenceresi([{ title: "Windows App" }, { title: "ANNE" }], "ANNE").ok, true);
+  assert.equal(oturumPenceresi([{ title: "Windows App" }], "ANNE").ok, false, "oturum yoksa dogrulanmamali");
+  const yanlis = oturumPenceresi([{ title: "Windows App" }, { title: "CanSelim" }], "ANNE");
+  assert.equal(yanlis.ok, false, "baska sunucunun penceresi ANNE sayilmamali");
+  assert.match(yanlis.message, /CanSelim/, "hangi pencerenin acik oldugu soylenmeli");
+  assert.equal(oturumPenceresi([{ title: "ANNE 2" }], "ANNE").ok, false, "benzer ad kabul edilmemeli");
+});
+
+test("kimlik once AX'ten dogrulanir, model yorumu yedek kalir", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /let pencereKanidi = null/, "once pencere basligina bakilmali");
+  assert.match(ops, /Model yorumu ancak bu yoksa devreye girer/, "sira koda not dusulmus olmali");
+  // Canli olculdu: masaustu tam ekran Chrome oldugunda ekranda kimlik ipucu
+  // kalmiyor ve DOGRU sunucu bile reddediliyordu.
+  assert.match(ops, /erişilebilirlik ağacından, kesin/, "kullaniciya kanit turu soylenmeli");
+});
+
+test("oturum kapanisi pencerenin KAYBOLMASIYLA dogrulanir", () => {
+  const kaynak = oku("src/rdpController.js");
+  assert.match(kaynak, /key: "w", cmd: true/, "Cmd+W ile kapatilmali");
+  assert.match(kaynak, /oturumPenceresi\(windows, hedef\)\.ok/, "pencere hala acik mi diye bakilmali");
+  assert.ok(!/key: "delete", cmd: true/.test(kaynak), "yanlis kisayol kalmamali");
+});

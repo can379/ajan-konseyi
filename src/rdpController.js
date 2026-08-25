@@ -72,6 +72,7 @@ var cihazlar: [String] = []
 var kenar: [String] = []
 var dugmeler: [String] = []
 var pencereMetni: [String] = []
+var pencereler: [String] = []
 var sayac = 0
 
 // Kayitli cihaz listesi AXList "Saved Devices" altindaki AXGroup'lardir.
@@ -81,6 +82,11 @@ func gez(_ el: AXUIElement, _ derinlik: Int, _ listeIcinde: Bool) {
   let rol = oz(el, kAXRoleAttribute) as? String ?? ""
   let baslik = (oz(el, kAXTitleAttribute) as? String) ?? ((oz(el, kAXDescriptionAttribute) as? String) ?? "")
   var buListe = listeIcinde
+  // Acik OTURUM penceresinin basligi cihaz adidir ("[AXWindow] ANNE").
+  // Kimligi modele sordurmadan KESIN dogrulamanin yolu budur.
+  if rol == "AXWindow", !baslik.isEmpty {
+    pencereler.append("{\\"title\\":\\"\\(kacisla(baslik))\\"}")
+  }
   if rol == "AXList", baslik.localizedCaseInsensitiveContains("device") { buListe = true }
   if buListe, rol == "AXGroup", !baslik.isEmpty, let (nokta, boyut) = kutu(el) {
     let mx = Int(nokta.x + boyut.width / 2), my = Int(nokta.y + boyut.height / 2)
@@ -118,7 +124,7 @@ let tekil = cihazlar.filter { satir in
   if gorulen.contains(ad) { return false }
   gorulen.insert(ad); return true
 }
-print("{\\"ok\\":true,\\"devices\\":[\\(tekil.joined(separator: ","))],\\"sidebar\\":[\\(kenar.joined(separator: ","))],\\"buttons\\":[\\(dugmeler.joined(separator: ","))],\\"texts\\":[\\(pencereMetni.joined(separator: ","))]}")
+print("{\\"ok\\":true,\\"devices\\":[\\(tekil.joined(separator: ","))],\\"sidebar\\":[\\(kenar.joined(separator: ","))],\\"buttons\\":[\\(dugmeler.joined(separator: ","))],\\"texts\\":[\\(pencereMetni.joined(separator: ","))],\\"windows\\":[\\(pencereler.joined(separator: ","))]}")
 `;
 
 function run(cmd, args, timeoutMs = 30_000) {
@@ -164,6 +170,21 @@ export function sertifikaPenceresi(texts = [], buttons = []) {
   const devam = (buttons || []).find((b) => /^(continue|devam|connect|bağlan)$/i.test(String(b.name || "").trim()));
   const iptal = (buttons || []).find((b) => /^(cancel|iptal)$/i.test(String(b.name || "").trim()));
   return { host, devam: devam || null, iptal: iptal || null, metin: metin.slice(0, 400) };
+}
+
+// Acik oturum penceresini bul: Windows App, RDP oturumunu cihaz ADIYLA
+// baslikli ayri bir pencerede acar ("[AXWindow] ANNE"). Kimligi modele
+// sordurmak yerine bunu okumak KESIN ve deterministiktir — canli olculdu:
+// masaustu tam ekran Chrome oldugunda modelde hicbir kanit kalmiyordu.
+export function oturumPenceresi(windows, hedef) {
+  const adaylar = (windows || []).filter((w) => adEslesir(hedef, w.title));
+  if (adaylar.length === 1) return { ok: true, pencere: adaylar[0] };
+  if (adaylar.length > 1) return { ok: false, reason: "belirsiz", message: `"${hedef}" adıyla birden fazla pencere açık.` };
+  const baskalari = (windows || []).map((w) => w.title).filter((t) => t && !/^windows app$/i.test(t));
+  return { ok: false, reason: "yok",
+    message: baskalari.length
+      ? `"${hedef}" oturum penceresi yok; açık pencereler: ${baskalari.join(", ")}.`
+      : `"${hedef}" oturum penceresi henüz açılmadı.` };
 }
 
 // Her sunucu icin kalici durum kaydi.
@@ -237,6 +258,7 @@ export class RdpController {
     }
     const cikti = { devices: veri.devices || [], sidebar: veri.sidebar || [] };
     if (ham) { cikti.buttons = veri.buttons || []; cikti.texts = veri.texts || []; }
+    cikti.windows = veri.windows || [];
     return cikti;
   }
 
@@ -354,14 +376,25 @@ export class RdpController {
   // 10. adim: oturumu kapat ve cihaz listesine DONULDUGUNU dogrula.
   async kapat(hedef) {
     this._kaydet(hedef, { connection_state: "kapaniyor", current_step: "oturum kapatılıyor" });
-    // Windows App'te uzak oturum penceresi Cmd+W ile kapanir; ardindan
-    // cihaz listesinin geri geldigi AX agacindan DOGRULANIR.
-    await this.computer.request({ action: "key", payload: { key: "escape" } });
-    await this.computer.request({ action: "wait", payload: { seconds: 1 } });
-    await this.computer.request({ action: "key", payload: { key: "delete", cmd: true } }).catch(() => {});
-    await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+    // Oturum penceresi Cmd+W ile kapanir. (Escape + Cmd+Delete yanlisti:
+    // pencere kapanmiyordu, canli olculdu.) Kapanis, oturum penceresinin
+    // AX agacindan KAYBOLMASIYLA dogrulanir; "bastim, olmustur" yetmez.
+    for (let deneme = 0; deneme < 3; deneme++) {
+      await this.computer.request({ action: "key", payload: { key: "w", cmd: true } }).catch(() => {});
+      await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+      let hala = true;
+      try {
+        const { windows, devices } = await this.listele();
+        hala = oturumPenceresi(windows, hedef).ok;
+        if (!hala && devices.length > 0) break;
+      } catch { hala = true; }
+      if (!hala) break;
+    }
     let listeGeldi = false;
-    try { listeGeldi = (await this.listele()).devices.length > 0; } catch { listeGeldi = false; }
+    try {
+      const { windows, devices } = await this.listele();
+      listeGeldi = devices.length > 0 && !oturumPenceresi(windows, hedef).ok;
+    } catch { listeGeldi = false; }
     return this._kaydet(hedef, {
       connection_state: listeGeldi ? "bitti" : "hata",
       current_step: listeGeldi ? "cihaz listesine dönüldü" : "cihaz listesine dönülemedi",

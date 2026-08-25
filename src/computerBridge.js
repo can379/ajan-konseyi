@@ -65,6 +65,8 @@ function asString(text) {
 const KEY_CODES = {
   enter: 36, return: 36, tab: 48, esc: 53, escape: 53, space: 49,
   delete: 51, up: 126, down: 125, left: 123, right: 124,
+  // Kisayollar icin gereken harfler (or. Cmd+W ile pencere kapatma).
+  a: 0, c: 8, f: 3, l: 37, n: 45, q: 12, r: 15, s: 1, t: 17, v: 9, w: 13,
 };
 
 export class ComputerBridge {

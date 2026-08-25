@@ -19,6 +19,8 @@
 // 10 oturumu kapat, cihaz listesine donuldugunu dogrula
 // 11 ancak bundan sonra siradaki sunucuya gec
 
+import { oturumPenceresi } from "./rdpController.js";
+
 const KIMLIK_ISTEMI = `Sana bir uzak masaüstü oturumunun ekran görüntüsü verildi.
 
 TEK GÖREVİN: Bu masaüstünün BEKLENEN sunucu olup olmadığını söylemek.
@@ -138,10 +140,28 @@ export class OpsRun {
       // 7) Yuklenmeyi bekle, 6) kimligi DOGRULA.
       await bilgisayar.request({ action: "wait", payload: { seconds: 5 } });
       const kanit = await this.controller.kimlikKaniti(hedef);
-      const kimlik = await this._uyeyeSor(run, uye, KIMLIK_ISTEMI.replace("%HEDEF%", hedef), kanit.last_screenshot);
-      const eslesiyor = kimlik.json?.eslesiyor === true && Number(kimlik.json?.guven || 0) >= 60;
+      // KESIN dogrulama once: oturum penceresinin basligi cihaz adidir
+      // ("[AXWindow] ANNE"). Model yorumu ancak bu yoksa devreye girer —
+      // canli olculdu: masaustu tam ekran Chrome oldugunda ekranda hicbir
+      // kimlik ipucu kalmiyor ve dogru sunucu bile reddediliyordu.
+      let pencereKanidi = null;
+      for (let i = 0; i < 6 && !pencereKanidi; i++) {
+        const { windows } = await this.controller.listele({ ham: true });
+        const bulgu = oturumPenceresi(windows, hedef);
+        if (bulgu.ok) pencereKanidi = bulgu.pencere;
+        else if (i < 5) await bilgisayar.request({ action: "wait", payload: { seconds: 2 } });
+      }
+      let kimlik = { json: null, metin: "" };
+      let eslesiyor = Boolean(pencereKanidi);
+      if (pencereKanidi) {
+        bilgi(`✓ Kimlik doğrulandı: oturum penceresi başlığı **${pencereKanidi.title}** (erişilebilirlik ağacından, kesin).`);
+      } else {
+        kimlik = await this._uyeyeSor(run, uye, KIMLIK_ISTEMI.replace("%HEDEF%", hedef), kanit.last_screenshot);
+        eslesiyor = kimlik.json?.eslesiyor === true && Number(kimlik.json?.guven || 0) >= 60;
+      }
       this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
-        content: `**Kimlik doğrulaması:** ${eslesiyor ? "✓ beklenen sunucu" : "✗ doğrulanamadı"}\n${kimlik.json?.kanit || kimlik.metin.slice(0, 400)}`,
+        content: `**Kimlik doğrulaması:** ${eslesiyor ? "✓ beklenen sunucu" : "✗ doğrulanamadı"}\n`
+          + (pencereKanidi ? `Oturum penceresi başlığı: **${pencereKanidi.title}**` : (kimlik.json?.kanit || kimlik.metin.slice(0, 400))),
         attachments: kanit.last_screenshot ? [{ name: "kimlik-kanit.png", path: kanit.last_screenshot, kind: "image", mime: "image/png" }] : [] });
       if (!eslesiyor) {
         this.controller.kimlikOnayla(hedef, false, kimlik.json?.not || "kimlik doğrulanamadı");
