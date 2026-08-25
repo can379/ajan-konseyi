@@ -1,0 +1,46 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
+const PORT = 4897;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Dosya kartlari masaustu uygulamada Finder'a gitmeli; /api/media/reveal ucu
+// bu isin sunucu ayagidir. Yol kacagi ve olmayan dosya 404 ile reddedilir
+// (open -R hic calistirilmadan).
+test("media/reveal yalniz uploads icindeki mevcut dosyayi kabul eder", async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "reveal-"));
+  fs.mkdirSync(path.join(dataDir, "uploads"), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, "gizli.txt"), "sir");
+  const server = spawn(process.execPath, [path.join(ROOT, "server.js")], {
+    cwd: ROOT, env: { ...process.env, PORT: String(PORT), AJAN_KONSEYI_DATA_DIR: dataDir }, stdio: "ignore",
+  });
+  try {
+    let up = false;
+    for (let i = 0; i < 40 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${PORT}/api/mcp/info`)).ok; } catch { await wait(400); } }
+    assert.ok(up, "test sunucusu ayaga kalkmadi");
+    const post = (url) => fetch(`http://127.0.0.1:${PORT}/api/media/reveal`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }),
+    });
+    assert.equal((await post("/uploads/olmayan.zip")).status, 404, "olmayan dosya reddedilmeli");
+    assert.equal((await post("/uploads/../gizli.txt")).status, 404, "yol kacagi reddedilmeli");
+  } finally {
+    server.kill("SIGKILL");
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// Arayuz sozlesmesi: kart yerel gosterim niteligi tasir ve tiklama isleyicisi
+// yedege dusen indirme yolunu korur.
+test("dosya karti reveal niteligi tasir ve isleyici yedekli calisir", () => {
+  const app = fs.readFileSync(path.join(ROOT, "ui", "app.js"), "utf8");
+  assert.match(app, /class="file-card"[^>]*data-reveal-url=/, "kartta data-reveal-url olmali");
+  assert.match(app, /a\.file-card\[data-reveal-url\]/, "delege tiklama isleyicisi olmali");
+  assert.match(app, /api\/media\/reveal/, "isleyici reveal ucunu cagirmali");
+  assert.match(app, /window\.open\(revealCard\.href/, "basarisizlikta indirme yedegi kalmali");
+});

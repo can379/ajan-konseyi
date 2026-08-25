@@ -926,7 +926,11 @@ function msgHTML(m) {
     if (a.kind === "video") return `<figure class="native-media"><video src="${esc(a.url)}" controls preload="metadata"></video><figcaption>${esc(a.name)} · ${size}</figcaption></figure>`;
     if (a.kind === "audio") return `<figure class="native-media audio"><audio src="${esc(a.url)}" controls preload="metadata"></audio><figcaption>${esc(a.name)} · ${size}</figcaption></figure>`;
     if (a.kind === "pdf" || a.mime === "text/html") return `<button class="file-card" data-media-src="${esc(a.url)}" data-media-name="${esc(a.name)}" data-media-kind="document"><span>${a.kind === "pdf" ? "PDF" : "HTML"}</span><b>${esc(a.name)}</b><small>${esc(a.mime || a.kind)} · ${size}</small></button>`;
-    return `<a class="file-card" href="${esc(a.url)}" target="_blank"><span>${a.kind === "archive" ? "ZIP" : "DOC"}</span><b>${esc(a.name)}</b><small>${esc(a.mime || a.kind)} · ${size}</small></a>`;
+    // Masaustu uygulamada dosya kartina tiklamak dosyayi TARAYICIDA acmamali:
+    // ZIP/uygulama/APK gibi ciktilarin yeri Finder'dir. Tiklama once
+    // /api/media/reveal ile dosyayi Finder'da gosterir; dosya artik diskte
+    // yoksa href indirme yedegi devreye girer.
+    return `<a class="file-card" href="${esc(a.url)}" target="_blank" data-reveal-url="${esc(a.url)}"><span>${a.kind === "archive" ? "ZIP" : "DOC"}</span><b>${esc(a.name)}</b><small>${esc(a.mime || a.kind)} · ${size}</small></a>`;
   }).join("");
   const delivery = m.attachments?.length && m.from === "kullanici" ? `<div class="attachment-delivery">İletildi: ${(state.config.members||[]).filter(x=>x.enabled && (m.attachments||[]).every(a=>state.capabilities?.[x.provider]?.[a.kind])).map(x=>`<span class="c-${x.provider}">${esc(x.name)}</span>`).join(" · ") || "uyumlu ajan yok"}</div>` : "";
   return `<div class="msg from-${esc(align)} kind-${esc(m.kind)}">
@@ -2233,6 +2237,14 @@ $("media-viewer").addEventListener("click", (e) => { if (e.target.id === "media-
 document.addEventListener("click", async (e) => {
   const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=prompt(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
   const artifact=e.target.closest("[data-artifact-path]");if(artifact){e.preventDefault();openArtifact(artifact.dataset.artifactPath);return;}
+  const revealCard=e.target.closest("a.file-card[data-reveal-url]");
+  if(revealCard){
+    e.preventDefault();
+    fetch("/api/media/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:revealCard.dataset.revealUrl})})
+      .then((r)=>{if(!r.ok)window.open(revealCard.href,"_blank");})
+      .catch(()=>window.open(revealCard.href,"_blank"));
+    return;
+  }
   const media = e.target.closest("[data-media-src]");
   if (media) { e.preventDefault(); openMedia(media.dataset.mediaSrc || media.src, media.dataset.mediaName || media.alt, media.dataset.mediaKind || "image"); return; }
   const actions = e.target.closest(".msg-actions");
