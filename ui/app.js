@@ -9,6 +9,11 @@ let refreshTimer = null;
 let currentMode = "auto";
 let popAgent = null;      // üst çubukta açık ajan paneli
 let liveStreams = {};     // agent -> {label, text} canlı akış
+// Gunluk kota gostergesi: /api/usage/today her dakika cekilir, kota
+// kartlarindaki "Bugun" satirini besler.
+let usageToday = {};
+async function fetchUsageToday(){ try{ usageToday=(await (await fetch("/api/usage/today")).json()).providers||{}; }catch{} }
+setInterval(fetchUsageToday, 60_000); fetchUsageToday();
 // Canli OZET satiri: ekranda varsayilan olarak ham akis degil, araliklarla
 // guncellenen tek cumlelik ozet durur (okunamadan degisen yazi yerine).
 // agent -> {text, at}
@@ -162,8 +167,7 @@ const PHASE_TR = {
 };
 const KIND_TR = {
   message: "mesaj", task: "görev", result: "sonuç", review: "inceleme",
-  debate: "tartışma", vote: "oy", decision: "karar", error: "hata", info: "bilgi",
-};
+  debate: "tartışma", vote: "oy", decision: "karar", error: "hata", info: "bilgi", filemap:"dosya haritası" };
 
 // Zengin Markdown motoru — Claude/ChatGPT uygulamalarındaki görünüme yakın:
 // başlıklar, listeler, alıntılar, tablolar, bağlantılar, kopyalanabilir kod blokları.
@@ -502,6 +506,7 @@ function render() {
   renderToasts();
   renderNotificationCount();
   renderQuotaOverviewDetailed();
+  renderSchedules();
   syncToggles();
   if (activeMainView === "images") renderImageStudio();
   const toolProject = $("tool-project");
@@ -1161,6 +1166,13 @@ function stepRow(step, { live = false } = {}) {
   if (live || !String(step.detail || "").trim()) return `<div class="${cls}">${title}</div>`;
   return `<details class="${cls}"><summary>${title}</summary><pre class="step-detail">${esc(String(step.detail).slice(0, 4000))}</pre></details>`;
 }
+// Dosya izlenebilirlik haritasi: bu turda kim neyi okudu/yazdi.
+function fileMapHTML(fileMap) {
+  const satirlar = Object.entries(fileMap || {});
+  if (!satirlar.length) return "";
+  return `<details class="filemap-block"><summary>🗂 Dosya haritası · ${satirlar.length} dosya</summary><div class="filemap-list">${satirlar.map(([dosya, k]) =>
+    `<div class="filemap-row"><code>${esc(dosya)}</code><span>${k.yazan.length ? `✏️ ${esc(k.yazan.join(", "))}` : ""}${k.yazan.length && k.okuyan.length ? " · " : ""}${k.okuyan.length ? `🔍 ${esc(k.okuyan.join(", "))}` : ""}</span></div>`).join("")}</div></details>`;
+}
 function stepsBlockHTML(data) {
   if (!data?.steps?.length) return "";
   const sn = Math.round((data.durationMs || 0) / 1000);
@@ -1223,6 +1235,7 @@ function msgHTML(m) {
       ${m.steps ? stepsBlockHTML(m.steps) : ""}
       <div class="m-content">${md(m.content)}${media ? `<div class="media-grid">${media}</div>${delivery}` : ""}</div>
       ${m.diff ? diffCardHTML(m.diff) : ""}
+      ${m.fileMap ? fileMapHTML(m.fileMap) : ""}
       <div class="msg-actions" data-message-id="${esc(m.id)}">
         <button data-msg-copy title="Yanıtı kopyala">⧉</button>
         <button data-msg-retry title="Yeniden dene">↻</button>
@@ -1526,7 +1539,7 @@ function providerUsage(provider){const now=Date.now(),totals={calls:0,input:0,ca
 function usageChart(usage){const source=usage.days||[],max=Math.max(.001,...source.map(item=>Number(item.cost||0))),todayCost=Number(usage.todayCost??source.at(-1)?.cost??0),monthCost=Number(usage.monthCost??0),thirtyDayCost=Number(usage.thirtyDayCost??usage.cost??0);return `<div class="quota-daily"><div><span><small>Bugün</small><b>$${todayCost.toFixed(2)}</b></span><span><small>Bu ay · API eşdeğeri</small><b>$${monthCost.toFixed(2)}</b></span><span><small>Son 30 gün</small><b>$${thirtyDayCost.toFixed(2)}</b></span></div><div class="quota-bars" aria-label="Son 30 günlük kullanım">${source.map(item=>`<i class="${item.cost>0?"used":"empty"}" style="height:${item.cost>0?Math.max(6,item.cost/max*100):3}%"><span><b>${esc(new Date(`${item.day}T12:00:00`).toLocaleDateString("tr-TR",{day:"numeric",month:"short"}))}</b><em>$${Number(item.cost||0).toFixed(2)}${item.calls==null?"":` · ${Number(item.calls).toLocaleString("tr-TR")} çağrı`}</em><small>${Number(item.tokens||0).toLocaleString("tr-TR")} token</small></span></i>`).join("")}</div>${usage.mostUsedModel?`<small class="quota-model">En çok kullanılan model: ${esc(usage.mostUsedModel)}</small>`:""}</div>`;}
 function quotaWindowHtml(window){const remaining=Math.round(window.remainingPercent),reset=window.resetsAt?new Date(window.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,resetText=reset?`${reset} tarihinde sıfırlanır`:window.refreshText?`${esc(window.refreshText)} sonra tamamen yenilenir`:"Sıfırlanma zamanı paylaşılmadı",bars=(window.history||[]).slice(-16);return `<div class="quota-remaining${window.stale?" stale":""}"><span><b>${quotaWindowLabel(window.windowMinutes)}</b><em>${resetText}${window.stale?" · güncel değil":""}</em></span><strong>%${remaining}</strong><i><b style="width:${remaining}%"></b></i>${bars.length>1?`<div class="quota-history" aria-label="Son kota ölçümleri">${bars.map(point=>`<i style="height:${Math.max(8,Number(point.usedPercent))}%"></i>`).join("")}</div>`:""}</div>`;}
 function renderQuotaOverview(){const host=$("quota-overview");if(!host)return;host.innerHTML=SUBSCRIPTION_PROVIDERS.map(provider=>{const members=(state.config.members||[]).filter(member=>member.provider===provider&&member.enabled),models=[...new Set(members.map(member=>member.model||"Otomatik model"))].join(", ")||"Bağlı üye yok",health=state.health?.[provider],status=health?.ok!==false?"Hazır":"Bağlantı gerekli",quota=state.providerQuotas?.[provider],remaining=quota?.available?Math.round(quota.remainingPercent):null,secondary=quota?.secondary,secondaryRemaining=secondary?Math.round(secondary.remainingPercent):null,reset=quota?.resetsAt?new Date(quota.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,secondaryReset=secondary?.resetsAt?new Date(secondary.resetsAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,quotaText=remaining===null?"Kota verisi yok":`%${remaining} kaldı`,isOpen=openQuotaProvider===provider,updated=quota?.updatedAt?new Date(quota.updatedAt).toLocaleString("tr-TR",{hour:"2-digit",minute:"2-digit"}):null;return `<article class="quota-card quota-${provider}${isOpen?" open":""}" data-provider="${provider}" tabindex="0" role="button" aria-expanded="${isOpen}" style="--remaining:${remaining??0}"><span class="quota-avatar">${providerQuotaLogo(provider)}</span><div><b>${PROVIDER_LABELS[provider]}</b><small>${quotaText}</small></div><i class="${health?.ok===false?"offline":""}"></i><section class="quota-tooltip"><button class="quota-close" type="button" aria-label="Kota ayrıntısını kapat">×</button><header><span><b>${PROVIDER_LABELS[provider]}</b><small>${esc(status)} · ${esc(models)}</small></span><strong>${remaining===null?"Kesin veri yok":`%${remaining} kaldı`}</strong></header>${remaining!==null?`<div class="quota-remaining"><span><b>${quotaWindowLabel(quota.windowMinutes)}</b><em>${reset?`${reset} tarihinde sıfırlanır`:"Sıfırlanma zamanı paylaşılmadı"}</em></span><strong>%${remaining}</strong><i><b style="width:${remaining}%"></b></i></div>${secondaryRemaining!==null?`<div class="quota-remaining"><span><b>${quotaWindowLabel(secondary.windowMinutes)}</b><em>${secondaryReset?`${secondaryReset} tarihinde sıfırlanır`:"Sıfırlanma zamanı paylaşılmadı"}</em></span><strong>%${secondaryRemaining}</strong><i><b style="width:${secondaryRemaining}%"></b></i></div>`:""}`:""}<p>${remaining===null?"Bu sağlayıcı kesin kalan kotayı yerel oturumunda paylaşmıyor; bu yüzden tahmini bir yüzde veya ücret gösterilmiyor.":`${esc(quota.limitName||"Genel abonelik kotası")} doğrudan sağlayıcının yerel oturum kaydından okundu${updated?`; son kayıt ${updated}`:""}. Model-özel kotalar genel kotaya karıştırılmaz.`}</p></section></article>`;}).join("");host.onclick=event=>{const card=event.target.closest(".quota-card");if(!card)return;const close=event.target.closest(".quota-close"),provider=card.dataset.provider,opening=openQuotaProvider!==provider&&!close;openQuotaProvider=opening?provider:"";host.querySelectorAll(".quota-card").forEach(item=>{const isOpen=item.dataset.provider===openQuotaProvider;item.classList.toggle("open",isOpen);item.setAttribute("aria-expanded",String(isOpen))});event.stopPropagation()};host.onkeydown=event=>{if(!["Enter"," "].includes(event.key)||event.target.closest(".quota-close"))return;event.preventDefault();event.target.click()};}
-function renderQuotaOverviewDetailed(){const host=$("quota-overview");if(!host)return;host.innerHTML=SUBSCRIPTION_PROVIDERS.map(provider=>{const members=(state.config.members||[]).filter(member=>member.provider===provider&&member.enabled),models=[...new Set(members.map(member=>member.model||"Otomatik model"))].join(", ")||"Bağlı üye yok",health=state.health?.[provider],status=health?.ok!==false?"Hazır":"Bağlantı gerekli",quota=state.providerQuotas?.[provider]||{},windows=quota.windows?.length?quota.windows:quota.available?[quota,quota.secondary].filter(Boolean):[],remaining=windows.length?Math.round(windows[0].remainingPercent):null,quotaText=remaining===null?"Kota verisi yok":`%${remaining} kaldı`,isOpen=openQuotaProvider===provider,updated=quota.updatedAt?new Date(quota.updatedAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,localUsage=providerUsage(provider),usage=quota.accountUsage||localUsage,identity=[quota.accountEmail,quota.accountPlan||quota.plan].filter(Boolean).join(" · ")||"Hesap kimliği paylaşılmadı",usageCalls=Number(usage.calls??localUsage.calls??0),usageTokens=Number(usage.thirtyDayTokens??(localUsage.input+localUsage.output)),usageCost=Number(usage.thirtyDayCost??localUsage.cost);return `<article class="quota-card quota-${provider}${isOpen?" open":""}" data-provider="${provider}" tabindex="0" role="button" aria-expanded="${isOpen}" style="--remaining:${remaining??0}"><span class="quota-avatar">${providerQuotaLogo(provider)}</span><div><b>${PROVIDER_LABELS[provider]}</b><small>${quotaText}</small></div><i class="${health?.ok===false?"offline":""}"></i><section class="quota-tooltip"><button class="quota-close" type="button" aria-label="Kota ayrıntısını kapat">×</button><header><span><b>${PROVIDER_LABELS[provider]}</b><small>${esc(identity)}</small><small>${esc(status)} · ${esc(models)}</small></span><strong>${remaining===null?"Kesin veri yok":`%${remaining} kaldı`}</strong></header>${windows.map(quotaWindowHtml).join("")}${usageChart(usage)}<div class="quota-grid"><span><small>Son 30 gün</small><b>${usageCalls.toLocaleString("tr-TR")} çağrı</b><em>${usageTokens.toLocaleString("tr-TR")} token</em></span><span><small>Tahmini API karşılığı</small><b>$${usageCost.toFixed(2)}</b><em>Abonelik faturası değil</em></span></div><p>${esc(usage.source||quota.source||"Yerel oturum")} kaydından okundu${updated?`; son kota ölçümü ${updated}`:""}. Günlük değerler ayrı günlerden toplanır; 30 günlük değer bugünün tekrarı değildir.</p></section></article>`;}).join("");host.onclick=event=>{const card=event.target.closest(".quota-card");if(!card)return;const close=event.target.closest(".quota-close"),provider=card.dataset.provider,opening=openQuotaProvider!==provider&&!close;openQuotaProvider=opening?provider:"";host.querySelectorAll(".quota-card").forEach(item=>{const isOpen=item.dataset.provider===openQuotaProvider;item.classList.toggle("open",isOpen);item.setAttribute("aria-expanded",String(isOpen))});event.stopPropagation()};host.onkeydown=event=>{if(!["Enter"," "].includes(event.key)||event.target.closest(".quota-close"))return;event.preventDefault();event.target.click()};}
+function renderQuotaOverviewDetailed(){const host=$("quota-overview");if(!host)return;host.innerHTML=SUBSCRIPTION_PROVIDERS.map(provider=>{const members=(state.config.members||[]).filter(member=>member.provider===provider&&member.enabled),models=[...new Set(members.map(member=>member.model||"Otomatik model"))].join(", ")||"Bağlı üye yok",health=state.health?.[provider],status=health?.ok!==false?"Hazır":"Bağlantı gerekli",quota=state.providerQuotas?.[provider]||{},windows=quota.windows?.length?quota.windows:quota.available?[quota,quota.secondary].filter(Boolean):[],remaining=windows.length?Math.round(windows[0].remainingPercent):null,quotaText=remaining===null?"Kota verisi yok":`%${remaining} kaldı`,isOpen=openQuotaProvider===provider,updated=quota.updatedAt?new Date(quota.updatedAt).toLocaleString("tr-TR",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):null,localUsage=providerUsage(provider),usage=quota.accountUsage||localUsage,identity=[quota.accountEmail,quota.accountPlan||quota.plan].filter(Boolean).join(" · ")||"Hesap kimliği paylaşılmadı",usageCalls=Number(usage.calls??localUsage.calls??0),usageTokens=Number(usage.thirtyDayTokens??(localUsage.input+localUsage.output)),usageCost=Number(usage.thirtyDayCost??localUsage.cost);return `<article class="quota-card quota-${provider}${isOpen?" open":""}" data-provider="${provider}" tabindex="0" role="button" aria-expanded="${isOpen}" style="--remaining:${remaining??0}"><span class="quota-avatar">${providerQuotaLogo(provider)}</span><div><b>${PROVIDER_LABELS[provider]}</b><small>${quotaText}</small></div><i class="${health?.ok===false?"offline":""}"></i><section class="quota-tooltip"><button class="quota-close" type="button" aria-label="Kota ayrıntısını kapat">×</button><header><span><b>${PROVIDER_LABELS[provider]}</b><small>${esc(identity)}</small><small>${esc(status)} · ${esc(models)}</small></span><strong>${remaining===null?"Kesin veri yok":`%${remaining} kaldı`}</strong></header>${windows.map(quotaWindowHtml).join("")}${usageChart(usage)}<div class="quota-grid"><span><small>Bugün</small><b>${Number(usageToday[provider]?.calls||0).toLocaleString("tr-TR")} çağrı</b><em>${Number((usageToday[provider]?.input||0)+(usageToday[provider]?.output||0)).toLocaleString("tr-TR")} token</em></span><span><small>Son 30 gün</small><b>${usageCalls.toLocaleString("tr-TR")} çağrı</b><em>${usageTokens.toLocaleString("tr-TR")} token</em></span><span><small>Tahmini API karşılığı</small><b>$${usageCost.toFixed(2)}</b><em>Abonelik faturası değil</em></span></div><p>${esc(usage.source||quota.source||"Yerel oturum")} kaydından okundu${updated?`; son kota ölçümü ${updated}`:""}. Günlük değerler ayrı günlerden toplanır; 30 günlük değer bugünün tekrarı değildir.</p></section></article>`;}).join("");host.onclick=event=>{const card=event.target.closest(".quota-card");if(!card)return;const close=event.target.closest(".quota-close"),provider=card.dataset.provider,opening=openQuotaProvider!==provider&&!close;openQuotaProvider=opening?provider:"";host.querySelectorAll(".quota-card").forEach(item=>{const isOpen=item.dataset.provider===openQuotaProvider;item.classList.toggle("open",isOpen);item.setAttribute("aria-expanded",String(isOpen))});event.stopPropagation()};host.onkeydown=event=>{if(!["Enter"," "].includes(event.key)||event.target.closest(".quota-close"))return;event.preventDefault();event.target.click()};}
 document.addEventListener("click",event=>{if(event.target.closest("#quota-overview"))return;openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
 document.addEventListener("keydown",event=>{if(event.key!=="Escape")return;openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
 $("quota-overview")?.addEventListener("mouseleave",()=>{openQuotaProvider="";document.querySelectorAll(".quota-card.open").forEach(card=>{card.classList.remove("open");card.setAttribute("aria-expanded","false")})});
@@ -2059,6 +2072,53 @@ async function renderTaskCenter(){const data=await fetch("/api/workspace").then(
 function contractLines(value){return (value||[]).join("\n");}
 async function openTaskContract(taskId){const response=await fetch(`/api/workspace/tasks/${taskId}/contract`),contract=await response.json();if(!response.ok)return alert(contract.error);openModal(`<div class="contract-modal"><div class="modal-title"><div><span class="section-kicker">GÖREV SINIRLARI</span><h2>Görev sözleşmesi</h2><p>Ajanın hedefini, erişebileceği alanları ve tamamlanma ölçütlerini belirleyin.</p></div><button data-close-modal>×</button></div><form id="task-contract-form" data-task-id="${taskId}"><label class="contract-wide"><b>Hedef</b><small>Bu görev sonunda ortaya çıkması gereken sonuç.</small><textarea name="goal" required>${esc(contract.goal||"")}</textarea></label><label><b>Kapsam dışı</b><small>Her satıra yapılmaması gereken bir iş.</small><textarea name="nonGoals">${esc(contractLines(contract.nonGoals))}</textarea></label><label><b>Kabul kriterleri</b><small>Her satır doğrulanabilir bir sonuç olmalı.</small><textarea name="acceptanceCriteria" required>${esc(contractLines(contract.acceptanceCriteria))}</textarea></label><label><b>İzin verilen yollar</b><small>Projeye göre yollar; ör. src/**</small><textarea name="allowedPaths" required>${esc(contractLines(contract.allowedPaths))}</textarea></label><label><b>Yasak yollar</b><small>Ajanın değiştirmemesi gereken alanlar.</small><textarea name="forbiddenPaths">${esc(contractLines(contract.forbiddenPaths))}</textarea></label><label><b>Test komutları</b><small>Her satıra bir doğrulama komutu.</small><textarea name="testCommands">${esc(contractLines(contract.testCommands))}</textarea></label><label><b>Onay sınırları</b><small>İnsan onayı gerektiren işlemler.</small><textarea name="approvalBoundaries">${esc(contractLines(contract.approvalBoundaries))}</textarea></label><label class="contract-risk"><b>Risk seviyesi</b><select name="risk">${[["low","Düşük"],["medium","Orta"],["high","Yüksek"],["critical","Kritik"]].map(([value,label])=>`<option value="${value}" ${contract.risk===value?"selected":""}>${label}</option>`).join("")}</select></label><div class="contract-errors" ${contract.errors?.length?"":"hidden"}>${esc((contract.errors||[]).join(" · "))}</div><div class="modal-actions"><button type="button" data-close-modal>Vazgeç</button><button type="submit" class="primary-action">Sözleşmeyi kaydet</button></div></form></div>`);}
 $("task-refresh").addEventListener("click",renderTaskCenter);
+// ---- Zamanlanmis gorevler (gunluk saat + istem) ----
+function renderSchedules() {
+  const host = $("schedule-list");
+  if (!host) return;
+  const list = state.config.schedules || [];
+  host.innerHTML = list.length ? list.map((sch) => `<div class="schedule-row ${sch.enabled ? "" : "disabled"}"><b>⏰ ${esc(sch.time)}</b><div><span>${esc(sch.name)}</span><small>${esc(sch.prompt.slice(0, 90))}${sch.lastRunDay ? ` · son: ${esc(sch.lastRunDay)}` : ""}</small></div><button data-sch-toggle="${esc(sch.id)}" title="${sch.enabled ? "Duraklat" : "Etkinleştir"}">${sch.enabled ? "⏸" : "▶"}</button><button data-sch-del="${esc(sch.id)}" title="Sil">×</button></div>`).join("") : '<div class="muted" style="padding:8px 2px">Henüz zamanlanmış görev yok.</div>';
+}
+async function saveSchedules(list) {
+  await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ schedules: list }) });
+  await fetchState(); renderSchedules();
+}
+$("schedule-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  const list = [...(state.config.schedules || []), { name: data.name, time: data.time, prompt: data.prompt, projectId: data.useProject ? (activeProject()?.id || null) : null, enabled: true }];
+  e.target.reset(); e.target.querySelector('[name="time"]').value = "09:00";
+  await saveSchedules(list);
+});
+$("schedule-list")?.addEventListener("click", async (e) => {
+  const toggle = e.target.closest("[data-sch-toggle]"), del = e.target.closest("[data-sch-del]");
+  if (!toggle && !del) return;
+  let list = state.config.schedules || [];
+  if (del) list = list.filter((sch) => sch.id !== del.dataset.schDel);
+  else list = list.map((sch) => sch.id === toggle.dataset.schToggle ? { ...sch, enabled: !sch.enabled } : sch);
+  await saveSchedules(list);
+});
+
+// ---- Sesli giris ----
+// Chromium'un yerlesik tanimasi varsa kullanilir; yoksa macOS dikte onerilir.
+let micActive = null;
+$("btn-mic")?.addEventListener("click", () => {
+  if (micActive) { micActive.stop(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return alert("Bu ortamda yerleşik ses tanıma yok. macOS dikte kullanın: metin kutusuna tıklayıp fn tuşuna iki kez basın.");
+  const rec = new SR();
+  rec.lang = "tr-TR"; rec.interimResults = true; rec.continuous = true;
+  const basi = ta.value;
+  rec.onresult = (e) => {
+    const parcalar = [...e.results].map((r) => r[0].transcript).join("");
+    ta.value = (basi ? basi + " " : "") + parcalar; autoGrow();
+  };
+  rec.onend = () => { micActive = null; $("btn-mic").classList.remove("recording"); ta.focus(); };
+  rec.onerror = () => { micActive = null; $("btn-mic").classList.remove("recording"); };
+  try { rec.start(); micActive = rec; $("btn-mic").classList.add("recording"); }
+  catch { alert("Ses tanıma başlatılamadı; macOS dikte kullanın (fn fn)."); }
+});
+
 $("task-schedule").addEventListener("click",async()=>{const request=prompt("Zamanlanacak görev");if(!request)return;const at=prompt("Başlangıç zamanı (YYYY-MM-DD HH:mm)",new Date(Date.now()+3600000).toISOString().slice(0,16).replace("T"," "));if(!at)return;const response=await fetch("/api/workspace/schedules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({request,at,projectId:activeProject()?.id||null})}),result=await response.json();if(!response.ok)return alert(result.error);alert(`Görev zamanlandı: ${new Date(result.at).toLocaleString("tr-TR")}`);await renderTaskCenter();});
 $("task-center-list").addEventListener("click",async e=>{const contractButton=e.target.closest("[data-task-contract]");if(contractButton)return openTaskContract(contractButton.dataset.taskContract);const b=e.target.closest("[data-task-action]");if(!b)return;const r=await fetch(`/api/workspace/tasks/${b.dataset.taskId}/${b.dataset.taskAction}`,{method:"POST"});if(!r.ok)alert((await r.json()).error);await renderTaskCenter();await fetchState();});
 $("modal-card").addEventListener("submit",async e=>{
@@ -2577,12 +2637,33 @@ document.addEventListener("click", async (e) => {
   if (e.target.closest("[data-msg-copy]")) await navigator.clipboard.writeText(msg.content);
   if (e.target.closest("[data-msg-retry]")) { ta.value = msg.from === "kullanici" ? msg.content : `Bu yanıtı yeniden değerlendir ve daha iyi yanıtla:\n\n${msg.content}`; autoGrow(); ta.focus(); }
   if (e.target.closest("[data-msg-continue]")) { const r=await fetch(`/api/runs/${selectedRun}/branch`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messageId:msg.id})}); const j=await r.json(); if(j.runId){selectRun(j.runId); await fetchState(); ta.focus();} }
-  if (e.target.closest("[data-msg-edit]")) { ta.value = msg.content; autoGrow(); ta.focus(); }
+  if (e.target.closest("[data-msg-edit]")) {
+    ta.value = msg.content; autoGrow(); ta.focus();
+    // Kullanici mesajini duzenlemek yeniden calistirmadir: gonderince sohbet
+    // o mesajdan itibaren silinir ve tur yeni metinle bastan kosar.
+    if (msg.from === "kullanici") { editingMessageId = msg.id; renderEditBanner(); }
+  }
   if (e.target.closest("[data-msg-save]")) { const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([msg.content],{type:"text/markdown"})); a.download=`ajan-yaniti-${msg.id}.md`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }
   const fb = e.target.closest("[data-msg-feedback]");
   if (fb) { await fetch(`/api/runs/${selectedRun}/messages/${msg.id}/feedback`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({value:fb.dataset.msgFeedback})}); fb.classList.add("active"); }
 });
 
+// Duzenle & yeniden calistir durumu: dolu ise gonderim rewind'e gider.
+let editingMessageId = null;
+function renderEditBanner() {
+  let banner = $("edit-banner");
+  if (!banner) {
+    banner = document.createElement("div");
+    banner.id = "edit-banner";
+    document.getElementById("composer").prepend(banner);
+    banner.addEventListener("click", (e) => {
+      if (!e.target.closest("[data-edit-cancel]")) return;
+      editingMessageId = null; ta.value = ""; autoGrow(); renderEditBanner();
+    });
+  }
+  banner.hidden = !editingMessageId;
+  if (editingMessageId) banner.innerHTML = `✎ Mesaj düzenleniyor — gönderince sohbet bu mesajdan itibaren yeniden çalışır <button type="button" data-edit-cancel aria-label="Düzenlemeyi iptal et">×</button>`;
+}
 async function send() {
   const selRun = selectedRun ? state.runs[selectedRun] : null;
   const text = ta.value.trim();
@@ -2594,6 +2675,15 @@ async function send() {
   }
 
   if (!text && pendingAttachments.length === 0) return;
+  if (editingMessageId) {
+    const runId = selectedRun, mesajId = editingMessageId;
+    editingMessageId = null; renderEditBanner();
+    ta.value = ""; autoGrow();
+    const r = await fetch(`/api/runs/${runId}/rewind`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messageId: mesajId, text }) });
+    if (!r.ok) alert((await r.json()).error || "Düzenleme başarısız");
+    await fetchState();
+    return;
+  }
   if (pendingAttachments.some((a) => a.uploading)) return alert("Dosyaların yüklenmesi henüz tamamlanmadı.");
   if (pendingAttachments.some((a) => a.error)) return alert("Başarısız dosyayı kaldırın veya yeniden deneyin.");
   let messageText = text || "Ek dosyaları incele.";

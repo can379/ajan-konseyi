@@ -1,0 +1,95 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const oku = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+
+// ---- 1) Paralel calisma alanlari (mevcut davranisin sozlesmesi) ----
+test("kod modunda konsey uyeleri ayri worktree+dalda calisir ve birlestirilir", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /gitops\.createWorktree\(run\.projectDir/, "uye basina worktree acilmali");
+  assert.match(orch, /codeIntegration/, "birlestirme asamasi olmali");
+  assert.match(orch, /gitops\.mergeBranch/, "dallar plana gore birlesmeli");
+});
+
+// ---- 2) Ajanlar arasi dogrudan soru ----
+test("uye baska uyeye soru sorabilir; jeton ekrana sizmadan islenir", async () => {
+  const { parseAgentAsk, stripActionTokens } = await import("../src/orchestrator.js");
+  assert.deepEqual(parseAgentAsk('<<<AJAN_SORU>>>{"to":"m-codex","question":"Bu modülün arayüzü ne?"}<<<END>>>'),
+    { action: "ask", to: "m-codex", question: "Bu modülün arayüzü ne?" });
+  assert.equal(parseAgentAsk("normal yanıt"), null);
+  assert.equal(parseAgentAsk('<<<AJAN_SORU>>>{"to":"","question":"x"}<<<END>>>'), null, "hedefsiz soru gecersiz");
+  assert.equal(stripActionTokens('önce.\n<<<AJAN_SORU>>>{"to":"a","question":"b"}<<<END>>>'), "önce.");
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /_askDepth/, "soru zinciri tek seviyede kalmali (sonsuz dongu olmasin)");
+  assert.match(orch, /üyesine soruldu/, "soru adim gunlugune dusmeli");
+});
+
+// ---- 3) Zamanlanmis gorevler ----
+test("config zamanlanmis gorevleri dogrular ve saklar", async () => {
+  const { Config } = await import("../src/config.js");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cfg-"));
+  const cfg = new Config(dir);
+  cfg.update({ schedules: [
+    { name: "Sabah testi", time: "09:30", prompt: "npm test kos, kirmizilari raporla" },
+    { name: "Bozuk saat", time: "9:3", prompt: "x" },
+    { name: "Istemsiz", time: "10:00", prompt: "" },
+  ]});
+  assert.equal(cfg.data.schedules.length, 2, "istemsiz gorev atilmali");
+  assert.equal(cfg.data.schedules[0].time, "09:30");
+  assert.equal(cfg.data.schedules[1].time, "09:00", "bozuk saat varsayilana inmeli");
+  assert.ok(cfg.data.schedules[0].id, "kimlik atanmali");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+test("sunucu dakikalik zamanlayici calistirir", () => {
+  const srv = oku("server.js");
+  assert.match(srv, /function runSchedules/, "zamanlayici olmali");
+  assert.match(srv, /setInterval\(runSchedules, 60 \* 1000\)/, "dakikada bir bakilmali");
+  assert.match(srv, /sch\.lastRunDay === gun/, "ayni gun iki kez kosulmamali");
+});
+
+// ---- 4) Dosya izlenebilirligi ----
+test("tur sonunda dosya haritasi mesaji duser, arayuz cizer", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /run\.turnFileMap/, "adimlardan harita toplanmali");
+  assert.match(orch, /kind: "filemap"/, "harita mesaji dusmeli");
+  const app = oku("ui/app.js");
+  assert.match(app, /function fileMapHTML/, "arayuz haritayi cizmeli");
+  assert.match(app, /m\.fileMap \? fileMapHTML/, "mesajda gosterilmeli");
+  const store = oku("src/store.js");
+  assert.match(store, /fileMap = null/, "addMessage fileMap alanini korumali");
+});
+
+// ---- 5) Mesaj duzenle & yeniden calistir ----
+test("rewind: kullanici mesaji duzenlenince sonrasi silinir, oturumlar tazelenir", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /rewindChat\(run, messageId, newText/, "rewind metodu olmali");
+  assert.match(orch, /run\.messages\.slice\(0, index\)/, "mesajdan itibaren kesilmeli");
+  assert.match(orch, /agent\.resetSession\(run\.id\)/, "eski CLI baglami sifirlanmali");
+  const srv = oku("server.js");
+  assert.match(srv, /\\\/rewind\$/, "rewind ucu olmali");
+  const app = oku("ui/app.js");
+  assert.match(app, /editingMessageId = msg\.id/, "kullanici mesajinda duzenleme modu acilmali");
+  assert.match(app, /\/rewind`/, "gonderim rewind ucuna gitmeli");
+});
+
+// ---- 6) Sesli giris ----
+test("mikrofon dugmesi ses tanimayi baslatir, yoksa dikteyi onerir", () => {
+  const app = oku("ui/app.js");
+  assert.match(app, /webkitSpeechRecognition/, "yerlesik tanima denenmeli");
+  assert.match(app, /rec\.lang = "tr-TR"/, "Turkce taninmali");
+  assert.match(app, /fn tuşuna iki kez/, "dikte yedegi anlatilmali");
+  assert.match(oku("ui/index.html"), /btn-mic/, "dugme composer'da olmali");
+});
+
+// ---- 7) Kota/kullanim gostergesi ----
+test("gunluk kullanim ucu toplanir ve kota kartinda gosterilir", () => {
+  const srv = oku("server.js");
+  assert.match(srv, /\/api\/usage\/today/, "gunluk kullanim ucu olmali");
+  assert.match(srv, /usageDaily\?\.\[gun\]/, "runlardan gunluk toplanmali");
+  const app = oku("ui/app.js");
+  assert.match(app, /fetchUsageToday/, "arayuz periyodik cekmeli");
+  assert.match(app, /Bugün<\/small>/, "kota kartinda Bugun hucresi olmali");
+});

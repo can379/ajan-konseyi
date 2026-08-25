@@ -692,6 +692,35 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, config.data);
     }
 
+    // ---- Mesaj duzenle & yeniden calistir ----
+    const rewindMatch = p.match(/^\/api\/runs\/([\w-]+)\/rewind$/);
+    if (req.method === "POST" && rewindMatch) {
+      const run = store.getRun(rewindMatch[1]);
+      if (!run) return json(res, 404, { error: "Sohbet bulunamadı" });
+      const body = await readBody(req);
+      try {
+        orch.rewindChat(run, String(body.messageId || ""), String(body.text || "").trim(), sanitizeAttachments(body.attachments)).catch(() => {});
+        return json(res, 200, { ok: true, runId: run.id });
+      } catch (error) { return json(res, 400, { error: String(error.message || error) }); }
+    }
+
+    // ---- Gunluk kota/kullanim ozeti (tum sohbetlerden bugunun toplami) ----
+    if (req.method === "GET" && p === "/api/usage/today") {
+      const gun = new Date().toISOString().slice(0, 10);
+      const toplam = {};
+      for (const run of Object.values(store.runs)) {
+        const daily = run.usageDaily?.[gun];
+        if (!daily) continue;
+        for (const [uyeId, u] of Object.entries(daily)) {
+          const uye = config.data.members.find((m) => m.id === uyeId);
+          const anahtar = uye ? uye.provider : (uyeId === "koordinator" ? "koordinator" : uyeId);
+          const b = (toplam[anahtar] ||= { input: 0, output: 0, calls: 0, costUsd: 0 });
+          b.input += u.input || 0; b.output += u.output || 0; b.calls += u.calls || 0; b.costUsd += u.costUsd || 0;
+        }
+      }
+      return json(res, 200, { day: gun, providers: toplam });
+    }
+
     // ---- Projeler ----
     if (req.method === "POST" && p === "/api/projects") {
       const body = await readBody(req);
@@ -1065,6 +1094,34 @@ function removeMcpEndpoint() { try { fs.unlinkSync(MCP_ENDPOINT_FILE); } catch {
 for (const signal of ["exit", "SIGINT", "SIGTERM"]) {
   process.on(signal, () => { removeMcpEndpoint(); if (signal !== "exit") process.exit(0); });
 }
+
+// ---- Zamanlanmis gorevler ----
+// Dakikada bir bakilir: saati gelmis, bugun kosmamis ve etkin her gorev icin
+// yeni bir sohbet acilip istem konseye verilir. Sunucu kapaliyken kacan saat
+// telafi EDILMEZ (kullanici gorevi elle kosabilir) — surpriz maliyet olmasin.
+function runSchedules() {
+  const simdi = new Date();
+  const saat = `${String(simdi.getHours()).padStart(2, "0")}:${String(simdi.getMinutes()).padStart(2, "0")}`;
+  const gun = simdi.toISOString().slice(0, 10);
+  let degisti = false;
+  for (const sch of config.data.schedules || []) {
+    if (!sch.enabled || !sch.prompt || sch.lastRunDay === gun || sch.time !== saat) continue;
+    sch.lastRunDay = gun; degisti = true;
+    const project = sch.projectId ? config.getProject(sch.projectId) : null;
+    const enabled = config.data.members.filter((m) => m.enabled).map((m) => m.id);
+    if (!enabled.length) continue;
+    const run = store.createRun({
+      kind: "chat", request: sch.prompt, mode: sch.mode || "auto", agents: enabled,
+      projectId: project?.id || null, projectDir: project?.path || null, attachments: [],
+    });
+    run.status = "idle";
+    run.title = `⏰ ${sch.name}`;
+    store.addMessage(run, { from: "sistem", kind: "info", content: `⏰ Zamanlanmış görev "${sch.name}" (${sch.time}) başlatıldı.` });
+    orch.continueChat(run, sch.prompt, [], sch.mode || "auto").catch(() => {});
+  }
+  if (degisti) config.save();
+}
+setInterval(runSchedules, 60 * 1000);
 
 server.listen(PORT, "127.0.0.1", () => {
   writeMcpEndpoint();

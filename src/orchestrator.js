@@ -38,8 +38,8 @@ export function parseBrowserAction(text){const match=String(text||"").match(BROW
 // iner; yanit metninden jeton bloklari ayiklanir.
 export function stripActionTokens(text){
   return String(text||"")
-    .replace(/<<<AJAN_(?:BROWSER|HOST)_ACTION>>>[\s\S]*?<<<END>>>/g,"")
-    .replace(/<<<AJAN_(?:BROWSER|HOST)_ACTION>>>[\s\S]*$/,"")
+    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>[\s\S]*?<<<END>>>/g,"")
+    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>[\s\S]*$/,"")
     .trim();
 }
 
@@ -57,6 +57,11 @@ export function describeAgentAction(action){
     default: return {kind:"islem",title:"Uygulama aracı çalıştı"};
   }
 }
+
+// Uyeden uyeye dogrudan soru: yanit "<<<AJAN_SORU>>>{...}<<<END>>>" ise
+// orkestrator hedef uyeyi dar baglamla cagirir, yaniti soran uyeye geri verir.
+const AGENT_ASK_RE=/<<<AJAN_SORU>>>\s*([\s\S]*?)\s*<<<END>>>/;
+export function parseAgentAsk(text){const match=String(text||"").match(AGENT_ASK_RE);if(!match)return null;try{const value=JSON.parse(match[1]);const to=String(value.to||"").trim(),question=String(value.question||"").trim();if(!to||!question)return null;return{action:"ask",to,question:question.slice(0,2000)};}catch{return null;}}
 
 export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
@@ -451,6 +456,9 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
 --- SÖZLEŞME SONU ---`;
     const browserToken=opts.isolated||opts.lean?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
+    // Uyeler arasi soru koprusu: birden fazla etkin uye varsa tanitilir.
+    const digerUyeler=(this.config?.data?.members||[]).filter((m)=>m.enabled&&m.id!==member.id).map((m)=>`${m.name} (${m.id})`).join(", ");
+    const askHelp=(!opts.lean&&!opts.isolated&&!opts._askDepth&&digerUyeler)?`\n\n--- ÜYEYE SORU ARACI ---\nBaşka bir konsey üyesinin yazdığı kod veya verdiği karar hakkında kısa bir soruya ihtiyacın olursa yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_SORU>>>{"to":"<üye id>","question":"<kısa soru>"}<<<END>>>\nÜyeler: ${digerUyeler}. Yanıt sana otomatik geri verilecek ve işini sürdürmen istenecek. En fazla 2 kez kullan; kendi başına çözebildiğin şeyi sorma.\n--- SORU ARACI SONU ---`:"";
     const hostHelp=`\n\n--- ANA UYGULAMA YAYIN ARACI ---\nKullanıcı açıkça seçili projenin son sürümünü GitHub'a yayınlamanı veya push etmeni isterse sağlayıcı terminalinden git/ssh/gh/curl kullanma ve .command dosyası hazırlama. Yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_HOST_ACTION>>>{"action":"publish","payload":{}}<<<END>>>\nAna uygulama açık dalı kayıtlı deploy key ile yayınlar; force-push yapmaz ve sonucu sana geri verir.\n--- YAYIN ARACI SONU ---`;
     const identityContract = identityQuestion
       ? `\n\n--- SAĞLAYICI KİMLİĞİ ---\n${verifiedMemberIdentity(member)} Bu kimliği değiştirme, başka bir sağlayıcı olduğunu iddia etme ve ortak köprü adına konuşma.\n--- KİMLİK SONU ---`
@@ -462,7 +470,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const historyRule = history
       ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
       : "";
-    let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${askHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     // Kullanicinin ARA YONLENDIRMELERI (tur calisirken yazdigi fikirler) ve
     // yarida kesilmis tur notlari bir SONRAKI uye cagrisina islenir: is
     // birakilmaz, kaldigi yerden yeni bilgiyle surdurulur.
@@ -523,17 +531,38 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       if (finished && res && typeof res === "object") res.steps = finished;
       // memberMsg cagrildiginda mesaja ilistirilsin diye uye basina bekletilir.
       if (finished) (this._pendingSteps ||= {})[member.id] = finished;
+      // Dosya izlenebilirligi: bu turda hangi uye hangi dosyayi okudu/yazdi.
+      // Adim basliklarindaki dosya adlari toplanir; tur sonunda harita mesaji dusler.
+      if (finished && !opts.isolated && run.turnActive) {
+        const harita = (run.turnFileMap ||= {});
+        for (const st of finished.steps) {
+          const dosyalar = String(st.title).match(/[\w./-]+\.(?:html?|js|mjs|cjs|ts|tsx|jsx|css|scss|json|md|txt|py|rb|go|rs|java|sh|zsh|yml|yaml|toml|xml|svg|sql|swift|kt|c|h|cpp|hpp|plist|lock|env|cfg|ini|csv|patch|diff|conf)\b/gi) || [];
+          for (const dosya of dosyalar.slice(0, 6)) {
+            const kayit = (harita[dosya] ||= { okuyan: [], yazan: [] });
+            const liste = st.kind === "yazdi" ? kayit.yazan : (["okudu", "aradi"].includes(st.kind) ? kayit.okuyan : null);
+            if (liste && !liste.includes(member.name)) liste.push(member.name);
+          }
+        }
+      }
     };
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
     for(let step=0;res.ok&&step<12;step++){
       const browserAction=browserToken&&parseBrowserAction(res.text);
       const hostAction=parseHostAction(res.text);
-      if(!browserAction&&!hostAction)break;
-      const action=browserAction||hostAction;
+      const askAction=(!opts._askDepth&&parseAgentAsk(res.text))||null;
+      if(!browserAction&&!hostAction&&!askAction)break;
+      const action=browserAction||hostAction||askAction;
       let result;
       try{
-        if(browserAction)result=await this.browserBridge.request({token:browserToken,...browserAction});
+        if(askAction){
+          const hedefUye=this.memberById(askAction.to)||(this.config?.data?.members||[]).find((m)=>m.enabled&&m.name.toLocaleLowerCase("tr-TR")===askAction.to.toLocaleLowerCase("tr-TR"));
+          if(!hedefUye||!hedefUye.enabled||hedefUye.id===member.id)throw new Error("Geçersiz üye: "+askAction.to);
+          stepLog.add("devretti",`${hedefUye.name} üyesine soruldu`,`soru: ${askAction.question}`);
+          const cevap=await this.callMember(run,hedefUye,`Konsey üyesi ${member.name} sana soruyor (kısa ve net yanıtla):\n${askAction.question}`,{lean:true,_askDepth:1,label:`${member.name} → ${hedefUye.name}`,timeoutMs:180_000});
+          result=cevap.ok?{answer:String(cevap.text||"").slice(0,4000),from:hedefUye.name}:{error:String(cevap.error||"yanıt alınamadı")};
+        }
+        else if(browserAction)result=await this.browserBridge.request({token:browserToken,...browserAction});
         else{
           if(!isExplicitPublishRequest(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
           const projectDir=run.projectDir||process.env.AJAN_KONSEYI_SOURCE_DIR;
@@ -548,7 +577,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       // Jeton kullaniciya gorunmez; eylem katlanir bir adim satiri olur.
       // Ham istek+sonuc detayda saklanir — tiklaninca acilir (Codex'in
       // "Ran page script ›" davranisi).
-      {
+      if(!askAction){
         const tarif=describeAgentAction(action);
         stepLog.add(tarif.kind,tarif.title,
           `istek: ${JSON.stringify(action,null,1).slice(0,1500)}\nsonuç: ${JSON.stringify(result,null,1).slice(0,3000)}`,
@@ -559,7 +588,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     }
     // Nihai yanitta jeton kalintisi kalmasin: 12 tur biter ya da model jetonun
     // yanina duz metin eklerse ayikla (adim satiri zaten kaydedildi).
-    if (res && typeof res.text === "string" && /<<<AJAN_(?:BROWSER|HOST)_ACTION>>>/.test(res.text)) {
+    if (res && typeof res.text === "string" && /<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>/.test(res.text)) {
       const temiz = stripActionTokens(res.text);
       res = { ...res, text: temiz || "Tarayıcı eylemi yürütüldü; ayrıntı adım satırında." };
     }
@@ -1235,6 +1264,25 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     });
   }
 
+  // ---- Mesaj duzenle & yeniden calistir ----
+  // Kullanicinin eski bir mesajini duzeltip turu oradan yeniden baslatir:
+  // o mesajdan (dahil) sonrasi silinir, saglayici CLI oturumlari sifirlanir
+  // (eski baglam yeni gercekle celismesin), yeni metinle tur baslar.
+  rewindChat(run, messageId, newText, attachments = []) {
+    if (run.turnActive || run.directActive) throw new Error("Tur çalışırken mesaj düzenlenemez; önce durdurun");
+    const index = (run.messages || []).findIndex((m) => m.id === messageId);
+    if (index === -1) throw new Error("Mesaj bulunamadı");
+    const hedef = run.messages[index];
+    if (hedef.from !== "kullanici") throw new Error("Yalnız kendi mesajlarınızı düzenleyebilirsiniz");
+    run.messages = run.messages.slice(0, index);
+    run.report = null; run.reviews = []; run.votes = []; run.verify = null;
+    for (const agent of Object.values(this.providers)) agent.resetSession(run.id);
+    run.sessions = {};
+    this.store.updateRun(run);
+    this.store.emit("event", { type: "run_updated", runId: run.id });
+    return this.continueChat(run, String(newText || hedef.content), attachments.length ? attachments : (hedef.attachments || []), run.mode || "auto");
+  }
+
   async continueChat(run, text, attachments = [], mode = "auto", opts = {}) {
     const S = this.store;
     if (run.turnActive) throw new Error("Bu sohbette bir tur zaten çalışıyor; önce durdurun");
@@ -1366,6 +1414,14 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     } finally {
       run.turnActive = false;
       this.persistSessions(run);
+      // Dosya haritasi: bu turda kim neyi okudu/yazdi (katlanir kart).
+      if (run.turnFileMap && Object.keys(run.turnFileMap).length) {
+        const yazilan = Object.values(run.turnFileMap).some((k) => k.yazan.length);
+        if (yazilan || Object.keys(run.turnFileMap).length >= 2) {
+          S.addMessage(run, { from: "sistem", kind: "filemap", content: "Dosya haritası", fileMap: run.turnFileMap });
+        }
+        run.turnFileMap = null;
+      }
       // Tur, ara yonlendirme islenemeden bittiyse not KAYBOLMAZ: normal
       // mesaj olarak kuyruga iner ve hemen yeni tur olarak islenir.
       if (Array.isArray(run.steeringNotes) && run.steeringNotes.length) {

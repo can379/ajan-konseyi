@@ -1592,3 +1592,34 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .run-item.drop-below,.project-item.drop-below{box-shadow:inset 0 -2px 0 var(--acc,#2bc9b8)}
 .run-item[draggable],.project-item[draggable]{cursor:grab}
 .run-item[draggable]:active,.project-item[draggable]:active{cursor:grabbing}
+
+/* ---- Dosya haritasi karti ---- */
+.filemap-block{margin-top:8px;border-bottom:1px solid #23282533;padding-bottom:6px}
+.filemap-block>summary{cursor:pointer;list-style:none;color:var(--dim2);font-size:11.5px;user-select:none}
+.filemap-block>summary:hover{color:#c8cec9}
+.filemap-list{margin-top:6px;display:grid;gap:3px}
+.filemap-row{display:flex;gap:10px;align-items:baseline;font-size:12px}
+.filemap-row code{background:none;padding:0;color:#c8cec9}
+.filemap-row span{color:var(--dim2)}
+
+/* ---- Duzenle & yeniden calistir seridi ---- */
+#edit-banner{display:flex;align-items:center;gap:8px;padding:6px 10px;margin-bottom:6px;
+  border:1px solid #4a453040;border-radius:9px;background:#f0b94912;color:#d8c79a;font-size:12px}
+#edit-banner[hidden]{display:none}
+#edit-banner button{margin-left:auto;background:none;border:none;color:inherit;cursor:pointer;font-size:14px}
+
+/* ---- Mikrofon ---- */
+#btn-mic.recording{color:#ff6b5e;animation:pulse 1.2s infinite}
+
+/* ---- Zamanlanmis gorevler ---- */
+.schedule-panel{margin:14px 0;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface2)}
+#schedule-form{display:grid;grid-template-columns:1fr auto;gap:8px;margin:10px 0}
+#schedule-form textarea{grid-column:1/-1}
+#schedule-form button{border-radius:9px}
+.schedule-project{grid-column:1/-1;font-size:12px;color:var(--dim2);display:flex;gap:6px;align-items:center}
+.schedule-row{display:flex;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px solid #23282533}
+.schedule-row.disabled{opacity:.5}
+.schedule-row>div{flex:1;min-width:0}
+.schedule-row small{display:block;color:var(--dim2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schedule-row button{background:none;border:none;color:var(--dim2);cursor:pointer;font-size:14px}
+.schedule-row button:hover{color:#eef1ef}

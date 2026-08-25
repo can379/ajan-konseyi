@@ -73,6 +73,7 @@ export class Config {
         },
       };
       this.data.projects=(this.data.projects||[]).map((p)=>({...p,instructions:String(p.instructions||""),skills:Array.isArray(p.skills)?p.skills:[],devCommand:String(p.devCommand||""),artifactExport:p.artifactExport===true}));
+      this.data.schedules = Array.isArray(saved.schedules) ? saved.schedules : [];
       delete this.data.agents; // eski alan artık kullanılmıyor
     } catch {
       // dosya yoksa varsayılanlar geçerli
@@ -118,6 +119,19 @@ export class Config {
       this.data.coordinator = this.sanitizeCoordinator(patch.coordinator);
     }
     if ("activeProject" in patch) this.data.activeProject = patch.activeProject;
+    // Zamanlanmis gorevler: her gun belirlenen saatte konseye istem gonderir.
+    if (Array.isArray(patch.schedules)) {
+      this.data.schedules = patch.schedules.slice(0, 20).map((sch) => ({
+        id: String(sch.id || "sch-" + Math.random().toString(36).slice(2, 8)),
+        name: String(sch.name || "Zamanlanmış görev").slice(0, 60),
+        time: /^\d{2}:\d{2}$/.test(String(sch.time)) ? String(sch.time) : "09:00",
+        prompt: String(sch.prompt || "").slice(0, 2000),
+        projectId: sch.projectId ? String(sch.projectId) : null,
+        mode: ["auto", "discussion", "split", "code"].includes(sch.mode) ? sch.mode : "auto",
+        enabled: sch.enabled !== false,
+        lastRunDay: String(sch.lastRunDay || ""),
+      })).filter((sch) => sch.prompt);
+    }
     // Kenar cubugu surukle-birakla proje sirasi: bilinen kimlikler verilen
     // sirayla one alinir, listede olmayanlar mevcut sirasiyla sona kalir.
     if (Array.isArray(patch.projectOrder)) {
