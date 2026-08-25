@@ -628,7 +628,18 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
           {status:result&&result.error?"failed":"ok"});
       }
       const followup=`--- ANA UYGULAMA ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının görevini sürdür. Başka bir araç eylemi gerekiyorsa ilgili ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
-      res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}`:followup,{...providerOpts,fresh:opts.fresh});
+      // Ekran goruntusu YOL olarak verilince her uye acamiyor (canli gozlem:
+      // Antigravity PNG'yi python ile piksel piksel cozmeye calisip tikandi).
+      // Goruntu bir sonraki cagriya EK olarak da ilistirilir; boylece her uye
+      // kendi gorsel okuma yoluyla gorur.
+      const ekranGoruntusu=result&&result.screenshotPath&&fs.existsSync(result.screenshotPath)?result.screenshotPath:null;
+      const takipOpts=ekranGoruntusu
+        ?{...providerOpts,fresh:opts.fresh,images:[ekranGoruntusu],media:[{path:ekranGoruntusu,name:path.basename(ekranGoruntusu),mime:"image/png",kind:"image"}]}
+        :{...providerOpts,fresh:opts.fresh};
+      const ekranNotu=ekranGoruntusu
+        ?`\nEkran görüntüsü EK olarak verildi (${ekranGoruntusu}). Kendi görsel okuma yolunla aç ve BAK; pikselleri kodla çözmeye çalışma. Tıklayacağın öğenin görüntüdeki piksel konumunu bul, EKRAN NOKTASI = PİKSEL / 2 diye çevir ve click gönder.`
+        :"";
+      res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}${ekranNotu}`:`${followup}${ekranNotu}`,takipOpts);
     }
     // Nihai yanitta jeton kalintisi kalmasin: 12 tur biter ya da model jetonun
     // yanina duz metin eklerse ayikla (adim satiri zaten kaydedildi).

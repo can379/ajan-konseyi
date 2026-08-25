@@ -148,3 +148,11 @@ test("arac yardimi uyeye ozel degil: saglayici ayrimi yapilmaz", () => {
   assert.match(orch, /const computerHelp=\(!opts\.lean&&!opts\.isolated&&this\.computerBridge&&bilgisayarIstegi\)/,
     "yalniz lean/isolated ayrimi olmali, uye ayrimi degil");
 });
+
+test("ekran goruntusu takip cagrisina EK olarak ilistirilir (her uye gorebilsin)", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /result\.screenshotPath&&fs\.existsSync/, "goruntu yolu dogrulanmali");
+  assert.match(orch, /images:\[ekranGoruntusu\]/, "Codex icin images olarak gecmeli");
+  assert.match(orch, /media:\[\{path:ekranGoruntusu/, "Antigravity icin media olarak gecmeli");
+  assert.match(orch, /pikselleri kodla çözmeye çalışma/, "uye piksel cozmeye kalkmamali (canli gozlem)");
+});
