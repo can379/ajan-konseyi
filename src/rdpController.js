@@ -70,6 +70,8 @@ func kacisla(_ s: String) -> String {
 
 var cihazlar: [String] = []
 var kenar: [String] = []
+var dugmeler: [String] = []
+var pencereMetni: [String] = []
 var sayac = 0
 
 // Kayitli cihaz listesi AXList "Saved Devices" altindaki AXGroup'lardir.
@@ -91,6 +93,16 @@ func gez(_ el: AXUIElement, _ derinlik: Int, _ listeIcinde: Bool) {
     let mx = Int(nokta.x + boyut.width / 2), my = Int(nokta.y + boyut.height / 2)
     kenar.append("{\\"name\\":\\"\\(kacisla(baslik))\\",\\"x\\":\\(mx),\\"y\\":\\(my)}")
   }
+  // Onay/uyari pencereleri (sertifika, kimlik dogrulama) icin dugmeler ve
+  // metin: koordinat TAHMIN ETMEDEN dogru dugmeye basabilmek gerekir.
+  if rol == "AXButton", !baslik.isEmpty, let (nokta, boyut) = kutu(el) {
+    let mx = Int(nokta.x + boyut.width / 2), my = Int(nokta.y + boyut.height / 2)
+    dugmeler.append("{\\"name\\":\\"\\(kacisla(baslik))\\",\\"x\\":\\(mx),\\"y\\":\\(my)}")
+  }
+  if rol == "AXStaticText" || rol == "AXTextArea" {
+    let metin = (oz(el, kAXValueAttribute) as? String) ?? baslik
+    if !metin.isEmpty, metin.count < 600 { pencereMetni.append("\\"\\(kacisla(metin))\\"") }
+  }
   if let cocuklar = oz(el, kAXChildrenAttribute) as? [AXUIElement] {
     for c in cocuklar { gez(c, derinlik + 1, buListe) }
   }
@@ -106,7 +118,7 @@ let tekil = cihazlar.filter { satir in
   if gorulen.contains(ad) { return false }
   gorulen.insert(ad); return true
 }
-print("{\\"ok\\":true,\\"devices\\":[\\(tekil.joined(separator: ","))],\\"sidebar\\":[\\(kenar.joined(separator: ","))]}")
+print("{\\"ok\\":true,\\"devices\\":[\\(tekil.joined(separator: ","))],\\"sidebar\\":[\\(kenar.joined(separator: ","))],\\"buttons\\":[\\(dugmeler.joined(separator: ","))],\\"texts\\":[\\(pencereMetni.joined(separator: ","))]}")
 `;
 
 function run(cmd, args, timeoutMs = 30_000) {
@@ -138,6 +150,20 @@ export function hedefSec(cihazlar, istenen) {
   }
   return { ok: false, reason: "belirsiz",
     message: `"${istenen}" birden fazla karta uyuyor (${adaylar.length}); belirsizlikte bağlantı açılmaz.` };
+}
+
+// Sertifika/onay penceresi: metinden RDP sunucusunu (IP veya ad) cikar.
+// Ornek: 'You are connecting to the RDP host "87.76.130.141". The certificate
+// couldn't be verified back to a root certificate...'
+export function sertifikaPenceresi(texts = [], buttons = []) {
+  const metin = (texts || []).join(" ");
+  if (!/certificate|sertifik/i.test(metin)) return null;
+  const host = metin.match(/RDP host\s*[""']?([\w.:-]+)[""']?/i)?.[1]
+    || metin.match(/\b(\d{1,3}(?:\.\d{1,3}){3})\b/)?.[1]
+    || null;
+  const devam = (buttons || []).find((b) => /^(continue|devam|connect|bağlan)$/i.test(String(b.name || "").trim()));
+  const iptal = (buttons || []).find((b) => /^(cancel|iptal)$/i.test(String(b.name || "").trim()));
+  return { host, devam: devam || null, iptal: iptal || null, metin: metin.slice(0, 400) };
 }
 
 // Her sunucu icin kalici durum kaydi.
@@ -185,20 +211,22 @@ export class RdpController {
   }
 
   // 2. adim: kayitli cihazlari erisilebilirlik agacindan oku.
-  async listele() {
+  async listele({ ham = false } = {}) {
     const bin = await this.ensureAxTool();
-    let ham;
-    try { ham = await run(bin, [this.appName]); }
+    let cikisMetni;
+    try { cikisMetni = await run(bin, [this.appName]); }
     catch (error) { throw new Error(`Cihaz listesi okunamadı: ${String(error.message || error)}`); }
     let veri;
-    try { veri = JSON.parse(String(ham).trim().split("\n").pop()); }
+    try { veri = JSON.parse(String(cikisMetni).trim().split("\n").pop()); }
     catch { throw new Error("Cihaz listesi çözümlenemedi (erişilebilirlik çıktısı bozuk)."); }
     if (!veri.ok) {
       if (veri.error === "izin-yok") throw new Error('Erişilebilirlik izni yok: Sistem Ayarları > Gizlilik ve Güvenlik > Erişilebilirlik bölümünde "Ajan Konseyi"ni açın.');
       if (veri.error === "uygulama-kapali") throw new Error(`${this.appName} açık değil; önce uygulamayı açın.`);
       throw new Error(`Cihaz listesi alınamadı: ${veri.error}`);
     }
-    return { devices: veri.devices || [], sidebar: veri.sidebar || [] };
+    const cikti = { devices: veri.devices || [], sidebar: veri.sidebar || [] };
+    if (ham) { cikti.buttons = veri.buttons || []; cikti.texts = veri.texts || []; }
+    return cikti;
   }
 
   // 3-5. adim: hedefi birebir dogrula, belirsizse DURDUR, degilse kartin
@@ -231,6 +259,48 @@ export class RdpController {
     await this.computer.request({ action: "double_click", payload: { x: secim.device.x, y: secim.device.y } });
     await this.computer.request({ action: "wait", payload: { seconds: 4 } });
     return this._kaydet(hedef, { connection_state: "dogrulaniyor", current_step: "uzak masaüstü yükleniyor" });
+  }
+
+  // ---- Sunucu kimligi sabitleme (IP pinleme) ----
+  // Sertifika uyarisi her baglantida cikiyor ve ajan gecemezse hicbir
+  // sunucuya giremiyor. Korukoru "Continue" tiklatmak ise araya giren sahte
+  // bir sunucuyu da sessizce kabul etmek olur. Cozum: cihaz basina BEKLENEN
+  // HOST sabitlenir. Ilk gorulen hostu KULLANICI onaylar; sonraki turlarda
+  // ayni host ise ajan kendisi gecer, host DEGISMISSE durur ve sorar.
+  _pinDosyasi() { return path.join(this.dataRoot, "rdp-hosts.json"); }
+  pinleriOku() {
+    try { return JSON.parse(fs.readFileSync(this._pinDosyasi(), "utf8")); } catch { return {}; }
+  }
+  pinYaz(cihaz, host) {
+    const pinler = this.pinleriOku();
+    pinler[cihaz] = { host, at: new Date().toISOString() };
+    try { fs.mkdirSync(this.dataRoot, { recursive: true }); fs.writeFileSync(this._pinDosyasi(), JSON.stringify(pinler, null, 2)); } catch {}
+    return pinler[cihaz];
+  }
+  pinSil(cihaz) {
+    const pinler = this.pinleriOku();
+    delete pinler[cihaz];
+    try { fs.writeFileSync(this._pinDosyasi(), JSON.stringify(pinler, null, 2)); } catch {}
+  }
+
+  // Acik bir sertifika penceresi varsa karar ver:
+  //  - host sabitli ve AYNI  -> ajan Continue'ya basar
+  //  - host sabitli ve FARKLI -> DUR (olasi araya girme)
+  //  - host hic sabitli degil -> DUR ve kullanici onayina birak
+  async sertifikaKarari(hedef) {
+    const { buttons, texts } = await this.listele({ ham: true });
+    const pencere = sertifikaPenceresi(texts, buttons);
+    if (!pencere) return { durum: "yok" };
+    const pin = this.pinleriOku()[hedef];
+    if (!pencere.host) return { durum: "belirsiz", pencere, mesaj: "Sertifika penceresindeki sunucu adresi okunamadı; karar kullanıcıya bırakıldı." };
+    if (!pin) return { durum: "onay-gerekli", pencere,
+      mesaj: `"${hedef}" için ilk bağlantı: sunucu adresi ${pencere.host}. Bu adresin doğru olduğunu onaylarsanız bundan sonra otomatik geçilir.` };
+    if (pin.host !== pencere.host) return { durum: "uyusmazlik", pencere,
+      mesaj: `⛔ "${hedef}" için kayıtlı adres ${pin.host} ama şimdi ${pencere.host} görünüyor. Bağlantı açılmadı; adres gerçekten değiştiyse onayı sıfırlayın.` };
+    if (!pencere.devam) return { durum: "belirsiz", pencere, mesaj: "Onay düğmesi bulunamadı." };
+    await this.computer.request({ action: "click", payload: { x: pencere.devam.x, y: pencere.devam.y } });
+    await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+    return { durum: "gecildi", host: pencere.host };
   }
 
   // 6. adim: acilan pencere GERCEKTEN beklenen sunucu mu? Ekran goruntusu

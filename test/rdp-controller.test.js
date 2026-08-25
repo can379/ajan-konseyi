@@ -175,3 +175,56 @@ test("izole cagri ACIKCA verilen gorseli dusurmez (ekran gozlemi korlesmesin)", 
   // guvenli varsayilan devreye girip oturum kapandi.
   assert.match(orch, /uye "görüntü yok"/, "sebep koda not dusulmus olmali");
 });
+
+// ---- Sertifika penceresi: adres sabitleme ----
+test("sertifika penceresinden sunucu adresi ve dugmeler okunur", async () => {
+  const { sertifikaPenceresi } = await import("../src/rdpController.js");
+  const metin = ['You are connecting to the RDP host "87.76.130.141". The certificate couldn\'t be verified back to a root certificate. Do you want to continue?'];
+  const dugmeler = [{ name: "Show Certificate", x: 1, y: 1 }, { name: "Cancel", x: 2, y: 2 }, { name: "Continue", x: 3, y: 3 }];
+  const p = sertifikaPenceresi(metin, dugmeler);
+  assert.equal(p.host, "87.76.130.141");
+  assert.deepEqual(p.devam, { name: "Continue", x: 3, y: 3 }, "dogru dugme AX'ten gelmeli, koordinat tahmini degil");
+  assert.equal(sertifikaPenceresi(["Sıradan bir metin"], dugmeler), null, "sertifika olmayan pencere yakalanmamali");
+});
+
+test("ilk gorulen adres KULLANICI onayina birakilir, tiklanmaz", async () => {
+  const kopru = sahteKopru();
+  const dir = fs.mkdtempSync("/tmp/ajan-pin-");
+  const c = new RdpController(dir, { computerBridge: kopru });
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [],
+    buttons: [{ name: "Continue", x: 3, y: 3 }],
+    texts: ['You are connecting to the RDP host "87.76.130.141". The certificate couldn\'t be verified...'] });
+  const karar = await c.sertifikaKarari("ANNE");
+  assert.equal(karar.durum, "onay-gerekli");
+  assert.equal(kopru.cagrilar.length, 0, "onay alinmadan TEK tiklama bile olmamali");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("onaylanan adres sabitlenir; ayni adreste ajan kendisi gecer", async () => {
+  const kopru = sahteKopru();
+  const dir = fs.mkdtempSync("/tmp/ajan-pin-");
+  const c = new RdpController(dir, { computerBridge: kopru });
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [],
+    buttons: [{ name: "Continue", x: 3, y: 3 }],
+    texts: ['You are connecting to the RDP host "87.76.130.141". The certificate...'] });
+  c.pinYaz("ANNE", "87.76.130.141");
+  const karar = await c.sertifikaKarari("ANNE");
+  assert.equal(karar.durum, "gecildi");
+  assert.deepEqual(kopru.cagrilar[0], { action: "click", payload: { x: 3, y: 3 } }, "Continue dugmesine basilmali");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("adres DEGISMISSE baglanti acilmaz (araya girme korumasi)", async () => {
+  const kopru = sahteKopru();
+  const dir = fs.mkdtempSync("/tmp/ajan-pin-");
+  const c = new RdpController(dir, { computerBridge: kopru });
+  c.pinYaz("ANNE", "87.76.130.141");
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [],
+    buttons: [{ name: "Continue", x: 3, y: 3 }],
+    texts: ['You are connecting to the RDP host "203.0.113.9". The certificate...'] });
+  const karar = await c.sertifikaKarari("ANNE");
+  assert.equal(karar.durum, "uyusmazlik");
+  assert.match(karar.mesaj, /kayıtlı adres 87\.76\.130\.141 ama şimdi 203\.0\.113\.9/);
+  assert.equal(kopru.cagrilar.length, 0, "uyusmazlikta tiklama olmamali");
+  fs.rmSync(dir, { recursive: true, force: true });
+});

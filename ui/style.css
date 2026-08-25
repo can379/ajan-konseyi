@@ -1685,3 +1685,8 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-finding time{margin-left:auto;color:var(--dim2);font-size:11px}
 .ops-hub{margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:10px}
 .ops-hub summary{cursor:pointer;color:var(--dim2);font-size:12px}
+.ops-approval-kart{padding:12px;border:1px solid #f0b94966;border-radius:10px;background:#f0b9490f;margin-bottom:14px}
+.ops-approval-kart p{margin:6px 0;font-size:13px;color:#d8c79a}
+.ops-host{font-size:12px;color:var(--dim2);margin-bottom:8px}
+.ops-host code{background:none;padding:0;color:#eef1ef}
+.ops-approval-dugmeler{display:flex;gap:8px;flex-wrap:wrap}

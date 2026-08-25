@@ -2088,6 +2088,22 @@ async function opsDurumCiz() {
     </div>`;
   }).join("") : '<div class="muted">Sunucu bulunamadı. Windows App açık mı? "Sunucuları tara"ya basın.</div>';
 
+  // Onay bekleyen is: sunucu adresi sabitleme (sertifika penceresi).
+  const onay = durum.bekleyenOnay;
+  const onayEl = $("ops-approval");
+  onayEl.hidden = !onay;
+  if (onay) {
+    onayEl.innerHTML = `<div class="ops-approval-kart">
+      <b>⏸ Onay bekliyor · ${esc(onay.target)}</b>
+      <p>${esc(onay.mesaj || "")}</p>
+      ${onay.pencere?.host ? `<div class="ops-host">Sunucu adresi: <code>${esc(onay.pencere.host)}</code></div>` : ""}
+      <div class="ops-approval-dugmeler">
+        ${onay.durum === "onay-gerekli" && onay.pencere?.host
+          ? `<button data-ops-approve="${esc(onay.target)}" data-host="${esc(onay.pencere.host)}">Bu adresi onayla ve bundan sonra otomatik geç</button>` : ""}
+        ${onay.durum === "uyusmazlik" ? `<button data-ops-reset="${esc(onay.target)}" class="btn-ghost small">Kayıtlı adresi sıfırla</button>` : ""}
+        <button data-ops-dismiss class="btn-ghost small">Kapat</button>
+      </div></div>`;
+  }
   const aktifKayit = durum.aktif ? kayit[durum.aktif.target] : null;
   $("ops-current").innerHTML = durum.aktif
     ? `<div class="ops-current-kart"><b>${esc(durum.aktif.target)}</b>
@@ -2106,6 +2122,21 @@ async function opsDurumCiz() {
     : '<div class="muted">Bulgu yok.</div>';
 }
 
+$("ops-approval")?.addEventListener("click", async (e) => {
+  const onayla = e.target.closest("[data-ops-approve]");
+  const sifirla = e.target.closest("[data-ops-reset]");
+  const kapat = e.target.closest("[data-ops-dismiss]");
+  if (onayla) {
+    if (!confirm(`"${onayla.dataset.opsApprove}" sunucusunun adresi ${onayla.dataset.host} olarak kaydedilecek.\nBundan sonra bu adres için sertifika uyarısı otomatik geçilecek.\n\nAdresin doğru olduğundan emin misiniz?`)) return;
+    await fetch("/api/rdp/approve-host", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: onayla.dataset.opsApprove, host: onayla.dataset.host }) });
+  } else if (sifirla) {
+    await fetch("/api/rdp/reset-host", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: sifirla.dataset.opsReset }) });
+  } else if (!kapat) return;
+  $("ops-approval").hidden = true;
+  opsDurumCiz();
+});
 $("ops-devices")?.addEventListener("click", () => opsCihazTara());
 $("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });
 $("ops-server-list")?.addEventListener("click", async (e) => {

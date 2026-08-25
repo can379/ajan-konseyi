@@ -64,6 +64,7 @@ export class OpsRun {
 
   durum() {
     return {
+      bekleyenOnay: this.bekleyenOnay || null,
       aktif: this.aktif ? { target: this.aktif.target, runId: this.aktif.runId } : null,
       sunucular: this.controller.tumDurumlar(),
       gecmis: this.gecmis.slice(-20),
@@ -113,6 +114,19 @@ export class OpsRun {
       bilgi(`"${hedef}" kartı açıldı; uzak masaüstü yükleniyor.`);
       durdurulduMu();
 
+      // 6a) Sertifika/onay penceresi cikmis olabilir. Ajan bunu KORUKORU
+      // gecmez: host cihaza sabitlenmisse ve AYNIYSA gecer; ilk kez
+      // goruluyorsa veya host DEGISMISSE durur, karari kullaniciya birakir.
+      await bilgisayar.request({ action: "wait", payload: { seconds: 3 } });
+      const sertifika = await this.controller.sertifikaKarari(hedef);
+      if (sertifika.durum === "gecildi") {
+        bilgi(`🔒 Sertifika uyarısı geçildi — adres **${sertifika.host}** bu cihaz için daha önce onaylanmıştı.`);
+      } else if (sertifika.durum !== "yok") {
+        this.bekleyenOnay = { target: hedef, ...sertifika };
+        this.controller._kaydet(hedef, { connection_state: "hata", current_step: "kullanıcı onayı bekliyor", error: sertifika.mesaj });
+        bilgi(`⏸ ${sertifika.mesaj}`);
+        return this._bitir(run, hedef, "onay-bekliyor", sertifika.mesaj);
+      }
       // 7) Yuklenmeyi bekle, 6) kimligi DOGRULA.
       await bilgisayar.request({ action: "wait", payload: { seconds: 5 } });
       const kanit = await this.controller.kimlikKaniti(hedef);

@@ -746,6 +746,25 @@ const server = http.createServer(async (req, res) => {
         .catch((error) => store.emit("event", { type: "ops_error", error: String(error.message || error) }));
       return json(res, 202, { ok: true, target: hedef });
     }
+    // Sunucu adresi onayi: kullanici "bu adres dogru" derse cihaza sabitlenir.
+    if (req.method === "POST" && p === "/api/rdp/approve-host") {
+      const body = await readBody(req);
+      const hedef = String(body.target || "").trim();
+      const host = String(body.host || "").trim();
+      if (!hedef || !host) return json(res, 400, { error: "Cihaz ve adres gerekli" });
+      const pin = rdp.pinYaz(hedef, host);
+      opsRun.bekleyenOnay = null;
+      return json(res, 200, { ok: true, pin });
+    }
+    if (req.method === "POST" && p === "/api/rdp/reset-host") {
+      const body = await readBody(req);
+      rdp.pinSil(String(body.target || "").trim());
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "GET" && p === "/api/rdp/hosts") {
+      return json(res, 200, rdp.pinleriOku());
+    }
+
     if (req.method === "POST" && p === "/api/rdp/stop") {
       opsRun.iptalEt();
       return json(res, 200, { ok: true });
