@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, Menu, dialog, clipboard, nativeImage, net, ipcMain } = require("electron");
+const { app, BrowserWindow, shell, Menu, dialog, clipboard, nativeImage, net, ipcMain, systemPreferences } = require("electron");
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const http = require("node:http");
@@ -194,6 +194,20 @@ function cleanupUpdateCache(keep=""){
     fs.rmSync(path.join(updates,entry.name),{recursive:true,force:true});
   }
 }
+// Mikrofon izni: macOS'un TCC penceresini ACIKCA ister. Chromium'un kendi
+// istegi yalniz uygulama ici izindir; sistem penceresi bu cagriyla cikar ve
+// izin verilene kadar getUserMedia sessizce basarisiz olur.
+ipcMain.handle("mikrofon-izni",async(event)=>{
+  if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};
+  if(process.platform!=="darwin")return{ok:true,durum:"granted"};
+  try{
+    const durum=systemPreferences.getMediaAccessStatus("microphone");
+    if(durum==="granted")return{ok:true,durum};
+    if(durum==="denied")return{ok:false,durum,mesaj:"Mikrofon izni daha önce reddedilmiş. Sistem Ayarları > Gizlilik ve Güvenlik > Mikrofon bölümünde \"Ajan Konseyi\"ni açın."};
+    const verildi=await systemPreferences.askForMediaAccess("microphone");
+    return{ok:verildi,durum:verildi?"granted":"denied",mesaj:verildi?"":"Mikrofon izni verilmedi."};
+  }catch(error){return{error:String(error.message||error)};}
+});
 ipcMain.handle("app-update-status",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const release=await latestRelease(),current=app.getVersion();if(!release)return{current,available:false,message:"Henüz yayınlanmış GitHub sürümü yok"};const asset=(release.assets||[]).find(x=>/macos.*arm64.*\.zip$/i.test(x.name))||(release.assets||[]).find(x=>/\.zip$/i.test(x.name));return{current,latest:String(release.tag_name||release.name||""),available:newerVersion(release.tag_name,current),notes:String(release.body||"").slice(0,5000),publishedAt:release.published_at,asset:asset?{name:asset.name,size:asset.size,url:asset.browser_download_url}:null,page:release.html_url};}catch(error){return{error:error.message,current:app.getVersion()};}});
 ipcMain.handle("app-update-download",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};try{const release=await latestRelease();if(!release)throw new Error("İndirilebilir GitHub sürümü yok");const asset=(release.assets||[]).find(x=>/macos.*arm64.*\.zip$/i.test(x.name))||(release.assets||[]).find(x=>/\.zip$/i.test(x.name));if(!asset)throw new Error("Bu Mac için ZIP paketi bulunamadı");const versionDir=String(release.tag_name||"latest").replace(/[^\w.-]/g,"_");cleanupUpdateCache(versionDir);const response=await net.fetch(asset.browser_download_url);if(!response.ok)throw new Error(`Güncelleme indirilemedi (${response.status})`);const bytes=Buffer.from(await response.arrayBuffer());if(bytes.length<1024||Number(asset.size||0)&&bytes.length!==Number(asset.size))throw new Error("İndirilen güncelleme paketi eksik");const dir=path.join(app.getPath("userData"),"updates",versionDir);fs.mkdirSync(dir,{recursive:true});for(const entry of fs.readdirSync(dir))fs.rmSync(path.join(dir,entry),{recursive:true,force:true});const file=path.join(dir,path.basename(asset.name));fs.writeFileSync(file,bytes);const digest=crypto.createHash("sha256").update(bytes).digest("hex");fs.writeFileSync(file+".sha256",`${digest}  ${path.basename(file)}\n`);shell.showItemInFolder(file);return{ok:true,file,sha256:digest,size:bytes.length};}catch(error){return{error:error.message};}});
 ipcMain.handle("external-app-choose",async(event)=>{if(!mainWindow||event.sender!==mainWindow.webContents)return{error:"Yetkisiz istek"};const result=await dialog.showOpenDialog(mainWindow,{title:"Uygulama seç",defaultPath:"/Applications",properties:["openFile"],filters:[{name:"macOS uygulaması",extensions:["app"]}]});if(result.canceled||!result.filePaths[0])return{canceled:true};const appPath=result.filePaths[0];if(!appPath.endsWith(".app")||!fs.existsSync(appPath))return{error:"Geçerli bir macOS uygulaması seçin"};return{path:appPath,name:path.basename(appPath,".app")};});
@@ -275,6 +289,14 @@ async function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       webviewTag: true, contextIsolation: true, nodeIntegration: false,
     },
+  });
+  // Mikrofon: Chromium izin istegi VARSAYILAN OLARAK REDDEDILIR ve kullaniciya
+  // hicbir pencere gosterilmez — "sesle yaz" dugmesinin sessizce calismamasinin
+  // sebebi buydu (kullanici bildirdi). Kendi arayuzumuzun (127.0.0.1:4780)
+  // ses istegini gecir; baska hicbir izin turu acilmaz.
+  mainWindow.webContents.session.setPermissionRequestHandler((contents, permission, callback) => {
+    const kendiArayuz = String(contents?.getURL() || "").startsWith("http://127.0.0.1:4780");
+    callback(kendiArayuz && ["media", "audioCapture", "clipboard-sanitized-write", "fullscreen"].includes(permission));
   });
   mainWindow.loadURL("http://127.0.0.1:4780");
   // Köprü heartbeat'i webview'e bağlı olamaz: ilk `open` komutu bizzat paneli

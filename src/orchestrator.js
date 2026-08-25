@@ -13,6 +13,7 @@ import { ProjectContext } from "./projectContext.js";
 import { TIER_MAP, contextWindowFor } from "./models.js";
 import { extractJson, now, truncate, uid, usageDayKey, extractSummary, stripSummaryBlock, summaryContract } from "./util.js";
 import * as gitops from "./gitops.js";
+import { ComputerBridge, COMPUTER_ACTIONS, describeComputerAction } from "./computerBridge.js";
 import { createCheckpoint, pruneAutoCheckpoints, shouldAutoCheckpoint } from "./checkpoints.js";
 import { writeSkillFiles, skillCatalog } from "./skills.js";
 import { findSimilarRepairs, recordRepair, repairHint } from "./repairMemory.js";
@@ -38,10 +39,15 @@ export function parseBrowserAction(text){const match=String(text||"").match(BROW
 // iner; yanit metninden jeton bloklari ayiklanir.
 export function stripActionTokens(text){
   return String(text||"")
-    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>[\s\S]*?<<<END>>>/g,"")
-    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>[\s\S]*$/,"")
+    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU|BILGISAYAR)>>>[\s\S]*?<<<END>>>/g,"")
+    .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU|BILGISAYAR)>>>[\s\S]*$/,"")
     .trim();
 }
+
+// Bilgisayar kullanimi jetonu: uye ekrani gorup fare/klavye kullanmak
+// istediginde bunu dondurur. Tur basina BIR KEZ kullanici onayi alinir.
+const COMPUTER_ACTION_RE=/<<<AJAN_BILGISAYAR>>>\s*([\s\S]*?)\s*<<<END>>>/;
+export function parseComputerAction(text){const match=String(text||"").match(COMPUTER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!COMPUTER_ACTIONS.includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 
 // Eylemi Turkce insan cumlesine cevir (adim satirinin basligi).
 export function describeAgentAction(action){
@@ -456,6 +462,11 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
 --- SÖZLEŞME SONU ---`;
     const browserToken=opts.isolated||opts.lean?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
+    // Bilgisayar kullanimi: uye ekrani gorup fare/klavye kullanabilir.
+    // Kullanicinin acik istegi olmadan tanitilmaz ki uye kendiliginden
+    // ekrana uzanmaya kalkmasin; tur basina bir kez onay alinir.
+    const bilgisayarIstegi=/(?:ekran(?:ım|ımı|da|daki|ini)?|bilgisayar(?:ımı|ımda|ı)?|masaüstü|uygulamay[ıi]|pencere(?:yi|de)?|tıkla|fare|klavye|yaz(?:ıp|arak)? gönder|erişilebilirlik)/iu.test(String(prompt||""));
+    const computerHelp=(!opts.lean&&!opts.isolated&&this.computerBridge&&bilgisayarIstegi)?`\n\n--- BİLGİSAYAR KULLANMA ARACI ---\nKullanıcının EKRANINI görmen veya fare/klavye kullanman gerekiyorsa (uygulama penceresi incele, düğmeye tıkla, forma yaz) yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_BILGISAYAR>>>{"action":"screenshot","payload":{}}<<<END>>>\nEylemler: screenshot {}, click {x,y}, double_click {x,y}, type {text}, key {key,cmd,shift,option,ctrl}, open_app {name}.\nÇalışma düzeni: önce screenshot al, dönen PNG yolunu KENDİ dosya okuma aracınla açıp incele, koordinatı hesapla, sonra click gönder. Retina ekranda EKRAN NOKTASI = GÖRÜNTÜ PİKSELİ / 2.\nİlk eylemde kullanıcıdan onay istenir; onaylanmazsa iş bu yoldan yürütülemez.\nParola, kullanıcı adı, OTP ve ödeme alanlarını ASLA doldurma; oraya gelince dur ve kullanıcıdan iste.\n--- BİLGİSAYAR ARACI SONU ---`:"";
     // Uyeler arasi soru koprusu: birden fazla etkin uye varsa tanitilir.
     const digerUyeler=(this.config?.data?.members||[]).filter((m)=>m.enabled&&m.id!==member.id).map((m)=>`${m.name} (${m.id})`).join(", ");
     const askHelp=(!opts.lean&&!opts.isolated&&!opts._askDepth&&digerUyeler)?`\n\n--- ÜYEYE SORU ARACI ---\nBaşka bir konsey üyesinin yazdığı kod veya verdiği karar hakkında kısa bir soruya ihtiyacın olursa yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_SORU>>>{"to":"<üye id>","question":"<kısa soru>"}<<<END>>>\nÜyeler: ${digerUyeler}. Yanıt sana otomatik geri verilecek ve işini sürdürmen istenecek. En fazla 2 kez kullan; kendi başına çözebildiğin şeyi sorma.\n--- SORU ARACI SONU ---`:"";
@@ -588,7 +599,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     }
     // Nihai yanitta jeton kalintisi kalmasin: 12 tur biter ya da model jetonun
     // yanina duz metin eklerse ayikla (adim satiri zaten kaydedildi).
-    if (res && typeof res.text === "string" && /<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU)>>>/.test(res.text)) {
+    if (res && typeof res.text === "string" && /<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU|BILGISAYAR)>>>/.test(res.text)) {
       const temiz = stripActionTokens(res.text);
       res = { ...res, text: temiz || "Tarayıcı eylemi yürütüldü; ayrıntı adım satırında." };
     }

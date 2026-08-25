@@ -2126,6 +2126,13 @@ function pcmToWav(parcalar, ornekHizi) {
 }
 async function micBaslat() {
   const btn = $("btn-mic");
+  // Masaustunde ONCE macOS sistem izni istenir: bu cagri olmadan hicbir izin
+  // penceresi cikmiyor ve getUserMedia sessizce basarisiz oluyordu.
+  if (window.desktopAPI?.mikrofonIzni) {
+    const izin = await window.desktopAPI.mikrofonIzni();
+    if (izin?.error) return alert("Mikrofon izni istenemedi: " + izin.error);
+    if (izin && izin.ok === false) return alert(izin.mesaj || "Mikrofon izni verilmedi.");
+  }
   let akis;
   try { akis = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch { return alert("Mikrofona erişilemedi. Sistem Ayarları > Gizlilik ve Güvenlik > Mikrofon bölümünde \"Ajan Konseyi\"ni açın."); }

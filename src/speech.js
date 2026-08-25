@@ -18,6 +18,7 @@ import path from "node:path";
 
 const SWIFT_SRC = `import Foundation
 import Speech
+import AppKit
 
 // Kullanim: cozumle <ses-dosyasi> <dil> <cikti-dosyasi>
 // Sonuc STDOUT yerine dosyaya yazilir: uygulama LaunchServices ("open -W")
@@ -33,17 +34,28 @@ func yaz(_ metin: String) {
   try? metin.write(toFile: ciktiYolu, atomically: true, encoding: .utf8)
 }
 
-let bekle = DispatchSemaphore(value: 0)
+// TCC izin penceresi ancak calisan bir NSApplication varken cizilebilir;
+// duz komut satiri dongusunde istek sessizce reddediliyordu (canli olculdu:
+// hicbir pencere gorunmuyor, sonuc dosyasi hic olusmuyor).
+let uygulama = NSApplication.shared
+uygulama.setActivationPolicy(.accessory)
+
 var cikisKodu: Int32 = 1
+func bitir() {
+  DispatchQueue.main.async {
+    uygulama.terminate(nil)
+    exit(cikisKodu)
+  }
+}
 
 SFSpeechRecognizer.requestAuthorization { durum in
   guard durum == .authorized else {
     yaz("!HATA izin-yok: Sistem Ayarları > Gizlilik ve Güvenlik > Konuşma Tanıma bölümünde izin verin.")
-    bekle.signal(); return
+    bitir(); return
   }
   guard let taniyici = SFSpeechRecognizer(locale: Locale(identifier: dil)), taniyici.isAvailable else {
     yaz("!HATA tanıyıcı-yok: \\(dil) için yerel tanıma bulunamadı.")
-    bekle.signal(); return
+    bitir(); return
   }
   let istek = SFSpeechURLRecognitionRequest(url: url)
   istek.requiresOnDeviceRecognition = false
@@ -51,16 +63,20 @@ SFSpeechRecognizer.requestAuthorization { durum in
   taniyici.recognitionTask(with: istek) { sonuc, hata in
     if let hata = hata {
       yaz("!HATA \\(hata.localizedDescription)")
-      bekle.signal(); return
+      bitir(); return
     }
     guard let sonuc = sonuc, sonuc.isFinal else { return }
     yaz(sonuc.bestTranscription.formattedString)
     cikisKodu = 0
-    bekle.signal()
+    bitir()
   }
 }
-_ = bekle.wait(timeout: .now() + 90)
-exit(cikisKodu)
+// Guvenlik agi: tanima 90 sn icinde bitmezse uygulama kendini kapatir.
+DispatchQueue.main.asyncAfter(deadline: .now() + 90) {
+  if cikisKodu != 0 { yaz("!HATA zaman-asimi: ses çözümlenemedi.") }
+  exit(cikisKodu)
+}
+uygulama.run()
 `;
 
 const PLIST_SRC = `<?xml version="1.0" encoding="UTF-8"?>

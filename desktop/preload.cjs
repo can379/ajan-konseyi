@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld("desktopAPI", Object.freeze({
   browserReady(requestId) { ipcRenderer.send("browser-ready",String(requestId||"")); },
   beginFlowVideo(runId,prompt) { ipcRenderer.send("flow-video-begin",{runId:String(runId||""),prompt:String(prompt||"")}); },
   selectFlowVideo(runId) { return ipcRenderer.invoke("flow-video-select",String(runId||"")); },
+  mikrofonIzni() { return ipcRenderer.invoke("mikrofon-izni"); },
   flowAccountStatus() { return ipcRenderer.invoke("flow-account-status"); },
   connectFlowAccount(verify = false) { return ipcRenderer.invoke("flow-account-connect", Boolean(verify)); },
   runFlowVideo(detail) { return ipcRenderer.invoke("flow-video-run",detail); },
