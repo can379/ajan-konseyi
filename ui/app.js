@@ -2100,24 +2100,63 @@ $("schedule-list")?.addEventListener("click", async (e) => {
 });
 
 // ---- Sesli giris ----
-// Chromium'un yerlesik tanimasi varsa kullanilir; yoksa macOS dikte onerilir.
-let micActive = null;
-$("btn-mic")?.addEventListener("click", () => {
-  if (micActive) { micActive.stop(); return; }
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) return alert("Bu ortamda yerleşik ses tanıma yok. macOS dikte kullanın: metin kutusuna tıklayıp fn tuşuna iki kez basın.");
-  const rec = new SR();
-  rec.lang = "tr-TR"; rec.interimResults = true; rec.continuous = true;
-  const basi = ta.value;
-  rec.onresult = (e) => {
-    const parcalar = [...e.results].map((r) => r[0].transcript).join("");
-    ta.value = (basi ? basi + " " : "") + parcalar; autoGrow();
+// Electron'da webkitSpeechRecognition Google ucnoktasina baglanamadigi icin
+// SESSIZCE hic metin uretmiyordu. Artik ses WebAudio ile ham PCM olarak
+// toplanip WAV yapilir ve sunucuda macOS'un KENDI tanimasiyla cozulur;
+// ses bilgisayardan disari cikmaz.
+let micState = null;
+function pcmToWav(parcalar, ornekHizi) {
+  const uzunluk = parcalar.reduce((t, p) => t + p.length, 0);
+  const tampon = new ArrayBuffer(44 + uzunluk * 2);
+  const gorunum = new DataView(tampon);
+  const yaz = (offset, metin) => { for (let i = 0; i < metin.length; i++) gorunum.setUint8(offset + i, metin.charCodeAt(i)); };
+  yaz(0, "RIFF"); gorunum.setUint32(4, 36 + uzunluk * 2, true); yaz(8, "WAVEfmt ");
+  gorunum.setUint32(16, 16, true); gorunum.setUint16(20, 1, true); gorunum.setUint16(22, 1, true);
+  gorunum.setUint32(24, ornekHizi, true); gorunum.setUint32(28, ornekHizi * 2, true);
+  gorunum.setUint16(32, 2, true); gorunum.setUint16(34, 16, true);
+  yaz(36, "data"); gorunum.setUint32(40, uzunluk * 2, true);
+  let offset = 44;
+  for (const parca of parcalar) {
+    for (let i = 0; i < parca.length; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, parca[i]));
+      gorunum.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+  }
+  return new Blob([tampon], { type: "audio/wav" });
+}
+async function micBaslat() {
+  const btn = $("btn-mic");
+  let akis;
+  try { akis = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { return alert("Mikrofona erişilemedi. Sistem Ayarları > Gizlilik ve Güvenlik > Mikrofon bölümünde \"Ajan Konseyi\"ni açın."); }
+  const ctx = new AudioContext();
+  const kaynak = ctx.createMediaStreamSource(akis);
+  const isleyici = ctx.createScriptProcessor(4096, 1, 1);
+  const parcalar = [];
+  isleyici.onaudioprocess = (e) => parcalar.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  kaynak.connect(isleyici); isleyici.connect(ctx.destination);
+  btn.classList.add("recording"); btn.title = "Kaydı bitir ve yazıya dök";
+  micState = {
+    async stop() {
+      micState = null;
+      isleyici.disconnect(); kaynak.disconnect();
+      akis.getTracks().forEach((t) => t.stop());
+      const wav = pcmToWav(parcalar, ctx.sampleRate);
+      await ctx.close();
+      btn.classList.remove("recording"); btn.classList.add("thinking"); btn.title = "Yazıya dökülüyor…";
+      try {
+        const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || "çözümlenemedi");
+        if (d.text) { ta.value = (ta.value ? ta.value.trim() + " " : "") + d.text; autoGrow(); ta.focus(); }
+        else alert("Ses anlaşılamadı; daha yakından ve net konuşmayı deneyin.");
+      } catch (error) {
+        alert("Sesli giriş başarısız: " + String(error.message || error));
+      } finally { btn.classList.remove("thinking"); btn.title = "Sesle yaz"; }
+    },
   };
-  rec.onend = () => { micActive = null; $("btn-mic").classList.remove("recording"); ta.focus(); };
-  rec.onerror = () => { micActive = null; $("btn-mic").classList.remove("recording"); };
-  try { rec.start(); micActive = rec; $("btn-mic").classList.add("recording"); }
-  catch { alert("Ses tanıma başlatılamadı; macOS dikte kullanın (fn fn)."); }
-});
+}
+$("btn-mic")?.addEventListener("click", () => { if (micState) micState.stop(); else micBaslat(); });
 
 $("task-schedule").addEventListener("click",async()=>{const request=prompt("Zamanlanacak görev");if(!request)return;const at=prompt("Başlangıç zamanı (YYYY-MM-DD HH:mm)",new Date(Date.now()+3600000).toISOString().slice(0,16).replace("T"," "));if(!at)return;const response=await fetch("/api/workspace/schedules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({request,at,projectId:activeProject()?.id||null})}),result=await response.json();if(!response.ok)return alert(result.error);alert(`Görev zamanlandı: ${new Date(result.at).toLocaleString("tr-TR")}`);await renderTaskCenter();});
 $("task-center-list").addEventListener("click",async e=>{const contractButton=e.target.closest("[data-task-contract]");if(contractButton)return openTaskContract(contractButton.dataset.taskContract);const b=e.target.closest("[data-task-action]");if(!b)return;const r=await fetch(`/api/workspace/tasks/${b.dataset.taskId}/${b.dataset.taskAction}`,{method:"POST"});if(!r.ok)alert((await r.json()).error);await renderTaskCenter();await fetchState();});

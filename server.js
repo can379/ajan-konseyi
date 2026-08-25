@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Store } from "./src/store.js";
+import { SpeechToText } from "./src/speech.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -34,6 +35,7 @@ const BRIDGE_TOKEN = process.env.AJAN_BROWSER_BRIDGE_TOKEN || "";
 
 fs.mkdirSync(DATA_ROOT, { recursive: true });
 const store = new Store(DATA_ROOT);
+const speech = new SpeechToText(DATA_ROOT);
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
 openRouterStatus().then((status)=>{
@@ -719,6 +721,23 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return json(res, 200, { day: gun, providers: toplam });
+    }
+
+    // ---- Sesli giris: WAV -> metin (yerel, macOS konusma tanima) ----
+    if (req.method === "POST" && p === "/api/speech") {
+      const chunks = [];
+      let boyut = 0;
+      for await (const chunk of req) {
+        boyut += chunk.length;
+        if (boyut > 12 * 1024 * 1024) return json(res, 413, { error: "Ses kaydı çok uzun (en fazla ~2 dakika)." });
+        chunks.push(chunk);
+      }
+      try {
+        const metin = await speech.transcribe(Buffer.concat(chunks), { tmpDir: path.join(DATA_ROOT, "uploads") });
+        return json(res, 200, { text: metin });
+      } catch (error) {
+        return json(res, 500, { error: String(error.message || error) });
+      }
     }
 
     // ---- Projeler ----

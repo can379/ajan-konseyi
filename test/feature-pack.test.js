@@ -76,12 +76,33 @@ test("rewind: kullanici mesaji duzenlenince sonrasi silinir, oturumlar tazelenir
 });
 
 // ---- 6) Sesli giris ----
-test("mikrofon dugmesi ses tanimayi baslatir, yoksa dikteyi onerir", () => {
+test("mikrofon yerel kayit yapip sunucuda cozumletir (Google ucnoktasina bagli degil)", () => {
   const app = oku("ui/app.js");
-  assert.match(app, /webkitSpeechRecognition/, "yerlesik tanima denenmeli");
-  assert.match(app, /rec\.lang = "tr-TR"/, "Turkce taninmali");
-  assert.match(app, /fn tuşuna iki kez/, "dikte yedegi anlatilmali");
+  assert.match(app, /function pcmToWav/, "ham PCM WAV'a cevrilmeli");
+  assert.match(app, /fetch\("\/api\/speech"/, "cozumleme sunucuda yapilmali");
+  assert.match(app, /getUserMedia/, "mikrofon akisi alinmali");
   assert.match(oku("ui/index.html"), /btn-mic/, "dugme composer'da olmali");
+  const srv = oku("server.js");
+  assert.match(srv, /p === "\/api\/speech"/, "sunucu ucu olmali");
+  const sp = oku("src/speech.js");
+  assert.match(sp, /SFSpeechRecognizer/, "macOS yerel tanima kullanilmali");
+  assert.match(sp, /tr-TR/, "varsayilan dil Turkce olmali");
+});
+
+test("WAV baslıgı dogru uretilir (44 bayt + 16-bit mono PCM)", () => {
+  const app = oku("ui/app.js");
+  const fn = new Function("Blob", `${app.match(/function pcmToWav[\s\S]*?\n\}/)[0]}; return pcmToWav;`)(
+    class { constructor(parts) { this.parts = parts; } });
+  const blob = fn([new Float32Array([0, 0.5, -0.5])], 48000);
+  const view = new DataView(blob.parts[0]);
+  const oku4 = (o) => String.fromCharCode(view.getUint8(o), view.getUint8(o + 1), view.getUint8(o + 2), view.getUint8(o + 3));
+  assert.equal(oku4(0), "RIFF");
+  assert.equal(oku4(8), "WAVE");
+  assert.equal(view.getUint16(22, true), 1, "mono olmali");
+  assert.equal(view.getUint32(24, true), 48000, "ornek hizi korunmali");
+  assert.equal(view.getUint16(34, true), 16, "16-bit olmali");
+  assert.equal(view.getUint32(40, true), 6, "3 ornek = 6 bayt veri");
+  assert.equal(view.getInt16(44 + 2, true), Math.trunc(0.5 * 0x7fff), "ornek degeri dogru olcelenmeli");
 });
 
 // ---- 7) Kota/kullanim gostergesi ----
