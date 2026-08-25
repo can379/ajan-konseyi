@@ -120,7 +120,7 @@ export class SpeechToText {
 
   // WAV baytlarini metne cevirir. Cagiran gecici dosyayi temizler.
   async transcribe(buffer, { lang = "tr-TR", tmpDir } = {}) {
-    const bin = await this.ensureTool();
+    await this.ensureTool();
     const dir = tmpDir || this.binDir;
     fs.mkdirSync(dir, { recursive: true });
     const damga = Date.now();
@@ -128,18 +128,16 @@ export class SpeechToText {
     const cikti = path.join(dir, `ses-${damga}.txt`);
     fs.writeFileSync(file, buffer);
     try {
-      // TCC (gizlilik kapisi) izni SORUMLU SURECE gore verir: yardimci,
-      // Ajan Konseyi uygulamasinin cocugu olarak calistigi icin iznin
-      // aciklamasi uygulamanin Info.plist'inden okunur (assets/extend-info).
-      // Sonuc stdout yerine dosyaya yazilir; boylece yardimci ileride
-      // LaunchServices ile de baslatilabilir.
-      await run(bin, [file, lang, cikti], 120_000).catch((error) => {
-        if (/SIGABRT|status 134|Command failed/i.test(String(error.message))) {
-          throw new Error("Konuşma tanıma izni verilmemiş görünüyor. Sistem Ayarları > Gizlilik ve Güvenlik > Konuşma Tanıma bölümünde \"Ajan Konseyi\"ni açıp yeniden deneyin.");
-        }
-        throw error;
-      });
-      if (!fs.existsSync(cikti)) throw new Error("Ses çözümlenemedi (sonuç üretilmedi).");
+      // Yardimci LaunchServices ile baslatilir. Gerekce (canli olculdu):
+      // ikili DOGRUDAN calistirildiginda TCC gizlilik kapisi izin
+      // aciklamasini goremeyip sureci aninda oldurur (SIGABRT) — gomulu
+      // plist ve ad-hoc imza bile yetmez. "open -W -a <paket>.app" ile
+      // baslatilinca paketin Info.plist'i okunur ve normal izin penceresi
+      // cikar. Sonuc stdout'a degil dosyaya yazilir (open stdout tasimaz).
+      await run("/usr/bin/open", ["-W", "-a", this.appDir, "--args", file, lang, cikti], 150_000);
+      if (!fs.existsSync(cikti)) {
+        throw new Error("Ses çözümlenemedi. İlk kullanımda macOS \"Konuşma Tanıma\" izni ister; ekranda çıkan pencerede İzin Ver deyip yeniden deneyin (Sistem Ayarları > Gizlilik ve Güvenlik > Konuşma Tanıma).");
+      }
       const metin = fs.readFileSync(cikti, "utf8").trim();
       if (metin.startsWith("!HATA")) throw new Error(metin.slice(5).trim());
       return metin;
