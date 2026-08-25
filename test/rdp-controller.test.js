@@ -1,0 +1,168 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { RdpController, hedefSec, adEslesir, yeniDurum, GOZLEM_EYLEMLERI } from "../src/rdpController.js";
+
+const oku = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+
+// Canli Windows App'ten okunan gercek liste (AX agaci).
+const CIHAZLAR = [
+  { name: "ANNE", x: 548, y: 172 }, { name: "CanSelim", x: 883, y: 172 },
+  { name: "LUTUF", x: 1218, y: 172 }, { name: "rahime", x: 548, y: 247 },
+  { name: "Sihhat", x: 883, y: 247 }, { name: "WOOY", x: 1218, y: 247 },
+  { name: "yeni amerika", x: 558, y: 322 },
+];
+
+// Sahte kopru: gercek tiklama yapmaz, cagrilari kaydeder.
+function sahteKopru(ekstra = {}) {
+  const cagrilar = [];
+  return {
+    cagrilar,
+    async request({ action, payload }) {
+      cagrilar.push({ action, payload });
+      if (action === "screenshot") return { screenshotPath: "/tmp/ekran.png" };
+      return { ok: true };
+    },
+    ...ekstra,
+  };
+}
+
+// ---- YANLIS HEDEFE BAGLANMA: kirmizi cizgi ----
+
+test("gorev ANNE iken baska hicbir karta tiklanmaz", async () => {
+  const secim = hedefSec(CIHAZLAR, "ANNE");
+  assert.equal(secim.ok, true);
+  assert.equal(secim.device.name, "ANNE");
+  // Kritik: secilen kartin KONUMU ANNE'nin kendi konumu olmali; baska
+  // magazanin koordinati asla kullanilmamali.
+  assert.equal(secim.device.x, 548);
+  assert.equal(secim.device.y, 172);
+  for (const yanlis of CIHAZLAR.filter((c) => c.name !== "ANNE")) {
+    assert.notEqual(secim.device.x, yanlis.x === 548 ? -1 : yanlis.x, `${yanlis.name} konumu secilmemeli`);
+  }
+});
+
+test("kismi/benzer ad KABUL EDILMEZ (canli hata: yanlis sunucu acildi)", () => {
+  for (const kotu of ["ANN", "ANNE 2", "anne-yedek", "CanSel", "WOO", "yeni"]) {
+    const s = hedefSec(CIHAZLAR, kotu);
+    assert.equal(s.ok, false, `${kotu} icin baglanti acilmamali`);
+    assert.equal(s.reason, "bulunamadi");
+    assert.match(s.message, /hiçbirine bağlanılmadı|adında kayıtlı cihaz yok/);
+  }
+  // Buyuk/kucuk harf farki kabul edilir (ayni cihaz).
+  assert.equal(hedefSec(CIHAZLAR, "anne").device.name, "ANNE");
+  assert.equal(hedefSec(CIHAZLAR, "  WOOY ").device.name, "WOOY");
+});
+
+test("belirsiz eslesmede is DURUR", () => {
+  const ikiz = [{ name: "ANNE", x: 1, y: 1 }, { name: "anne", x: 2, y: 2 }];
+  const s = hedefSec(ikiz, "ANNE");
+  assert.equal(s.ok, false);
+  assert.equal(s.reason, "belirsiz");
+  assert.match(s.message, /belirsizlikte bağlantı açılmaz/);
+});
+
+test("adEslesir toleranssizdir", () => {
+  assert.equal(adEslesir("ANNE", "anne"), true);
+  assert.equal(adEslesir(" ANNE ", "ANNE"), true);
+  assert.equal(adEslesir("ANNE", "ANNE2"), false);
+  assert.equal(adEslesir("ANNE", "ANNE yedek"), false);
+  assert.equal(adEslesir("WOOY", "WOOY-2"), false);
+});
+
+test("baglanti yanlis hedefte hic tiklama yapmadan hata verir", async () => {
+  const kopru = sahteKopru();
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: kopru });
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [] });
+  await assert.rejects(() => c.baglan("ANN"), /kayıtlı cihaz yok/);
+  const tiklamalar = kopru.cagrilar.filter((x) => /click/.test(x.action));
+  assert.equal(tiklamalar.length, 0, "hedef doğrulanmadan TEK bir tıklama bile olmamalı");
+  assert.equal(c.durum("ANN").connection_state, "hata");
+  assert.match(c.durum("ANN").error, /kayıtlı cihaz yok/);
+});
+
+test("dogru hedefte kartin KENDI merkezine tiklanir (koordinat tahmini yok)", async () => {
+  const kopru = sahteKopru();
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: kopru });
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [] });
+  await c.baglan("Sihhat");
+  const tik = kopru.cagrilar.find((x) => x.action === "double_click");
+  assert.deepEqual(tik.payload, { x: 883, y: 247 }, "Sihhat kartinin kendi merkezi");
+  assert.equal(c.durum("Sihhat").connection_state, "dogrulaniyor");
+});
+
+test("Favorites goruntusunde yanlis kart acilmasin: once Devices sekmesi", async () => {
+  const kopru = sahteKopru();
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: kopru });
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [{ name: "Devices", x: 333, y: 144 }] });
+  await c.baglan("WOOY");
+  const ilkTik = kopru.cagrilar.find((x) => /click/.test(x.action));
+  assert.deepEqual(ilkTik.payload, { x: 333, y: 144 }, "ilk tiklama Devices sekmesi olmali");
+  const kartTik = kopru.cagrilar.find((x) => x.action === "double_click");
+  assert.deepEqual(kartTik.payload, { x: 1218, y: 247 }, "sonra WOOY karti");
+});
+
+// ---- Durum makinesi ----
+
+test("her sunucu icin istenen kalici alanlar tutulur", () => {
+  const d = yeniDurum("ANNE", "ANNE-SRV");
+  for (const alan of ["target_device", "expected_identity", "connection_state", "current_step",
+    "last_screenshot", "findings", "started_at", "finished_at", "error"]) {
+    assert.ok(alan in d, `${alan} alani olmali`);
+  }
+  assert.equal(d.expected_identity, "ANNE-SRV");
+  assert.equal(d.connection_state, "hazir");
+});
+
+test("kimlik dogrulanmazsa gozleme GECILMEZ", async () => {
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: sahteKopru() });
+  c.durumlar.set("ANNE", yeniDurum("ANNE"));
+  const red = c.kimlikOnayla("ANNE", false, "Açılan masaüstü CanSelim görünüyor");
+  assert.equal(red.connection_state, "hata");
+  assert.match(red.error, /CanSelim|beklenen sunucu/);
+  const kabul = c.kimlikOnayla("ANNE", true);
+  assert.equal(kabul.connection_state, "gozlemde");
+});
+
+test("oturum kapanmadiysa siradaki sunucuya gecilmez", async () => {
+  const kopru = sahteKopru();
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: kopru });
+  c.durumlar.set("ANNE", yeniDurum("ANNE"));
+  c.listele = async () => { throw new Error("liste yok"); };  // cihaz listesine donulemedi
+  const sonuc = await c.kapat("ANNE");
+  assert.equal(sonuc.connection_state, "hata");
+  assert.match(sonuc.error, /GEÇİLMEZ/);
+  c.listele = async () => ({ devices: CIHAZLAR, sidebar: [] });  // liste geri geldi
+  const iyi = await c.kapat("ANNE");
+  assert.equal(iyi.connection_state, "bitti");
+  assert.equal(iyi.current_step, "cihaz listesine dönüldü");
+});
+
+// ---- Faz 1: yalniz gozlem ----
+
+test("faz 1 eylem kumesinde yazma islemi YOK", () => {
+  for (const yasak of ["iade_baslat", "siparis_ver", "mesaj_gonder", "dava_yanitla", "para_iadesi", "onayla", "gonder"]) {
+    assert.ok(!GOZLEM_EYLEMLERI.includes(yasak), `${yasak} Faz 1'de olmamali`);
+  }
+  for (const gerekli of ["listele", "baglan", "ekran_al", "kapat"]) {
+    assert.ok(GOZLEM_EYLEMLERI.includes(gerekli));
+  }
+  const kaynak = oku("src/rdpController.js");
+  assert.ok(!/action: "type"/.test(kaynak), "Faz 1'de metin yazma olmamali");
+});
+
+test("parola modele verilmez: denetleyici kimlik bilgisi tasimaz", () => {
+  const kaynak = oku("src/rdpController.js");
+  for (const sizinti of ["password", "parola", "credential", "sifre"]) {
+    const gecis = new RegExp(`${sizinti}\\s*[:=]`, "i");
+    assert.ok(!gecis.test(kaynak), `${sizinti} alani denetleyicide olmamali`);
+  }
+  assert.match(kaynak, /yalniz KAYITLI CIHAZ ADINI secebilir/, "sinir belgelenmis olmali");
+});
+
+test("erisilebilirlik ANA yontem, koordinat son care", () => {
+  const kaynak = oku("src/rdpController.js");
+  assert.match(kaynak, /Erisilebilirlik agaci .*<-- oncelik/, "oncelik sirasi belgelenmeli");
+  assert.match(kaynak, /Sabit koordinat  <-- yalniz son care/);
+  assert.match(kaynak, /AXUIElementCreateApplication/, "AX agaci gercekten okunmali");
+});
