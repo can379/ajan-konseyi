@@ -289,9 +289,18 @@ export class RdpController {
   // Guvenlik tamamen birakilmadi: adres cihaza sabitlenir ve DEGISIRSE
   // baglanti yine acilir ama YUKSEK ONEMLI bir uyari dusurulur — sessiz
   // kalmaz, kullanici gorur.
-  async sertifikaKarari(hedef) {
-    const { buttons, texts } = await this.listele({ ham: true });
-    const pencere = sertifikaPenceresi(texts, buttons);
+  // Pencere BAGLANTI SIRASINDA cikar, hemen degil: tek seferlik bakis onu
+  // kaciriyordu (canli olculdu — 3. saniyede bakildi, pencere sonra cikti ve
+  // kimlik dogrulamasi "beklenen sunucu degil" dedi). Bu yuzden araliklarla
+  // birkac kez bakilir.
+  async sertifikaKarari(hedef, { deneme = 8, araSaniye = 2 } = {}) {
+    let pencere = null, buttons = [], texts = [];
+    for (let i = 0; i < deneme; i++) {
+      ({ buttons = [], texts = [] } = await this.listele({ ham: true }));
+      pencere = sertifikaPenceresi(texts, buttons);
+      if (pencere) break;
+      if (i < deneme - 1) await this.computer.request({ action: "wait", payload: { seconds: araSaniye } });
+    }
     if (!pencere) return { durum: "yok" };
     if (!pencere.devam) return { durum: "belirsiz", pencere, mesaj: "Sertifika penceresi var ama onay düğmesi bulunamadı." };
     const pin = this.pinleriOku()[hedef];

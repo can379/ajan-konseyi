@@ -535,7 +535,10 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     }
     if (opts.style === "codex" && !opts.lean && !opts.isolated) effectivePrompt += CODEX_STYLE_CONTRACT;
     if (identityQuestion) effectivePrompt += identityContract;
-    if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
+    // Izole cagri: ortak gecmis ve koprular kapali. AMA cagiran acikca gorsel
+    // verdiyse onu OKUMAK serbesttir — aksi halde uye "araclarim kapali" deyip
+    // ekran goruntusunu hic acmiyordu (canli olculdu: kimlik dogrulanamadi).
+    if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ VE DIŞ BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.${images.length ? " Sana verilen görüntü/dosya eklerini okuman serbesttir; başka bir dış araç kullanma." : " Dış araç kullanma."}`;
     if (route?.mode === "shared" && !opts.isolated) {
       const label = CONNECTORS[route.connector]?.label || route.connector;
       this.store.setAgentStatus(member.id, "busy", `${label} · ortak Codex köprüsü`);

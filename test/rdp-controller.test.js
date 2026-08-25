@@ -233,3 +233,31 @@ test("onay dugmesi okunamazsa korukoru tiklanmaz", async () => {
   assert.equal(kopru.cagrilar.length, 0, "dugme bilinmiyorsa tahminle tiklanmamali");
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test("sertifika penceresi gecikince kacirilmaz (araliklarla bakilir)", async () => {
+  const kopru = sahteKopru();
+  const dir = fs.mkdtempSync("/tmp/ajan-pin-");
+  const c = new RdpController(dir, { computerBridge: kopru });
+  let cagri = 0;
+  // Pencere 3. bakista cikiyor — canli davranis buydu.
+  c.listele = async () => {
+    cagri += 1;
+    return cagri < 3
+      ? { devices: CIHAZLAR, sidebar: [], buttons: [], texts: [] }
+      : { devices: CIHAZLAR, sidebar: [], buttons: [{ name: "Continue", x: 3, y: 3 }],
+          texts: ['You are connecting to the RDP host "87.76.130.141". The certificate...'] };
+  };
+  const karar = await c.sertifikaKarari("ANNE", { deneme: 5, araSaniye: 0 });
+  assert.equal(karar.durum, "gecildi", "gec cikan pencere de yakalanmali");
+  assert.equal(karar.host, "87.76.130.141");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("uyeye ekran goruntusu hem EK hem YOL olarak verilir", () => {
+  const opsRun = oku("src/opsRun.js");
+  assert.match(opsRun, /EKRAN GÖRÜNTÜSÜ DOSYASI: \$\{ekranYolu\}/, "yol istemde gecmeli");
+  assert.match(opsRun, /images: ekranYolu/, "ek olarak da verilmeli");
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /görüntü\/dosya eklerini okuman serbesttir/,
+    "izole cagride verilen gorseli okumak serbest olmali");
+});

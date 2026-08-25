@@ -75,7 +75,14 @@ export class OpsRun {
 
   // Uyeye YALNIZ ekran goruntusu ve soru gider; arac/kopru yok (isolated).
   async _uyeyeSor(run, uye, istem, ekranYolu) {
-    const sonuc = await this.orch.callMember(run, uye, istem, {
+    // Gorseli SAGLAYICIYA gore iki yoldan birden ver: bazi uyeler dosyayi
+    // kendi okuma araciyla acar (Claude), bazilari ek olarak alir (Codex,
+    // Antigravity). Yalniz ek olarak vermek yetmiyordu: uye "hicbir ekran
+    // goruntusu alinmadi" deyip kimligi dogrulayamiyordu (canli olculdu).
+    const yolNotu = ekranYolu
+      ? `\n\nEKRAN GÖRÜNTÜSÜ DOSYASI: ${ekranYolu}\nBu dosya sana ek olarak da verildi. Göremiyorsan dosya okuma aracınla bu yolu aç ve GÖRSEL olarak incele — bu iş için okuma iznin var. Dosyayı açamıyorsan bunu açıkça söyle, tahmin yürütme.`
+      : "";
+    const sonuc = await this.orch.callMember(run, uye, istem + yolNotu, {
       isolated: true, images: ekranYolu ? [ekranYolu] : [],
       media: ekranYolu ? [{ path: ekranYolu, name: "ekran.png", mime: "image/png", kind: "image" }] : [],
       label: "ekran yorumu", timeoutMs: 180_000,
