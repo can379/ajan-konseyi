@@ -1658,3 +1658,30 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-row b{font-weight:600;font-size:13px}
 .ops-row small{display:block;color:var(--dim2);font-size:11.5px}
 .ops-assess{margin-top:10px;padding:10px;border-left:2px solid var(--acc,#2bc9b8);background:#0f1211;border-radius:0 8px 8px 0;font-size:13px}
+
+/* ---- Operasyon: uzak sunucu gozlemi ---- */
+.ops-banner{padding:8px 12px;margin-bottom:12px;border-radius:9px;background:#f0b9490f;border:1px solid #4a453040;color:#d8c79a;font-size:12px}
+.ops-servers,.ops-live,.ops-findings{margin-bottom:16px}
+#ops-server-list{display:grid;gap:6px;margin-top:8px}
+.ops-server{display:flex;align-items:center;gap:12px;padding:9px 10px;border:1px solid var(--border);border-radius:10px;background:var(--surface2)}
+.ops-server.calisiyor{border-color:#f0b94966;background:#f0b9490d}
+.ops-server-ad{flex:1;min-width:0}
+.ops-server-ad small{display:block;color:var(--dim2);font-size:11.5px}
+.ops-server.durum-bitti .ops-server-ad small{color:var(--ok)}
+.ops-server.durum-hata .ops-server-ad small{color:var(--err)}
+.ops-server-meta{display:flex;align-items:center;gap:8px;color:var(--dim2);font-size:11px}
+.ops-rozet{padding:2px 7px;border-radius:999px;background:#2bc9b81a;color:#2bc9b8;font-size:10.5px}
+.ops-server button{border-radius:8px}
+.ops-current-kart{padding:10px 12px;border:1px solid #f0b94940;border-radius:10px;background:#f0b9490d}
+.ops-step{color:#d8c79a;font-size:13px;margin-top:3px}
+.ops-state{color:var(--dim2);font-size:11.5px}
+.ops-current-kart a{display:inline-block;margin-top:6px;font-size:12px;color:#93b4fd}
+#ops-findings-list{display:grid;gap:4px;margin-top:8px}
+.ops-finding{display:flex;gap:10px;align-items:baseline;padding:6px 4px;border-bottom:1px solid #23282533}
+.ops-finding code{background:none;padding:0;color:var(--dim2);font-size:11.5px;white-space:nowrap}
+.ops-finding small{display:block;color:var(--dim2);font-size:11.5px}
+.ops-finding.onem-yuksek{border-left:2px solid var(--err);padding-left:8px}
+.ops-finding.onem-orta{border-left:2px solid var(--warn);padding-left:8px}
+.ops-finding time{margin-left:auto;color:var(--dim2);font-size:11px}
+.ops-hub{margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:10px}
+.ops-hub summary{cursor:pointer;color:var(--dim2);font-size:12px}

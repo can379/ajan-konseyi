@@ -2044,6 +2044,87 @@ function openToolPanel(tab) {
   if(tab==="git")renderGitCenter();
   if(tab==="ops")renderOpsCenter();
 }
+// ---- Uzak sunucu gozlemi (Faz 1) ----
+// Panel: kayitli sunucular, baglanti durumu, su anki adim, bulgular, kanit.
+const DURUM_ETIKET = { hazir: "hazır", listeleniyor: "cihazlar okunuyor", baglaniyor: "bağlanıyor",
+  dogrulaniyor: "kimlik doğrulanıyor", gozlemde: "gözlemde", kapaniyor: "kapatılıyor", bitti: "tamamlandı", hata: "hata" };
+let opsSunucular = [], opsTimer = null;
+
+async function renderOpsCenter() {
+  await opsDurumCiz();
+  if (!opsSunucular.length) await opsCihazTara().catch(() => {});
+  if (opsTimer) clearInterval(opsTimer);
+  opsTimer = setInterval(() => { if (!$("tool-ops").hidden) opsDurumCiz(); else { clearInterval(opsTimer); opsTimer = null; } }, 3000);
+  renderOpsHub();
+}
+
+async function opsCihazTara() {
+  const host = $("ops-server-list");
+  host.innerHTML = '<div class="muted">Windows App okunuyor…</div>';
+  try {
+    const veri = await (await fetch("/api/rdp/devices")).json();
+    if (veri.error) throw new Error(veri.error);
+    opsSunucular = veri.devices || [];
+  } catch (error) {
+    host.innerHTML = `<div class="ops-err">${esc(String(error.message || error))}</div>`;
+    return;
+  }
+  opsDurumCiz();
+}
+
+async function opsDurumCiz() {
+  let durum = { sunucular: [], gecmis: [], aktif: null };
+  try { durum = await (await fetch("/api/rdp/state")).json(); } catch { /* sunucu yaniti yoksa mevcut gorunum kalir */ }
+  const kayit = Object.fromEntries((durum.sunucular || []).map((s) => [s.target_device, s]));
+  $("ops-server-list").innerHTML = opsSunucular.length ? opsSunucular.map((d) => {
+    const k = kayit[d.name];
+    const dur = k?.connection_state || "hazir";
+    const sonKontrol = k?.finished_at ? new Date(k.finished_at).toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+    const calisiyor = durum.aktif?.target === d.name;
+    return `<div class="ops-server${calisiyor ? " calisiyor" : ""} durum-${esc(dur)}">
+      <div class="ops-server-ad"><b>${esc(d.name)}</b><small>${esc(DURUM_ETIKET[dur] || dur)}${k?.error ? " · " + esc(String(k.error).slice(0, 60)) : ""}</small></div>
+      <div class="ops-server-meta"><small>son kontrol: ${esc(sonKontrol)}</small>${k?.findings?.length ? `<span class="ops-rozet">${k.findings.length} bulgu</span>` : ""}</div>
+      <button data-ops-observe="${esc(d.name)}" ${durum.aktif ? "disabled" : ""}>Gözlemle</button>
+    </div>`;
+  }).join("") : '<div class="muted">Sunucu bulunamadı. Windows App açık mı? "Sunucuları tara"ya basın.</div>';
+
+  const aktifKayit = durum.aktif ? kayit[durum.aktif.target] : null;
+  $("ops-current").innerHTML = durum.aktif
+    ? `<div class="ops-current-kart"><b>${esc(durum.aktif.target)}</b>
+        <div class="ops-step">${esc(aktifKayit?.current_step || "başlatılıyor")}</div>
+        <div class="ops-state">${esc(DURUM_ETIKET[aktifKayit?.connection_state] || "")}</div>
+        <a href="#" data-ops-run="${esc(durum.aktif.runId)}">sohbette izle →</a></div>`
+    : (durum.gecmis?.length
+      ? `<div class="muted">Şu an kontrol edilen sunucu yok. Son tur: <b>${esc(durum.gecmis.at(-1).target)}</b> · ${esc(durum.gecmis.at(-1).sonuc)}</div>`
+      : '<div class="muted">Henüz gözlem yapılmadı.</div>');
+
+  const bulgular = (durum.sunucular || []).flatMap((s) => (s.findings || []).map((b) => ({ ...b, sunucu: s.target_device, ekran: s.last_screenshot })));
+  $("ops-findings-list").innerHTML = bulgular.length
+    ? bulgular.slice(-40).reverse().map((b) => `<div class="ops-finding onem-${esc(b.onem || "dusuk")}">
+        <code>${esc(b.sunucu)}</code><div><b>${esc(b.tur || "kayıt")}</b><small>${esc(b.ozet || "")}</small></div>
+        <time>${b.at ? esc(new Date(b.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })) : ""}</time></div>`).join("")
+    : '<div class="muted">Bulgu yok.</div>';
+}
+
+$("ops-devices")?.addEventListener("click", () => opsCihazTara());
+$("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });
+$("ops-server-list")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-ops-observe]");
+  if (!btn) return;
+  const hedef = btn.dataset.opsObserve;
+  if (!confirm(`"${hedef}" sunucusuna bağlanılıp YALNIZ GÖZLEM yapılacak.\nHiçbir işlem, mesaj veya değişiklik yapılmayacak.\n\nBaşlatılsın mı?`)) return;
+  btn.disabled = true;
+  const r = await fetch("/api/rdp/observe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: hedef }) });
+  if (!r.ok) alert((await r.json()).error || "Gözlem başlatılamadı");
+  opsDurumCiz();
+});
+$("ops-current")?.addEventListener("click", (e) => {
+  const bag = e.target.closest("[data-ops-run]");
+  if (!bag) return;
+  e.preventDefault();
+  selectRun(bag.dataset.opsRun); showMainView("chat");
+});
+
 // ---- Operasyon Merkezi (CanSellerAI) — FAZ 1: YALNIZ OKUMA ----
 // Ekran canli sistemden okur; hicbir yazma yapmaz. "Gölge değerlendirme"
 // dugmesi secili kayitlari bir konsey uyesine YORUMLATIR (arac/koprusuz,
@@ -2056,7 +2137,7 @@ async function opsDurum() {
   catch { return { connected: false, mode: "bagli-degil" }; }
 }
 
-async function renderOpsCenter() {
+async function renderOpsHub() {
   const durum = await opsDurum();
   const bagliMi = durum.connected;
   $("ops-connect").hidden = bagliMi;
@@ -2121,7 +2202,7 @@ $("ops-login-form")?.addEventListener("submit", async (e) => {
     const j = await r.json();
     e.target.reset(); // parola formda da kalmasin
     if (!r.ok) return alert(j.error || "Bağlanılamadı");
-    await renderOpsCenter();
+    await renderOpsHub();
   } finally { btn.disabled = false; }
 });
 $("ops-key-form")?.addEventListener("submit", async (e) => {
@@ -2131,9 +2212,9 @@ $("ops-key-form")?.addEventListener("submit", async (e) => {
     body: JSON.stringify({ serviceKey: d.serviceKey }) });
   e.target.reset();
   if (!r.ok) return alert((await r.json()).error || "Anahtar kabul edilmedi");
-  await renderOpsCenter();
+  await renderOpsHub();
 });
-$("ops-disconnect")?.addEventListener("click", async () => { await fetch("/api/ops/disconnect", { method: "POST" }); await renderOpsCenter(); });
+$("ops-disconnect")?.addEventListener("click", async () => { await fetch("/api/ops/disconnect", { method: "POST" }); await renderOpsHub(); });
 $("ops-refresh")?.addEventListener("click", () => opsYukle());
 $("ops-account")?.addEventListener("change", async (e) => {
   await fetch("/api/ops/switch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(e.target.value) || e.target.value }) });

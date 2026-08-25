@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { Store } from "./src/store.js";
 import { SpeechToText } from "./src/speech.js";
 import { CanSellerAI, temizleKayit } from "./src/cansellerai.js";
+import { RdpController } from "./src/rdpController.js";
+import { OpsRun } from "./src/opsRun.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -40,6 +42,8 @@ const speech = new SpeechToText(DATA_ROOT);
 const canseller = new CanSellerAI();
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
+const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge });
+const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");
   if(status.configured)members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});
@@ -723,6 +727,28 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return json(res, 200, { day: gun, providers: toplam });
+    }
+
+    // ---- Uzak masaustu gozlem turu (Faz 1: yalniz okuma) ----
+    if (req.method === "GET" && p === "/api/rdp/devices") {
+      try { return json(res, 200, await rdp.listele()); }
+      catch (error) { return json(res, 502, { error: String(error.message || error) }); }
+    }
+    if (req.method === "GET" && p === "/api/rdp/state") {
+      return json(res, 200, opsRun.durum());
+    }
+    if (req.method === "POST" && p === "/api/rdp/observe") {
+      const body = await readBody(req);
+      const hedef = String(body.target || "").trim();
+      if (!hedef) return json(res, 400, { error: "Hedef cihaz adı gerekli" });
+      // Tur arka planda yurur; arayuz /api/rdp/state ile izler.
+      opsRun.gozlemle(hedef, { memberId: body.memberId || null })
+        .catch((error) => store.emit("event", { type: "ops_error", error: String(error.message || error) }));
+      return json(res, 202, { ok: true, target: hedef });
+    }
+    if (req.method === "POST" && p === "/api/rdp/stop") {
+      opsRun.iptalEt();
+      return json(res, 200, { ok: true });
     }
 
     // ---- Operasyon Merkezi (CanSellerAI) — FAZ 1: YALNIZ OKUMA ----

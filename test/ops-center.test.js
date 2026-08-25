@@ -77,9 +77,12 @@ test("arayuz operasyon sekmesi bagli ve parolayi formda birakmaz", () => {
   const html = oku("ui/index.html");
   assert.match(html, /data-tool-tab="ops"/, "sekme olmali");
   assert.match(html, /id="tool-ops"/, "panel olmali");
-  assert.match(html, /Parolanız kaydedilmez/, "kullaniciya sinir acikca soylenmeli");
+  assert.match(html, /parolanız kaydedilmez/i, "kullaniciya sinir acikca soylenmeli");
+  assert.match(html, /Faz 1 — iade başlatma, sipariş geçme/, "yalniz-okuma siniri panelde yazmali");
+  assert.match(html, /renderOpsCenter|ops-server-list/, "ana yontem uzak sunucu gozlemi olmali");
   const app = oku("ui/app.js");
   assert.match(app, /function renderOpsCenter/, "panel cizimi olmali");
+  assert.match(app, /function renderOpsHub/, "hub verisi yardimci bolum olmali");
   assert.match(app, /e\.target\.reset\(\); \/\/ parola formda da kalmasin/, "parola gonderildikten sonra temizlenmeli");
 });
 
