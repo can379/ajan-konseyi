@@ -356,7 +356,8 @@ function renderLive() {
           // Codex duzeni: akan yanit metni varsa goster; altinda YALNIZ
           // simdiki eylem satiri (tek, soluk). Gecmis adimlar canlida
           // listelenmez — bitince katlanmis satirda dururlar.
-          const akan = String(s.text || "").trim();
+          const akan = String(s.text || "").split("\n")
+            .filter((ln) => !/^\s*(?:\$|💭)\s/.test(ln)).join("\n").trim();
           const adimlar = liveSteps[a] || [];
           const son = adimlar[adimlar.length - 1];
           const simdiki = son ? `<div class="live-current">${STEP_ICONS[son.kind] || "•"} ${esc(son.title)}${son.count > 1 ? ` ×${son.count}` : ""}…</div>` : "";

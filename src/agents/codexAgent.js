@@ -126,7 +126,6 @@ export class CodexAgent extends BaseAgent {
           text = ev.item.text || text;
           live += (live ? "\n" : "") + (ev.item.text || "");
         } else if (ev.item.type === "command_execution") {
-          live += `\n$ ${ev.item.command || ""}`;
           {
             // Ham komut basliga cikmaz: anlamina gore insan cumlesi olur,
             // ham komut + cikti detayda saklanir (tiklayinca gorunur).
@@ -146,8 +145,7 @@ ${String(ev.item.aggregated_output || ev.item.output || "")}`,
           steps?.add(kindForTool(ev.item.tool || ev.item.server), ev.item.tool || "araç",
             "", { status: ev.item.status === "failed" ? "failed" : "ok" });
         } else if (ev.item.type === "reasoning" && ev.item.text) {
-          live += `\n💭 ${String(ev.item.text).slice(0, 200)}`;
-          // Ham akil yurutme metni adim detayina girmez; yalniz sure kalir.
+          // Ham akil yurutme metni ne akan metne ne adim detayina girer.
           steps?.close("dusunme", { title: "Akıl yürüttü" });
         }
         if (!opts.silent) this.progress(opts.label || "", live, opts.memberId);
