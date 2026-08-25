@@ -177,9 +177,15 @@ function md(src) {
   // dosyayi Finder'da acar (reveal). Ajanlar urettikleri dosyalari boyle
   // paylasir; kullanici kopyala-yapistir yapmak zorunda kalmamali.
   t = t.replace(/`([^`\n]+)`/g, (_, code) => {
-    const isPath = /^\/(?:Users|private|tmp|Volumes)\/.{2,400}$/.test(code.trim());
+    const value = code.trim();
+    // Web adresi: sistem tarayicisinda acilir (Electron windowOpenHandler
+    // http(s) baglantilarini shell.openExternal'a verir).
+    if (/^https?:\/\/\S{3,400}$/.test(value)) {
+      return `<a class="code-link" href="${value}" target="_blank" rel="noopener">${code}</a>`;
+    }
+    const isPath = /^\/(?:Users|private|tmp|Volumes)\/.{2,400}$/.test(value);
     return isPath
-      ? `<code data-reveal-path="${code.trim()}">${code}</code>`
+      ? `<code data-reveal-path="${value}" class="code-link">${code}</code>`
       : `<code>${code}</code>`;
   });
   // Kalın işaretleme SATIR içinde kalmalıdır. Eskiden içerik kalıbı yeni
@@ -192,6 +198,7 @@ function md(src) {
   t = t.replace(/!\[([^\]]*)\]\((\/uploads\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
   t = t.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img class="chat-img" src="$2" alt="$1" data-media-src="$2">');
   t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  t = t.replace(/(^|[\s(>])(https?:\/\/[^\s<>"')]{4,400})/gm, '$1<a class="code-link" href="$2" target="_blank" rel="noopener">$2</a>');
   t = t.replace(/\[([^\]]+)\]\((\/(?:Users|private|tmp)\/[^)]+)\)/g, '<button type="button" class="artifact-link" data-artifact-path="$2">◇ $1</button>');
   t = t.replace(/📎 (\/uploads\/\S+)/g, '<img class="chat-img" src="$1" alt="görsel" data-media-src="$1" data-media-name="görsel">');
   // 3) Blok düzeyi: satır satır işle

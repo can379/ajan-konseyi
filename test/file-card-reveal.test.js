@@ -78,3 +78,14 @@ test("reveal ev dizini icindeki yolu kabul eder, disini reddeder", async () => {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+// Baglar bag gibi: kutu/cerceve yok; kod ici URL'ler ve ciplak URL'ler de
+// tiklanir; siradan kod notr kalir.
+test("url kod parcalari ve ciplak url'ler baglanir, stil kutusuz", () => {
+  const app = fs.readFileSync(path.join(ROOT, "ui", "app.js"), "utf8");
+  assert.match(app, /class="code-link" href="\$\{value\}" target="_blank"/, "kod ici URL bag olmali");
+  assert.match(app, /https\?:\\\/\\\/\[\^\\s<>"'\)\]/, "ciplak URL otomatik baglanmali");
+  const css = fs.readFileSync(path.join(ROOT, "ui", "style.css"), "utf8");
+  assert.match(css, /code\.code-link[^{]*\{[^}]*background:transparent/s, "kutu arka plani olmamali");
+  assert.match(css, /\.code-link[^}]*border:0/s, "cerceve olmamali");
+});
