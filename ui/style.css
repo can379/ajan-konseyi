@@ -1560,3 +1560,12 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .project-item.working .p-name{color:#eef1ef}
 @keyframes work-breathe{0%,100%{opacity:.25}50%{opacity:1}}
 @media (prefers-reduced-motion: reduce){.work-eq i,.run-item.working::before{animation:none}}
+
+/* ---- Canli akis: yazi kayarak girer, imlec yanip soner ---- */
+/* Kart iskeleti bir kez kurulur; yeni paragraf asagidan yumusakca kayar,
+   buyuyen paragraf dugum kimligini korur (goz kirpmasi olmaz). */
+.flow-in{animation:flow-in .35s ease both}
+@keyframes flow-in{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+.live-text>*:last-child::after{content:"▍";margin-left:2px;color:var(--dim2);animation:caret-blink 1s steps(1) infinite}
+@keyframes caret-blink{50%{opacity:0}}
+@media (prefers-reduced-motion: reduce){.flow-in{animation:none}.live-text>*:last-child::after{animation:none}}

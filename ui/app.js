@@ -327,9 +327,31 @@ function connectSSE() {
 }
 
 // Canlı yazım: ajanın yanıtı, sohbetin sonunda büyüyen bir mesaj balonu olarak akar
+// Canli metni YERINDE guncelle: dugum kimligi korunur, yalniz degisen
+// paragraf dokunulur, yeni paragraf kayarak girer. innerHTML'i her seferinde
+// bastan yazmak metni "yok olup geri geliyor" gibi gosteriyordu.
+function patchLiveText(container, html) {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  const news = [...tmp.children];
+  const olds = [...container.children];
+  for (let i = 0; i < news.length; i++) {
+    const o = olds[i];
+    if (!o) { news[i].classList.add("flow-in"); container.append(news[i]); }
+    else if (o.outerHTML !== news[i].outerHTML) {
+      // Ayni etiketli blok buyuyorsa dugumu koru, icerigi akit — goz
+      // kirpmasi olmaz. Etiket degistiyse blok gercekten degismistir.
+      if (o.tagName === news[i].tagName) o.innerHTML = news[i].innerHTML;
+      else { news[i].classList.add("flow-in"); o.replaceWith(news[i]); }
+    }
+  }
+  while (container.children.length > news.length) container.lastElementChild.remove();
+}
+
 function renderLive() {
   const run = selectedRun ? state.runs[selectedRun] : null;
-  if (!run || run.status !== "running") { $("live").innerHTML = ""; return; }
+  const live = $("live");
+  if (!run || run.status !== "running") { live.innerHTML = ""; return; }
   const busyAgents = Object.keys(liveStreams).filter((a) => state.agents[a]?.status === "busy");
   const ws = $("workspace");
   const stick = ws.scrollTop + ws.clientHeight >= ws.scrollHeight - 150;
@@ -337,44 +359,75 @@ function renderLive() {
   // Görsel durumu yalnız orkestratör gerçekten üretim başlattığında gösterilir.
   const imageGeneration=Object.values(liveStreams).some((s)=>/görsel (?:üretiyor|hazırlanıyor)/i.test(s.label||""));
   const referenceImage=[...(run.messages||[])].reverse().flatMap((m)=>m.attachments||[]).find((a)=>a.kind==="image")?.url || "";
-  $("live").innerHTML = busyAgents.map((a) => {
+  // Artik calismayan ajanlarin ve tur degistiren kartlarin temizligi.
+  for (const el of [...live.children]) {
+    const eski = el.dataset.agent;
+    if (!busyAgents.includes(eski) || el.classList.contains("image-live") !== imageGeneration) el.remove();
+  }
+  for (const a of busyAgents) {
     const s = liveStreams[a];
     const meta = metaFor(a);
-    if(imageGeneration) return `<div class="msg live-msg image-live from-${esc(meta.cls)}">
-      <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
-      <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span>${elapsedHTML(state.agents[a]?.since || s.startedAt)}</div>
-      <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
-      <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
-    </div>`;
-    const statusLabel=s.label ? String(s.label).replace(/\.{2,}$/g,"") : "yanıt hazırlanıyor";
-    return `<div class="msg live-msg live-status-only from-${esc(meta.cls)}">
-      <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
-      <div class="m-body">
-        <div class="m-head">
-          <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
-          <span class="lb-live">${esc(statusLabel)}…</span>
+    if (imageGeneration) {
+      // Gorsel karti CSS animasyonlu ve durgun icerikli: bir kez kurulur.
+      if (!live.querySelector(`[data-agent="${CSS.escape(a)}"]`)) live.insertAdjacentHTML("beforeend", `<div class="msg live-msg image-live from-${esc(meta.cls)}" data-agent="${esc(a)}">
+        <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
+        <div class="m-body"><div class="m-head"><span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span><span class="lb-live">görsel üretiyor…</span>${elapsedHTML(state.agents[a]?.since || s.startedAt)}</div>
+        <div class="generation-preview" aria-label="Görsel oluşturuluyor">${referenceImage ? `<img class="generation-source" src="${esc(referenceImage)}" alt="Referans görsel işleniyor">` : `<div class="generation-clouds"></div>`}<div class="generation-noise"></div><div class="generation-scan"></div><div class="generation-mark">✦</div></div>
+        <div class="generation-status"><span>Görsel katmanları oluşturuluyor</span><div><i></i></div><small>Önizleme aşamalı olarak netleşecek</small></div></div>
+      </div>`);
+      continue;
+    }
+    let card = live.querySelector(`[data-agent="${CSS.escape(a)}"]`);
+    if (!card) {
+      // Kart iskeleti BIR KEZ kurulur; sonraki guncellemeler yalniz asagidaki
+      // bolgelere dokunur. Zamanlayici kendini guncelliyor (updateElapsedTimers).
+      live.insertAdjacentHTML("beforeend", `<div class="msg live-msg live-status-only from-${esc(meta.cls)} flow-in" data-agent="${esc(a)}">
+        <div class="avatar bg-${esc(meta.cls)}">${agentLogo(meta.cls)}</div>
+        <div class="m-body">
+          <div class="m-head">
+            <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
+            <span class="lb-live"></span>
+          </div>
+          <div class="live-timer">${elapsedHTML(state.agents[a]?.since || s.startedAt, null, "live-timer-val")} süredir çalışıyor</div>
+          <div class="live-text" hidden></div>
+          <div class="live-current" hidden></div>
+          <div class="live-diff-chip" hidden></div>
         </div>
-        <div class="live-timer">${elapsedHTML(state.agents[a]?.since || s.startedAt, null, "live-timer-val")} süredir çalışıyor</div>
-        ${(() => {
-          // Codex duzeni: akan yanit metni varsa goster; altinda YALNIZ
-          // simdiki eylem satiri (tek, soluk). Gecmis adimlar canlida
-          // listelenmez — bitince katlanmis satirda dururlar.
-          // Makine jetonlari (<<<AJAN_..._ACTION>>>) canlida da gorunmez:
-          // tam bloklar ve akista henuz yarim kalan kuyruk birlikte suzulur.
-          const akan = String(s.text || "")
-            .replace(/<<<AJAN_\w+>>>[\s\S]*?<<<END>>>/g, "")
-            .replace(/<<<[\s\S]*$/, "")
-            .split("\n")
-            .filter((ln) => !/^\s*(?:\$|💭)\s/.test(ln)).join("\n").trim();
-          const adimlar = liveSteps[a] || [];
-          const son = adimlar[adimlar.length - 1];
-          const simdiki = son ? `<div class="live-current">${STEP_ICONS[son.kind] || "•"} ${esc(son.title)}${son.count > 1 ? ` ×${son.count}` : ""}…</div>` : "";
-          const degisen = new Set(adimlar.filter((st) => st.kind === "yazdi").map((st) => st.title)).size;
-          return `${akan ? `<div class="live-text">${md(akan.slice(-1500))}</div>` : ""}${simdiki}${degisen ? `<div class="live-diff-chip">✎ ${degisen} dosya değişiyor</div>` : ""}`;
-        })()}
-      </div>
-    </div>`;
-  }).join("");
+      </div>`);
+      card = live.lastElementChild;
+    }
+    const statusLabel = s.label ? String(s.label).replace(/\.{2,}$/g, "") : "yanıt hazırlanıyor";
+    const lb = card.querySelector(".lb-live");
+    if (lb.textContent !== `${statusLabel}…`) lb.textContent = `${statusLabel}…`;
+    // Codex duzeni: akan yanit metni + YALNIZ simdiki eylem satiri (tek,
+    // soluk). Makine jetonlari (<<<AJAN_..._ACTION>>>) canlida gorunmez.
+    const akan = String(s.text || "")
+      .replace(/<<<AJAN_\w+>>>[\s\S]*?<<<END>>>/g, "")
+      .replace(/<<<[\s\S]*$/, "")
+      .split("\n")
+      .filter((ln) => !/^\s*(?:\$|💭)\s/.test(ln)).join("\n").trim();
+    // Kayan pencere karakterle degil PARAGRAFLA ilerler: -1500. karakterden
+    // kesmek ilk blogu her guncellemede degistirip metni titretiyordu.
+    const paras = akan.split(/\n{2,}/).filter(Boolean);
+    const metin = card.querySelector(".live-text");
+    metin.hidden = !paras.length;
+    if (paras.length) patchLiveText(metin, md(paras.slice(-5).join("\n\n")));
+    const adimlar = liveSteps[a] || [];
+    const son = adimlar[adimlar.length - 1];
+    const simdiki = card.querySelector(".live-current");
+    simdiki.hidden = !son;
+    if (son) {
+      const satir = `${STEP_ICONS[son.kind] || "•"} ${son.title}${son.count > 1 ? ` ×${son.count}` : ""}…`;
+      if (simdiki.textContent !== satir) simdiki.textContent = satir;
+    }
+    const degisen = new Set(adimlar.filter((st) => st.kind === "yazdi").map((st) => st.title)).size;
+    const chip = card.querySelector(".live-diff-chip");
+    chip.hidden = !degisen;
+    if (degisen) {
+      const etiket = `✎ ${degisen} dosya değişiyor`;
+      if (chip.textContent !== etiket) chip.textContent = etiket;
+    }
+  }
   if (stick) ws.scrollTop = ws.scrollHeight;
 }
 
