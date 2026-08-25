@@ -622,7 +622,11 @@ const server = http.createServer(async (req, res) => {
       // yasar; Finder kullaniciya o kopyayi gostermelidir. Yol yalniz kayitli
       // bir proje dizininin ICINDEYSE kabul edilir. uploads yedegi korunur.
       const candidate = body.path ? path.resolve(String(body.path)) : null;
-      const inProject = candidate && (config.data.projects || []).some((proj) => proj.path && isWithin(proj.path, candidate));
+      // Kabul kapsami: kayitli proje dizinleri, veri dizini ve ev dizini.
+      // "open -R" yalniz Finder'da gosterir; ev disina (sistem dosyalari)
+      // isaret eden yollar yine de reddedilir.
+      const inProject = candidate && ((config.data.projects || []).some((proj) => proj.path && isWithin(proj.path, candidate))
+        || isWithin(DATA_ROOT, candidate) || isWithin(HOME, candidate));
       if (inProject && fs.existsSync(candidate)) {
         await execP("open", ["-R", candidate]);
         return json(res, 200, { ok:true, revealed: candidate });

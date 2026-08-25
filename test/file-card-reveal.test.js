@@ -44,3 +44,37 @@ test("dosya karti reveal niteligi tasir ve isleyici yedekli calisir", () => {
   assert.match(app, /api\/media\/reveal/, "isleyici reveal ucunu cagirmali");
   assert.match(app, /window\.open\(revealCard\.href/, "basarisizlikta indirme yedegi kalmali");
 });
+
+// Mesaj icindeki `/Users/...` kod parcalari tiklanabilir olmali; siradan kod
+// parcalari ise olmamali.
+test("mutlak yol kod parcasi tiklanabilir, siradan kod degil", () => {
+  const app = fs.readFileSync(path.join(ROOT, "ui", "app.js"), "utf8");
+  assert.match(app, /data-reveal-path="\$\{code\.trim\(\)\}"/, "yol kod parcasina nitelik eklenmeli");
+  assert.match(app, /code\[data-reveal-path\]/, "yol tiklamasi dinlenmeli");
+});
+
+test("reveal ev dizini icindeki yolu kabul eder, disini reddeder", async () => {
+  const os = await import("node:os");
+  const dataDir = fs.mkdtempSync(path.join(os.default.tmpdir(), "reveal2-"));
+  const homeFile = path.join(os.default.homedir(), `.ajan-reveal-test-${Date.now()}`);
+  fs.writeFileSync(homeFile, "test");
+  const PORT = 4895;
+  const server = spawn(process.execPath, [path.join(ROOT, "server.js")], {
+    cwd: ROOT, env: { ...process.env, PORT: String(PORT), AJAN_KONSEYI_DATA_DIR: dataDir }, stdio: "ignore",
+  });
+  try {
+    let up = false;
+    for (let i = 0; i < 40 && !up; i++) { try { up = (await fetch(`http://127.0.0.1:${PORT}/api/mcp/info`)).ok; } catch { await wait(400); } }
+    assert.ok(up, "sunucu ayaga kalkmadi");
+    const post = (body) => fetch(`http://127.0.0.1:${PORT}/api/media/reveal`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    assert.equal((await post({ path: homeFile })).status, 200, "ev icindeki mevcut dosya kabul edilmeli");
+    assert.equal((await post({ path: "/etc/hosts" })).status, 404, "ev disindaki sistem yolu reddedilmeli");
+    assert.equal((await post({ path: path.join(os.default.homedir(), "olmayan-dosya-xyz.txt") })).status, 404);
+  } finally {
+    server.kill("SIGKILL");
+    fs.unlinkSync(homeFile);
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});

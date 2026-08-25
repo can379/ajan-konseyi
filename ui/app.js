@@ -173,7 +173,15 @@ function md(src) {
   });
   t = esc(t);
   // 2) Satır içi öğeler
-  t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  // Kod parcasi bir MUTLAK DOSYA YOLU ise tiklanabilir yapilir: tiklama
+  // dosyayi Finder'da acar (reveal). Ajanlar urettikleri dosyalari boyle
+  // paylasir; kullanici kopyala-yapistir yapmak zorunda kalmamali.
+  t = t.replace(/`([^`\n]+)`/g, (_, code) => {
+    const isPath = /^\/(?:Users|private|tmp|Volumes)\/.{2,400}$/.test(code.trim());
+    return isPath
+      ? `<code data-reveal-path="${code.trim()}">${code}</code>`
+      : `<code>${code}</code>`;
+  });
   // Kalın işaretleme SATIR içinde kalmalıdır. Eskiden içerik kalıbı yeni
   // satıra izin veriyordu; kapanmayan bir "**" paragrafları aşıp bloklara
   // bölünüyor, <b> iç içe geçip açık kalıyordu. Açık kalan etiket kendinden
@@ -2270,6 +2278,13 @@ $("media-viewer").addEventListener("click", (e) => { if (e.target.id === "media-
 document.addEventListener("click", async (e) => {
   const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=prompt(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
   const artifact=e.target.closest("[data-artifact-path]");if(artifact){e.preventDefault();openArtifact(artifact.dataset.artifactPath);return;}
+  const pathCode=e.target.closest("code[data-reveal-path]");
+  if(pathCode&&!e.target.closest("a.file-card")){
+    fetch("/api/media/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:pathCode.dataset.revealPath})})
+      .then(async(r)=>{if(!r.ok){const j=await r.json().catch(()=>({}));alert(j.error||"Dosya bulunamadı — taşınmış veya silinmiş olabilir.");}})
+      .catch(()=>alert("Dosya açılamadı."));
+    return;
+  }
   const revealCard=e.target.closest("a.file-card[data-reveal-url]");
   if(revealCard){
     e.preventDefault();

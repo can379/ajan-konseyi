@@ -1419,3 +1419,17 @@ body.split-resizing .split-resizer { pointer-events: auto; }
 .cmd-item.active{background:#262c28;color:#f2f5f3}
 .cmd-item.active small{color:#c2c9c4}
 .cmd-empty{padding:12px;color:#7d857f;font-size:12px}
+
+
+/* ---- Yogunluk secici (davul dugmesi) ---- */
+/* Mod secicinin yanindaki her zaman GORUNUR kucuk secici. Eskiden "Gelismis"
+   satirinin altina gomuluydu ve kullanici bulamiyordu. */
+.intensity-select{appearance:none;-webkit-appearance:none;flex:none;width:auto;min-width:max-content;height:28px;padding:0 22px 0 10px;
+  border:1px solid #3a403c;border-radius:9px;background:#1d211f url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5'><path d='M0 0l4 5 4-5z' fill='%23848d88'/></svg>") no-repeat right 8px center;
+  color:#cdd3cf;font:600 12px/1 inherit;cursor:pointer}
+.intensity-select:hover{border-color:#59665f;color:#eef1ef}
+
+/* ---- Tiklanabilir dosya yollari ---- */
+/* Mesaj icindeki /Users/... gibi kod parcalari Finder'da dosyayi acar. */
+.m-content code[data-reveal-path]{cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px}
+.m-content code[data-reveal-path]:hover{color:#c9bfff;border-color:#59665f}
