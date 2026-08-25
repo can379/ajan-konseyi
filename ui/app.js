@@ -166,6 +166,9 @@ const KIND_TR = {
 function md(src) {
   const blocks = [];
   let t = String(src ?? "");
+  // 0) Makine sozlesmesi jetonlari hicbir yerde ana yazi olamaz (eski kayitli
+  // mesajlar dahil). Icerik zaten adim satirinin detayinda saklidir.
+  t = t.replace(/<<<AJAN_\w+>>>[\s\S]*?(?:<<<END>>>|$)/g, "").trim();
   // 1) Kod bloklarını ayır (içerikleri işlenmesin)
   t = t.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     blocks.push({ lang, code: code.replace(/\n$/, "") });
@@ -356,7 +359,12 @@ function renderLive() {
           // Codex duzeni: akan yanit metni varsa goster; altinda YALNIZ
           // simdiki eylem satiri (tek, soluk). Gecmis adimlar canlida
           // listelenmez — bitince katlanmis satirda dururlar.
-          const akan = String(s.text || "").split("\n")
+          // Makine jetonlari (<<<AJAN_..._ACTION>>>) canlida da gorunmez:
+          // tam bloklar ve akista henuz yarim kalan kuyruk birlikte suzulur.
+          const akan = String(s.text || "")
+            .replace(/<<<AJAN_\w+>>>[\s\S]*?<<<END>>>/g, "")
+            .replace(/<<<[\s\S]*$/, "")
+            .split("\n")
             .filter((ln) => !/^\s*(?:\$|💭)\s/.test(ln)).join("\n").trim();
           const adimlar = liveSteps[a] || [];
           const son = adimlar[adimlar.length - 1];

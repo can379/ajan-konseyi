@@ -33,6 +33,31 @@ const exec = promisify(execFile);
 const BROWSER_ACTION_RE=/<<<AJAN_BROWSER_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 const HOST_ACTION_RE=/<<<AJAN_HOST_ACTION>>>\s*([\s\S]*?)\s*<<<END>>>/;
 export function parseBrowserAction(text){const match=String(text||"").match(BROWSER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!["open","snapshot","navigate","click","type"].includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
+// Makine sozlesmesi jetonlari KULLANICIYA ASLA gosterilmez: Codex'te "Ran
+// page script ›" nasil katlanmis bir satirsa, bizde de eylem adim gunlugune
+// iner; yanit metninden jeton bloklari ayiklanir.
+export function stripActionTokens(text){
+  return String(text||"")
+    .replace(/<<<AJAN_(?:BROWSER|HOST)_ACTION>>>[\s\S]*?<<<END>>>/g,"")
+    .replace(/<<<AJAN_(?:BROWSER|HOST)_ACTION>>>[\s\S]*$/,"")
+    .trim();
+}
+
+// Eylemi Turkce insan cumlesine cevir (adim satirinin basligi).
+export function describeAgentAction(action){
+  const p=action?.payload||{};
+  const kisa=(u)=>{try{const x=new URL(String(u));return x.protocol==="file:"?decodeURIComponent(x.pathname).split("/").pop():x.hostname+(x.pathname!=="/"?x.pathname:"");}catch{return String(u||"").slice(0,60);}};
+  switch(action?.action){
+    case "open": return {kind:"tarayici",title:`${kisa(p.url)} tarayıcıda açıldı`};
+    case "navigate": return {kind:"tarayici",title:`${kisa(p.url)} sayfasına gidildi`};
+    case "snapshot": return {kind:"tarayici",title:"Sayfa incelendi"};
+    case "click": return {kind:"tarayici",title:"Sayfada tıklandı"};
+    case "type": return {kind:"tarayici",title:"Sayfaya metin yazıldı"};
+    case "publish": return {kind:"islem",title:"GitHub'a yayınlandı"};
+    default: return {kind:"islem",title:"Uygulama aracı çalıştı"};
+  }
+}
+
 export function parseHostAction(text){const match=String(text||"").match(HOST_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(value.action!=="publish")return null;return{action:"publish",payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
 export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
 export function reportsBlockedResult(text){return /^\s*(?:#{1,3}\s*)?(?:durum\s*:\s*)?(?:bloke|blocked)\b|hiçbir değişiklik uygulanmadı|değişiklik uygulayamadım/i.test(String(text||""));}
@@ -512,8 +537,23 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
         }
       }
       catch(error){result={error:String(error.message||error)};}
+      // Jeton kullaniciya gorunmez; eylem katlanir bir adim satiri olur.
+      // Ham istek+sonuc detayda saklanir — tiklaninca acilir (Codex'in
+      // "Ran page script ›" davranisi).
+      {
+        const tarif=describeAgentAction(action);
+        stepLog.add(tarif.kind,tarif.title,
+          `istek: ${JSON.stringify(action,null,1).slice(0,1500)}\nsonuç: ${JSON.stringify(result,null,1).slice(0,3000)}`,
+          {status:result&&result.error?"failed":"ok"});
+      }
       const followup=`--- ANA UYGULAMA ARAÇ SONU ---\nİstenen eylem: ${JSON.stringify(action)}\nSonuç: ${JSON.stringify(result)}\n--- SONUÇ BİTTİ ---\nKullanıcının görevini sürdür. Başka bir araç eylemi gerekiyorsa ilgili ACTION biçimini döndür; iş tamamlandıysa normal nihai yanıtını ver.`;
       res=await provider.send(opts.fresh?`${effectivePrompt}\n\n${followup}`:followup,{...providerOpts,fresh:opts.fresh});
+    }
+    // Nihai yanitta jeton kalintisi kalmasin: 12 tur biter ya da model jetonun
+    // yanina duz metin eklerse ayikla (adim satiri zaten kaydedildi).
+    if (res && typeof res.text === "string" && /<<<AJAN_(?:BROWSER|HOST)_ACTION>>>/.test(res.text)) {
+      const temiz = stripActionTokens(res.text);
+      res = { ...res, text: temiz || "Tarayıcı eylemi yürütüldü; ayrıntı adım satırında." };
     }
     if (identityQuestion && res.ok && !identityResponseMatchesProvider(member, res.text)) {
       this.log(`kimlik yanıtı düzeltildi: ${member.provider} -> ${String(res.text || "").slice(0, 160)}`);
