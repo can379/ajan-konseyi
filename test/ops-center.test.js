@@ -97,3 +97,22 @@ test("bilgisayar koprusu sinirli bekleme destekler", async () => {
   assert.ok(uzun.waitedSeconds <= 10, "en fazla 10 saniye beklemeli");
   assert.match(describeComputerAction({ action: "wait", payload: { seconds: 2 } }).title, /saniye beklendi/);
 });
+
+// ---- Ham JSON sizintisi (canli gozlem: sohbete yazi olarak dustu) ----
+test("uye jetonu unutup duz JSON dondurse de eylem islenir, ekrana sizmaz", async () => {
+  const { parseComputerAction, stripActionTokens } = await import("../src/orchestrator.js");
+  const duz = '{"action":"click","payload":{"x":568,"y":605}}';
+  assert.deepEqual(parseComputerAction(duz), { action: "click", payload: { x: 568, y: 605 } });
+  assert.equal(stripActionTokens(duz), "", "islenmeden kalirsa bile kullaniciya gosterilmemeli");
+  // Yaziya gomulu JSON eylem SAYILMAZ; yoksa normal cumleler eyleme donerdi.
+  assert.equal(parseComputerAction('Sonuç: {"action":"click"} diye yazdım'), null);
+  assert.equal(parseComputerAction("Ekranı inceledim."), null);
+  assert.equal(stripActionTokens("İşlem tamam."), "İşlem tamam.", "normal metin korunmali");
+  // Tanimsiz eylem adi kabul edilmez.
+  assert.equal(parseComputerAction('{"action":"rm_rf","payload":{}}'), null);
+});
+
+test("operasyon merkezi araclar menusunden acilabilir", () => {
+  const html = oku("ui/index.html");
+  assert.match(html, /data-open-tool="ops"/, "menude giris olmali (sekme satiri varsayilan gizli)");
+});

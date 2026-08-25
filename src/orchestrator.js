@@ -41,13 +41,34 @@ export function stripActionTokens(text){
   return String(text||"")
     .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU|BILGISAYAR)>>>[\s\S]*?<<<END>>>/g,"")
     .replace(/<<<AJAN_(?:BROWSER_ACTION|HOST_ACTION|SORU|BILGISAYAR)>>>[\s\S]*$/,"")
+    // Jetonsuz kalan ham eylem JSON'u da yazi degildir: kullanicinin ekranina
+    // {"action":"click","payload":{...}} diye dusuyordu (canli gozlem).
+    .replace(/^\s*\{\s*"action"\s*:\s*"[a-z_]+"[\s\S]*\}\s*$/,"")
     .trim();
 }
 
 // Bilgisayar kullanimi jetonu: uye ekrani gorup fare/klavye kullanmak
 // istediginde bunu dondurur. Tur basina BIR KEZ kullanici onayi alinir.
 const COMPUTER_ACTION_RE=/<<<AJAN_BILGISAYAR>>>\s*([\s\S]*?)\s*<<<END>>>/;
-export function parseComputerAction(text){const match=String(text||"").match(COMPUTER_ACTION_RE);if(!match)return null;try{const value=JSON.parse(match[1]);if(!COMPUTER_ACTIONS.includes(value.action))return null;return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};}catch{return null;}}
+// Jetonlu bicim asildir; ancak uyeler bazen jetonu unutup DUZ JSON
+// donduruyor ({"action":"click",...}). Bu durumda eylem islenmeyip ham JSON
+// kullanicinin ekranina yazi olarak dusuyordu (canli gozlem). Jetonsuz da
+// kabul et: yalniz yanitin TAMAMI tek bir eylem nesnesiyse.
+const BARE_ACTION_RE=/^\s*(\{[\s\S]*\})\s*$/;
+function eylemNesnesi(ham){
+  try{
+    const value=JSON.parse(ham);
+    if(!value||typeof value!=="object"||!COMPUTER_ACTIONS.includes(value.action))return null;
+    return{action:value.action,payload:value.payload&&typeof value.payload==="object"?value.payload:{}};
+  }catch{return null;}
+}
+export function parseComputerAction(text){
+  const metin=String(text||"");
+  const match=metin.match(COMPUTER_ACTION_RE);
+  if(match)return eylemNesnesi(match[1]);
+  const duz=metin.match(BARE_ACTION_RE);
+  return duz?eylemNesnesi(duz[1]):null;
+}
 
 // Eylemi Turkce insan cumlesine cevir (adim satirinin basligi).
 export function describeAgentAction(action){
