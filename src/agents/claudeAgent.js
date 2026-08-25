@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { BaseAgent } from "./base.js";
-import { kindForTool } from "../steps.js";
+import { kindForTool, stepFromCommand } from "../steps.js";
 import { cleanEnv } from "../util.js";
 import { CLAUDE_EFFORT, CLAUDE_EFFORT_TOKENS } from "../models.js";
 
@@ -74,8 +74,14 @@ export class ClaudeAgent extends BaseAgent {
         for (const block of ev.message.content) {
           if (block.type !== "tool_use") continue;
           const input = block.input || {};
-          const title = input.file_path || input.path || input.command || input.pattern || input.query || input.url || block.name;
-          opts.steps?.add(kindForTool(block.name), title, JSON.stringify(input).slice(0, 1500));
+          if (/^bash$/i.test(block.name) && input.command) {
+            const insan = stepFromCommand(input.command);
+            opts.steps?.add(insan.kind, insan.title, `$ ${input.command}`);
+          } else {
+            const ham = input.file_path || input.path || input.pattern || input.query || input.url || "";
+            const kisa = String(ham).split("/").pop() || block.name;
+            opts.steps?.add(kindForTool(block.name), kisa, JSON.stringify(input).slice(0, 1500));
+          }
         }
         const text = ev.message.content.filter((c) => c.type === "text").map((c) => c.text).join("");
         if (text) { live = text; if (!opts.silent) this.progress(opts.label || "", live, opts.memberId); }

@@ -5,7 +5,7 @@ import { BaseAgent } from "./base.js";
 import { cleanEnv, uid } from "../util.js";
 import { promisify } from "node:util";
 import { CODEX_EFFORT } from "../models.js";
-import { kindForTool } from "../steps.js";
+import { kindForTool, stepFromCommand } from "../steps.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const run = promisify(execFile);
@@ -127,9 +127,15 @@ export class CodexAgent extends BaseAgent {
           live += (live ? "\n" : "") + (ev.item.text || "");
         } else if (ev.item.type === "command_execution") {
           live += `\n$ ${ev.item.command || ""}`;
-          steps?.add("calistirdi", ev.item.command || "komut",
-            String(ev.item.aggregated_output || ev.item.output || ""),
-            { status: Number(ev.item.exit_code) ? "failed" : "ok" });
+          {
+            // Ham komut basliga cikmaz: anlamina gore insan cumlesi olur,
+            // ham komut + cikti detayda saklanir (tiklayinca gorunur).
+            const insan = stepFromCommand(ev.item.command || "komut");
+            steps?.add(insan.kind, insan.title,
+              `$ ${ev.item.command || ""}
+${String(ev.item.aggregated_output || ev.item.output || "")}`,
+              { status: Number(ev.item.exit_code) ? "failed" : "ok" });
+          }
         } else if (ev.item.type === "file_change") {
           for (const change of ev.item.changes || [{ path: ev.item.path }]) {
             steps?.add("yazdi", change?.path || "dosya", String(change?.kind || ""));

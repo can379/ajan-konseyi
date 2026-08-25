@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { BaseAgent } from "./base.js";
-import { kindForTool } from "../steps.js";
+import { kindForTool, stepFromCommand } from "../steps.js";
 import { cleanEnv } from "../util.js";
 import { ANTIGRAVITY_EFFORT } from "../models.js";
 
@@ -97,9 +97,11 @@ export class AntigravityAgent extends BaseAgent {
         const u = ev.step_update;
         const name = u.tool_name || u.tool_info?.name || "araç";
         const params = u.tool_info?.parameters || {};
-        const title = params.CommandLine || params.AbsolutePath || params.Query || params.SearchDirectory || name;
         const key = `arac-${u.step_index}`;
-        if (u.state === "ACTIVE") opts.steps?.open(key, kindForTool(name), title);
+        let tur = kindForTool(name), baslik;
+        if (params.CommandLine) ({ kind: tur, title: baslik } = stepFromCommand(params.CommandLine));
+        else baslik = String(params.AbsolutePath || params.Query || params.SearchDirectory || name).split("/").pop();
+        if (u.state === "ACTIVE") opts.steps?.open(key, tur, baslik);
         else if (u.state === "DONE") opts.steps?.close(key, { detail: String(u.tool_info?.output || "").slice(0, 4000) });
       }
       if (ev.event === "step_update" && ev.step_update?.text_delta) {

@@ -942,7 +942,7 @@ function stepRow(step, { live = false } = {}) {
   const icon = STEP_ICONS[step.kind] || "•";
   const running = step.status === "running";
   const cls = `step-row${running ? " running" : ""}${step.status === "failed" ? " failed" : ""}`;
-  const title = `<span class="step-ico">${icon}</span><span class="step-title">${esc(step.title)}</span>` +
+  const title = `<span class="step-ico">${icon}</span><span class="step-title">${esc(step.title)}${step.count > 1 ? ` ×${step.count}` : ""}</span>` +
     (step.durationMs ? `<span class="step-dur">${(step.durationMs / 1000).toFixed(step.durationMs < 10000 ? 1 : 0)}s</span>` : "") +
     (step.status === "failed" ? '<span class="step-fail">başarısız</span>' : "");
   if (live || !String(step.detail || "").trim()) return `<div class="${cls}">${title}</div>`;

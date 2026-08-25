@@ -54,6 +54,57 @@ const TOOL_PATTERNS = [
   [/^(?:task|agent|subagent|dispatch|delegate)/i, "devretti"],
 ];
 
+// ---- Kabuk komutunu insan cumlesine cevirme ----
+// ChatGPT icindeki Codex ham komutu ASLA baslik yapmaz: "/bin/zsh -lc
+// \"nl -ba index.html | sed ...\"" yerine "index.html okundu" gorunur; ham
+// komut ancak tiklaninca acilir. Ayni kurali uyguluyoruz: sarmalayici
+// atilir, komut anlamina gore siniflanir, hedef dosya basliga cikar.
+const READ_CMDS = /^(?:nl|cat|head|tail|less|more|wc|sed|awk|file|stat|open)\b/;
+const LIST_CMDS = /^(?:ls|find|tree|pwd|du|df)\b|^rg\s+--files/;
+const SEARCH_CMDS = /^(?:rg|grep|ag|ack)\b/;
+// printf/echo tek basina CIKTI komutudur, yazma degil; ancak ">" ile bir
+// dosyaya yonlendirilirse yazmadir.
+const WRITE_CMDS = /^(?:apply_patch|tee|touch|mkdir|mv|cp)\b|^git\s+apply\b|>\s*[\w./~-]/;
+
+function stripShellWrapper(cmd) {
+  let inner = String(cmd || "").trim();
+  const wrap = inner.match(/^(?:\/bin\/)?(?:ba|z)?sh\s+-l?c\s+(["'])([\s\S]*)\1$/);
+  if (wrap) inner = wrap[2];
+  return inner.trim();
+}
+
+// Komuttaki dosya hedeflerini yakala (bayrak/desen degil, dosya adi gibi
+// gorunen belirtecler).
+function commandTargets(inner) {
+  const tokens = inner.split(/\s+/).filter((t) =>
+    /^[\w./~-]+\.[a-z]{1,6}$/i.test(t) && !t.startsWith("-"));
+  return [...new Set(tokens.map((t) => t.split("/").pop()))].slice(0, 3);
+}
+
+export function stepFromCommand(command) {
+  const inner = stripShellWrapper(command);
+  const first = inner.split(/\s+/)[0] || "";
+  const targets = commandTargets(inner);
+  const hedef = targets.join(", ");
+  // Boru hattindaki TUM parcalara bak: "nl x | sed" okumadir; icinde yazma
+  // varsa yazma kazanir.
+  const parts = inner.split(/\s*(?:\|\||&&|\||;)\s*/).map((x) => x.trim());
+  const has = (re) => parts.some((x) => re.test(x));
+  if (has(WRITE_CMDS)) return { kind: "yazdi", title: hedef ? `${hedef} düzenlendi` : "dosya düzenlendi" };
+  if (has(SEARCH_CMDS) && !LIST_CMDS.test(inner)) {
+    const desen = inner.match(/(?:rg|grep|ag|ack)\s+(?:-\S+\s+)*["']?([^"'|;&]{2,40})/);
+    return { kind: "aradi", title: hedef ? `${hedef} içinde arandı` : `arandı: ${(desen?.[1] || "").trim().slice(0, 40)}` };
+  }
+  if (has(READ_CMDS) || LIST_CMDS.test(inner)) {
+    if (hedef) return { kind: "okudu", title: `${hedef} okundu` };
+    return { kind: "okudu", title: LIST_CMDS.test(inner) ? "dosyalar listelendi" : "dosya okundu" };
+  }
+  // Taninmis calistirma komutlari adiyla kalir (npm test gibi); gerisi kisa
+  // temiz komut basligi alir.
+  const kisa = inner.replace(/\s+/g, " ").slice(0, 60);
+  return { kind: "calistirdi", title: kisa || "komut" };
+}
+
 export function kindForTool(name) {
   const value = String(name || "");
   for (const [pattern, kind] of TOOL_PATTERNS) if (pattern.test(value)) return kind;
@@ -84,6 +135,21 @@ export class StepLog {
 
   add(kind, title, detail = "", { status = "ok" } = {}) {
     if (this.steps.length >= MAX_STEPS) return null;
+    // Codex tarzi birlesme: art arda gelen ayni-tur okuma/arama patlamalari
+    // tek satira iner ("index.html okundu ×3"). Hedefler farkliysa baslik
+    // "Dosyaları okudu"ya genellenir; ham komutlar detayda birikir.
+    const last = this.steps[this.steps.length - 1];
+    const mergeable = ["okudu", "aradi"].includes(normalizeKind(kind));
+    if (last && mergeable && last.kind === normalizeKind(kind) && last.status !== "running" && status === "ok") {
+      last.count = (last.count || 1) + 1;
+      const t = clean(title, MAX_TITLE);
+      if (t && last.title !== t) {
+        last.title = last.kind === "okudu" ? "Dosyaları okudu" : "Dosyalarda arandı";
+      }
+      if (detail) last.detail = `${last.detail ? last.detail + "\n---\n" : ""}${String(detail).slice(0, 2000)}`.slice(0, MAX_DETAIL);
+      this._emit();
+      return last;
+    }
     const step = {
       id: uid("adim-"),
       kind: normalizeKind(kind),

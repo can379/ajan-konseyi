@@ -75,8 +75,8 @@ test("bos gunluk finish'te null doner (mesaja gereksiz blok eklenmez)", () => {
 test("adaptorler ve orkestrator adim gunlugune bagli", async () => {
   const fs = await import("node:fs");
   const oku = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
-  assert.match(oku("src/agents/codexAgent.js"), /steps\?\.add\("calistirdi"/);
-  assert.match(oku("src/agents/claudeAgent.js"), /kindForTool\(block\.name\)/);
+  assert.match(oku("src/agents/codexAgent.js"), /stepFromCommand\(ev\.item\.command/, "codex ham komutu insanlastirmali");
+  assert.match(oku("src/agents/claudeAgent.js"), /stepFromCommand\(input\.command\)/, "claude Bash komutunu insanlastirmali");
   assert.match(oku("src/agents/antigravityAgent.js"), /opts\.steps\?\.open/);
   assert.match(oku("src/agents/openRouterAgent.js"), /opts\.steps\?\.open\("dusunme"/);
   const orch = oku("src/orchestrator.js");
@@ -85,4 +85,38 @@ test("adaptorler ve orkestrator adim gunlugune bagli", async () => {
   assert.match(oku("src/store.js"), /streamSteps\(agent, steps\)/);
   assert.match(oku("ui/app.js"), /stepsBlockHTML/, "arayuz katlanir blogu cizmeli");
   assert.match(oku("ui/app.js"), /liveSteps\[ev\.agent\]/, "arayuz canli adimlari almali");
+});
+
+// ---- Insanlastirma (Codex'in ChatGPT gorunumu birebir gozlemlenerek) ----
+
+test("ham kabuk komutlari insan cumlesine cevrilir", async () => {
+  const { stepFromCommand } = await import("../src/steps.js");
+  const durumlar = [
+    [`/bin/zsh -lc "nl -ba index.html | sed -n '95,135p'"`, "okudu", "index.html okundu"],
+    [`/bin/zsh -lc 'rg -n "function yedekle" index.html'`, "aradi", "index.html içinde arandı"],
+    [`sed -n '25,30p' index.html`, "okudu", "index.html okundu"],
+    [`npm test`, "calistirdi", "npm test"],
+    [`git apply d.patch`, "yazdi", "d.patch düzenlendi"],
+    [`rg --files -g '*.js'`, "okudu", "dosyalar listelendi"],
+  ];
+  for (const [komut, tur, baslik] of durumlar) {
+    const r = stepFromCommand(komut);
+    assert.equal(r.kind, tur, komut);
+    assert.equal(r.title, baslik, komut);
+  }
+});
+
+test("okuma patlamasi tek satira birlesir", () => {
+  const log = new StepLog();
+  log.add("okudu", "index.html okundu", "$ sed 1");
+  log.add("okudu", "index.html okundu", "$ sed 2");
+  log.add("okudu", "app.js okundu", "$ sed 3");
+  log.add("calistirdi", "npm test");
+  log.add("okudu", "style.css okundu");
+  const data = log.finish();
+  assert.equal(data.steps.length, 3, "okuma patlamasi birlesmeli");
+  assert.equal(data.steps[0].count, 3);
+  assert.equal(data.steps[0].title, "Dosyaları okudu", "farkli hedefler genellenmeli");
+  assert.match(data.steps[0].detail, /sed 1[\s\S]*sed 2/, "ham komutlar detayda birikmeli");
+  assert.equal(data.steps[1].title, "npm test", "farkli tur birlesmez");
 });
