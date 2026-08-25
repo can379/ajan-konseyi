@@ -11,7 +11,12 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export const BACKUP_SETS = ["uploads", "generated", "runs", "memory", "checkpoints"];
+// Kontrol noktalari BILEREK disaridadir: projenin tam anlik goruntusudur
+// (olculdu: tek nokta ~5 GB), yerelde en yeni 3 taneye budanir ve projenin
+// kendisinden yeniden uretilebilir. Buluta tasinirsa her yeni noktada
+// gigabaytlar yeniden yuklenir. Yedegin amaci geri getirilemez veridir:
+// fotograf/video (uploads, generated), sohbetler (runs), hafiza, ayarlar.
+export const BACKUP_SETS = ["uploads", "generated", "runs", "memory"];
 export const BACKUP_FILES = ["config.json", "workspace-state.json"];
 
 // Google Drive masaustu uygulamasinin esitleme koku (kuruluysa).

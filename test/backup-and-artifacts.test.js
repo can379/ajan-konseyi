@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runBackup, mirrorTree, detectGoogleDrive } from "../src/backup.js";
+import { runBackup, mirrorTree, detectGoogleDrive, BACKUP_SETS } from "../src/backup.js";
 import { collectGeneratedAssets } from "../src/media.js";
 
 const tmp = (name) => fs.mkdtempSync(path.join(os.tmpdir(), name));
@@ -132,4 +132,20 @@ test("backup uclari: yapilandir, calistir, durumdan sonucu oku", async () => {
     server.kill("SIGKILL");
     fs.rmSync(data, { recursive: true, force: true }); fs.rmSync(hedef, { recursive: true, force: true });
   }
+});
+
+// Kontrol noktalari projenin tam kopyasidir ve yerelde budanir; buluta
+// tasinmasi her turda gigabaytlarca gereksiz yukleme demektir.
+test("kontrol noktalari yedege dahil edilmez", () => {
+  assert.ok(!BACKUP_SETS.includes("checkpoints"), "checkpoints yedeklenmemeli");
+  for (const zorunlu of ["uploads", "generated", "runs", "memory"]) {
+    assert.ok(BACKUP_SETS.includes(zorunlu), `eksik kume: ${zorunlu}`);
+  }
+  const data = tmp("veri-"), hedef = tmp("hedef-");
+  fs.mkdirSync(path.join(data, "checkpoints", "p-1"), { recursive: true });
+  fs.writeFileSync(path.join(data, "checkpoints", "p-1", "dev.bin"), "x".repeat(1000));
+  const r = runBackup(data, hedef);
+  assert.equal(r.copied, 0, "kontrol noktasi kopyalanmamali");
+  assert.ok(!fs.existsSync(path.join(hedef, "AjanKonseyi-Yedek", "checkpoints")));
+  fs.rmSync(data, { recursive: true, force: true }); fs.rmSync(hedef, { recursive: true, force: true });
 });
