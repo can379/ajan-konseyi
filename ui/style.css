@@ -1608,9 +1608,6 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 #edit-banner[hidden]{display:none}
 #edit-banner button{margin-left:auto;background:none;border:none;color:inherit;cursor:pointer;font-size:14px}
 
-/* ---- Mikrofon ---- */
-#btn-mic.recording{color:#ff6b5e;animation:pulse 1.2s infinite}
-
 /* ---- Zamanlanmis gorevler ---- */
 .schedule-panel{margin:14px 0;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface2)}
 #schedule-form{display:grid;grid-template-columns:1fr auto;gap:8px;margin:10px 0}
@@ -1623,3 +1620,22 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .schedule-row small{display:block;color:var(--dim2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .schedule-row button{background:none;border:none;color:var(--dim2);cursor:pointer;font-size:14px}
 .schedule-row button:hover{color:#eef1ef}
+
+/* ---- Mikrofon dugmesi: durum GORULEBILIR olmali ---- */
+/* Bosta: sade cizgi ikon. Kayitta: kirmizi hale nefes alir, ikonun yanindaki
+   cubuklar KONUSMA SESINE gore oynar (--ses degeri app.js'ten canli gelir),
+   yani mikrofonun gercekten seni duydugu ekrandan bellidir. */
+.mic-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;overflow:visible}
+.mic-glyph{position:relative;z-index:2;display:block}
+.mic-halo{position:absolute;inset:0;pointer-events:none;opacity:0}
+.mic-halo{border-radius:50%;background:radial-gradient(circle,#ff5a4d55,transparent 70%);z-index:1}
+.mic-btn.recording{color:#ff6b5e;border-color:#ff5a4d66}
+/* Hale KONUSMA SESIYLE buyuyup kuculur; olcek JS'ten satir ici verilir
+   (calc+var birlesimi guvenilir uygulanmadi, canli olculdu). */
+.mic-btn.recording .mic-halo{opacity:1;animation:mic-nefes 1.5s ease-in-out infinite}
+@keyframes mic-nefes{0%,100%{box-shadow:0 0 0 0 #ff5a4d44}50%{box-shadow:0 0 0 7px #ff5a4d00}}
+/* Cozumleme: ikon soner, donen halka cikar. */
+.mic-btn.thinking{color:#9aa39d}
+.mic-btn.thinking .mic-halo{opacity:1;background:none;border:1.5px solid #4a5049;border-top-color:#c8cec9;border-radius:50%;animation:mic-donuyor .8s linear infinite}
+@keyframes mic-donuyor{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion: reduce){.mic-btn.recording .mic-halo,.mic-btn.thinking .mic-halo{animation:none}}

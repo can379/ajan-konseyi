@@ -164,3 +164,17 @@ test("ekran isinde adim butcesi buyur (12 adim ~6 tiklama ediyordu)", () => {
   assert.match(orch, /adım hakkı doldu/, "butce dolunca kullaniciya dogru sebep soylenmeli");
   assert.match(orch, /her tıklamadan ÖNCE görüntüde hedefi gerçekten gör/, "korlemesine tiklama yonergesi olmali");
 });
+
+test("mikrofon dugmesi cizgi ikon + kayit animasyonu tasir", () => {
+  const html = oku("ui/index.html");
+  assert.ok(!html.includes("🎤"), "emoji yerine cizim ikon olmali");
+  assert.match(html, /svg class="mic-glyph"/, "mikrofon ikonu SVG olmali");
+  assert.match(html, /span class="mic-halo"/, "kayit halesi olmali");
+  const css = oku("ui/style.css");
+  assert.match(css, /\.mic-btn\.recording\{color:#ff6b5e/, "kayitta kirmizi olmali");
+  assert.match(css, /mic-nefes/, "hale nefes animasyonu olmali");
+  assert.match(css, /mic-donuyor/, "cozumleme sirasinda donen halka olmali");
+  const app = oku("ui/app.js");
+  assert.match(app, /halo\.style\.transform = `scale/, "hale konusma sesiyle olceklenmeli");
+  assert.match(app, /Math\.sqrt\(kare/, "ses seviyesi olculmeli");
+});

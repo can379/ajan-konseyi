@@ -2140,7 +2140,23 @@ async function micBaslat() {
   const kaynak = ctx.createMediaStreamSource(akis);
   const isleyici = ctx.createScriptProcessor(4096, 1, 1);
   const parcalar = [];
-  isleyici.onaudioprocess = (e) => parcalar.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  // Ses seviyesi dugmeye canli aktarilir: kullanici mikrofonun kendisini
+  // GERCEKTEN duydugunu gorsun (sessizken cubuklar durur, konusunca oynar).
+  let seviye = 0;
+  const halo = btn.querySelector(".mic-halo");
+  isleyici.onaudioprocess = (e) => {
+    const veri = e.inputBuffer.getChannelData(0);
+    parcalar.push(new Float32Array(veri));
+    let kare = 0;
+    for (let i = 0; i < veri.length; i += 8) kare += veri[i] * veri[i];
+    const anlik = Math.min(1, Math.sqrt(kare / (veri.length / 8)) * 4);
+    // Yumusatma: cubuklar titremesin, konusma temposunda insin ciksin.
+    seviye = anlik > seviye ? anlik : seviye * 0.75 + anlik * 0.25;
+    btn.style.setProperty("--ses", seviye.toFixed(3));
+    // Cubuk yukseklikleri: ortadaki en cok, kenarlar daha az oynar.
+    // Hale sesle birlikte buyur: konusurken belirgin, sessizken sakin.
+    if (halo) halo.style.transform = `scale(${(1 + seviye * 0.9).toFixed(2)})`;
+  };
   kaynak.connect(isleyici); isleyici.connect(ctx.destination);
   btn.classList.add("recording"); btn.title = "Kaydı bitir ve yazıya dök";
   micState = {
@@ -2150,7 +2166,9 @@ async function micBaslat() {
       akis.getTracks().forEach((t) => t.stop());
       const wav = pcmToWav(parcalar, ctx.sampleRate);
       await ctx.close();
-      btn.classList.remove("recording"); btn.classList.add("thinking"); btn.title = "Yazıya dökülüyor…";
+      btn.classList.remove("recording"); btn.style.removeProperty("--ses");
+      if (halo) halo.style.transform = "";
+      btn.classList.add("thinking"); btn.title = "Yazıya dökülüyor…";
       try {
         const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
         const d = await r.json();
