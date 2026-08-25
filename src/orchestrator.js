@@ -404,14 +404,19 @@ export class Orchestrator {
     this.store.setAgentStatus(member.id, "busy", opts.label || "");
     // Eski yanlış yönlendirmeler oturum geçmişine "Ben Codex'im" yazmış olabilir.
     // Kimlik doğrulamasını kirlenmiş geçmişten tamamen ayır.
-    const history = opts.isolated || identityQuestion ? "" : this.sharedConversationContext(run);
+    // opts.lean: DAR BAGLAM. Denetci gibi tek islik cagrilarda ortak gecmis,
+    // yetenek sozlesmesi ve tarayici/yayin yardimlari isteme girmez; cwd ve
+    // dosya araclari calismaya devam eder (denetci iddialari koddan dogrular).
+    // isolated'dan farki: izolasyon araclari da kapatir, lean yalniz istemi
+    // inceltir. Olculen sorun: 5 KB'lik dosyanin denetimine 73k girdi token.
+    const history = opts.isolated || opts.lean || identityQuestion ? "" : this.sharedConversationContext(run);
     const images = opts.isolated ? [] : this.referencedImages(run, prompt, opts.images || []);
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları proje bağlıysa PROJENİN İÇİNE (tercihen <proje>/cikti/ altına), proje yoksa ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
 Çalışırken yalnız anlamlı aşamalarda kısa durum bildir; her araç çağrısını, düşünceyi veya ham JSON'u kullanıcıya dökme. Nihai yanıtta sonuçla başla, yapılanları kısa ve doğal biçimde özetle, doğrulamayı belirt ve gereksiz başlık/listeler kullanma. Ajan Konseyi arayüzündeki üslup tüm sağlayıcılarda aynı, sade ve profesyonel olmalıdır.
 --- SÖZLEŞME SONU ---`;
-    const browserToken=opts.isolated?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
+    const browserToken=opts.isolated||opts.lean?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
     const browserHelp=browserToken?`\n\n--- UYGULAMA TARAYICI ARACI ---\nKullanıcı tarayıcıda açma, inceleme, tıklama veya yazma istediğinde curl, localhost, MCP ya da kendi browser aracını kullanma. Bunun yerine yanıtının TAMAMINI şu makine-okur biçiminde döndür:\n<<<AJAN_BROWSER_ACTION>>>{"action":"snapshot","payload":{}}<<<END>>>\nEylemler: open {url}, snapshot {}, navigate {url}, click {elementId}, type {elementId,text}. Açık sekmeyi incelemek için önce snapshot; yeni site için open kullan. Araç sonucu sana otomatik geri verilecek ve aynı işi sürdürmen istenecek. Normal alanlarda işlem yap; e-posta/kullanıcı adı, parola, OTP ve ödeme alanlarını kullanıcı doldurur. Bu köprü Codex, Claude ve Antigravity için aynıdır.\n--- TARAYICI ARACI SONU ---`:"";
     const hostHelp=`\n\n--- ANA UYGULAMA YAYIN ARACI ---\nKullanıcı açıkça seçili projenin son sürümünü GitHub'a yayınlamanı veya push etmeni isterse sağlayıcı terminalinden git/ssh/gh/curl kullanma ve .command dosyası hazırlama. Yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_HOST_ACTION>>>{"action":"publish","payload":{}}<<<END>>>\nAna uygulama açık dalı kayıtlı deploy key ile yayınlar; force-push yapmaz ve sonucu sana geri verir.\n--- YAYIN ARACI SONU ---`;
     const identityContract = identityQuestion
@@ -424,7 +429,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const historyRule = history
       ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
       : "";
-    let effectivePrompt = `${capabilityContract}\n\n${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     if (identityQuestion) effectivePrompt += identityContract;
     if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
     if (route?.mode === "shared" && !opts.isolated) {
@@ -1357,6 +1362,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       `İKİLİ İNCELEME. "${producer.name}" üyesinin kullanıcıya verdiği yanıtı bağımsız denetle.\n\n` +
       `Kullanıcının isteği:\n${truncate(text, 2000)}\n\n` +
       `Denetlenecek yanıt:\n${truncate(answer, 6000)}\n\n` +
+      `TUTUMLU ÇALIŞ: yalnız iddiaları doğrulamak için GEREKEN dosyaları oku (genelde 1-3 dosya); proje taramasi yapma, web'e çıkma. ` +
       `Yalnız SONUCU DEĞİŞTİRECEK sorunları bildir (hata, eksik, yanlış varsayım, risk). ` +
       `Üslup/biçim tercihi bildirme. Kod veya dosya hakkında iddia üretmeden önce güncel hâlini oku ve dosya:satır kanıtı ver.\n` +
       `İş ikili incelemenin taşıyabileceğinden GENİŞ veya RİSKLİYSE (çok yönlü analiz, mimari karar, geniş kod değişikliği) "buyut":true döndür; konsey devralır.\n` +
@@ -1364,6 +1370,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme","buyut":false}`;
     const res = await this.callMember(run, reviewer, reviewPrompt, {
       label: "ikili inceleme", shouldStop: () => run.stopRequested,
+      // Denetci tek islik ve kendi basina yeterli bir cagridir: dar baglam +
+      // taze oturum. Uzun sohbetlerde oturum devami her turda eski baglami
+      // yeniden tasiyordu; inceleme icin buna gerek yok.
+      lean: true, fresh: true,
     });
     if (!res.ok || run.stopRequested) return;
 
