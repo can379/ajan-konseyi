@@ -22,6 +22,7 @@ import { analyzeImagesLocally } from "./localVision.js";
 import { bridgePrompt, connectorAccessMode, connectorRoute, CONNECTORS } from "./connectorBridge.js";
 import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
 import { StepLog } from "./steps.js";
+import { numstatSnapshot, diffDelta } from "./diffSummary.js";
 import { normalizeTaskContract } from "./taskContract.js";
 import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
 import { assertEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
@@ -79,6 +80,12 @@ export function applyIntensity(run) {
 export function shouldEscalatePair(verdict) {
   return verdict?.buyut === true;
 }
+
+// Codex tarzi yanit sozlesmesi (ChatGPT icindeki Codex canli gozlemlenerek
+// cikarildi): kod isinin nihai yaniti kisa ve taranabilir olur — dosya
+// baglantili tek cumlelik baslik, 3-6 madde, sonda dogrulama maddesi.
+// Serbest sohbet yanitlarina uygulanmaz.
+export const CODEX_STYLE_CONTRACT = `\n\n--- YANIT BİÇİMİ ---\nNihai yanıtını şu biçimde ver:\n1) İlk satır tek cümle: hangi dosya(lar) güncellendi — örn. "index.html güncellendi."\n2) Ardından 3-6 kısa madde; her madde TEK özellik/karar, kullanıcı diliyle (komut adı, sed/grep gibi teknik ayrıntı YOK). Önemli sayı ve durumları **kalın** yaz.\n3) Son madde doğrulamayı belirtsin (çalıştırılan test/sözdizimi kontrolü ve sonucu).\nUzun paragraf yazma; başlık (#) kullanma.\n--- BİÇİM SONU ---`;
 
 export function resolveTurnRoute({ mode = "auto", forced = null, requestedMemberId = null, routed = null } = {}) {
   const explicitMode = ["discussion", "split", "code"].includes(mode) ? mode : null;
@@ -431,6 +438,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
       : "";
     let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    if (opts.style === "codex" && !opts.lean && !opts.isolated) effectivePrompt += CODEX_STYLE_CONTRACT;
     if (identityQuestion) effectivePrompt += identityContract;
     if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
     if (route?.mode === "shared" && !opts.isolated) {
@@ -1247,9 +1255,14 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       // nokta birakilir (shouldAutoCheckpoint araligi zaten kisitlar).
       if (mode === "code" && route.approach !== "council") await this.autoCheckpoint(run, { force: true });
 
+      // Kod isinde tur basinda numstat anlik goruntusu alinir; tur sonunda
+      // fark "N dosya değiştirildi +X −Y" karti olarak son mesaja islenir
+      // (Codex'in ChatGPT gorunumundeki diff kartinin karsiligi).
+      const diffBase = mode === "code" && run.projectDir ? await numstatSnapshot(run.projectDir) : null;
+      const responseStyle = mode === "code" ? "codex" : null;
       if (route.approach === "quick") {
         const member = avail.find((m) => m.id === route.member_id) || avail[0];
-        await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit });
+        await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit, style: responseStyle });
         // Tur ici tirmanma: uye isi uygulayamadan bloke bildirdiyse tur
         // sessizce "bitti" sayilmaz; baska bir uye uretici olur, ikili yol
         // devreye girer.
@@ -1267,8 +1280,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         const reviewer = avail.find((m) => m.id === route.reviewer_id && m.id !== producer.id)
           || avail.find((m) => m.id !== producer.id);
         let pairOut = null;
-        if (!reviewer) await this.quickReply(run, producer, text, attachments, { allowFallback: !route.explicit });
-        else pairOut = await this.pairReply(run, producer, reviewer, text, attachments);
+        if (!reviewer) await this.quickReply(run, producer, text, attachments, { allowFallback: !route.explicit, style: responseStyle });
+        else pairOut = await this.pairReply(run, producer, reviewer, text, attachments, { style: responseStyle });
         // Tur ici tirmanma: denetci isin ikiliyi astigini bildirirse ayni
         // istek tam konseyle yeniden ele alinir; kullanicinin sectigi mod
         // korunur.
@@ -1276,6 +1289,14 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           S.addMessage(run, { from: "sistem", kind: "info",
             content: `⤴ Konseye genişletildi: ${pairOut.reason || "iş ikili incelemeyi aşıyor"}` });
           route = { approach: "council", mode: ["discussion", "split", "code"].includes(mode) ? mode : (routed?.mode || "discussion") };
+        }
+      }
+      if (diffBase && route.approach !== "council" && !run.stopRequested) {
+        const after = await numstatSnapshot(run.projectDir);
+        const delta = diffDelta(diffBase, after);
+        if (delta) {
+          const sonMesaj = [...run.messages].reverse().find((m) => m.kind === "message" && m.from !== "kullanici" && m.from !== "sistem");
+          if (sonMesaj) { sonMesaj.diff = delta; S.updateRun(run); }
         }
       }
       if (route.approach === "council") {
@@ -1296,7 +1317,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
   }
 
-  async quickReply(run, member, text, attachments, { allowFallback = true } = {}) {
+  async quickReply(run, member, text, attachments, { allowFallback = true, style = null } = {}) {
     const S = this.store;
     S.setPhase(run, "answering");
     const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
@@ -1337,6 +1358,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         : undefined,
       shouldStop: () => run.stopRequested,
       routeText: text,
+      style,
     });
     // Üye yanıt veremezse (zaman aşımı/hata) sohbet takılmasın: bir kez başka üye dener
     if (!res.ok && !run.stopRequested && allowFallback) {
@@ -1348,6 +1370,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
           label: "yanıtlıyor", images, media: attachments, cwd: run.projectDir || undefined,
           routeText: text,
           shouldStop: () => run.stopRequested,
+          style,
         });
       }
     }
@@ -1365,10 +1388,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   // ---- L2: Üretici + bağımsız denetçi ----
   // Tam konseyin (plan/tartışma/oylama) maliyetini ödemeden ikinci bir göz
   // sağlar. Denetçi engelleyici sorun bulursa üretici BİR kez düzeltir.
-  async pairReply(run, producer, reviewer, text, attachments = []) {
+  async pairReply(run, producer, reviewer, text, attachments = [], { style = null } = {}) {
     const S = this.store;
     S.setPhase(run, "answering");
-    await this.quickReply(run, producer, text, attachments, { allowFallback: true });
+    await this.quickReply(run, producer, text, attachments, { allowFallback: true, style });
     if (run.stopRequested) return;
 
     const answer = [...run.messages].reverse().find((m) => m.from === producer.id && m.kind === "message")?.content;

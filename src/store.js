@@ -172,7 +172,7 @@ export class Store extends EventEmitter {
   }
 
   // ---- Mesajlar (ortak konuşma alanı) ----
-  addMessage(run, { from, fromLabel = null, provider = null, model = null, summary = null, engineProvider = null, steps = null, kind = "message", taskId = null, content, attachments = [] }) {
+  addMessage(run, { from, fromLabel = null, provider = null, model = null, summary = null, engineProvider = null, steps = null, diff = null, kind = "message", taskId = null, content, attachments = [] }) {
     const msg = {
       id: uid("msg-"),
       ts: now(),
@@ -185,6 +185,7 @@ export class Store extends EventEmitter {
       kind,               // message | task | result | review | debate | vote | decision | error | info
       taskId,
       steps,              // adım günlüğü: {steps:[{kind,title,detail,status,...}],durationMs,counts}
+      diff,               // bu turun değişikliği: {files:[{path,add,del}],totalAdd,totalDel,fileCount}
       content: truncate(String(content ?? ""), 16000),
       attachments: Array.isArray(attachments) ? attachments.map((a) => ({ name:a.name, url:a.url, path:a.path, mime:a.mime, kind:a.kind, size:a.size })) : [],
       feedback: null,

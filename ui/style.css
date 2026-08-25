@@ -1509,3 +1509,28 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .step-detail{margin:4px 6px 8px 30px;padding:8px 10px;max-height:260px;overflow:auto;
   border:1px solid #2c322e;border-radius:8px;background:#101312;color:#9aa39d;
   font:11px/1.5 ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;word-break:break-word}
+
+
+/* ---- Codex tarzi canli gorunum ---- */
+/* Ust: ince gri sure satiri. Adimlarin SONUNCUSU simdiki eylemdir: soluk ve
+   nabizli gorunur (Codex'te ham komut "calistiriliyor" ekiyle soluk akar). */
+.live-timer{margin:4px 0 2px;color:#79827c;font-size:12px}
+.live-timer-val{color:inherit}
+.live-steps .step-row:last-child{opacity:.55;animation:step-nabiz 1.4s ease-in-out infinite}
+.live-diff-chip{display:inline-block;margin-top:6px;padding:3px 10px;border:1px solid #35403a;
+  border-radius:999px;background:#182019;color:#86c99a;font-size:11.5px}
+
+/* ---- Codex tarzi diff karti ---- */
+.diff-card{margin:8px 0 4px;border:1px solid #2c322e;border-radius:12px;background:#15191700}
+.diff-card-head{display:flex;align-items:center;gap:9px;padding:10px 12px}
+.diff-card-ico{display:grid;place-items:center;width:26px;height:26px;border-radius:8px;background:#202622;color:#9aa39d;font-size:13px}
+.diff-card-head b{font-size:13px;color:#e2e6e3}
+.diff-nums i{font-style:normal;font-size:12px;font-weight:650}
+.diff-nums .add{color:#4ade80}.diff-nums .del{color:#f87171;margin-left:4px}
+.diff-card-actions{margin-left:auto;display:flex;gap:6px}
+.diff-card-actions button{border:1px solid #3a403c;border-radius:8px;background:#202622;color:#cdd3cf;
+  padding:5px 11px;font-size:12px;cursor:pointer}
+.diff-card-actions button:hover{background:#2a312c;color:#eef1ef}
+.diff-card-files{border-top:1px solid #232825;padding:4px 12px 8px}
+.diff-card-files>div{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:12px;color:#aeb6b1}
+.diff-card-files span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11.5px}

@@ -351,9 +351,9 @@ function renderLive() {
           <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
           <span class="lb-live">${esc(statusLabel)}…</span>
         </div>
-        <div class="live-steps">${(liveSteps[a] || []).slice(-8).map((st) => stepRow(st, { live: true })).join("")}
-          ${elapsedHTML(state.agents[a]?.since || s.startedAt)}
-        </div>
+        <div class="live-timer">${elapsedHTML(state.agents[a]?.since || s.startedAt, null, "live-timer-val")} süredir çalışıyor</div>
+        <div class="live-steps">${(liveSteps[a] || []).slice(-8).map((st) => stepRow(st, { live: true })).join("")}</div>
+        ${(() => { const d = new Set((liveSteps[a] || []).filter((st) => st.kind === "yazdi").map((st) => st.title)); return d.size ? `<div class="live-diff-chip">✎ ${d.size} dosya değişiyor</div>` : ""; })()}
       </div>
     </div>`;
   }).join("");
@@ -952,8 +952,27 @@ function stepsBlockHTML(data) {
   if (!data?.steps?.length) return "";
   const sn = Math.round((data.durationMs || 0) / 1000);
   const sure = sn >= 60 ? `${Math.floor(sn / 60)}dk ${sn % 60}sn` : `${sn}sn`;
-  return `<details class="steps-block"><summary><span class="steps-gear">⚙</span> ${data.steps.length} adım · ${sure} çalıştı</summary>` +
+  return `<details class="steps-block"><summary><span class="steps-gear">⚙</span> ${sure} çalıştı · ${data.steps.length} adım</summary>` +
     `<div class="steps-list">${data.steps.map((s) => stepRow(s)).join("")}</div></details>`;
+}
+
+// Codex tarzi diff karti: "N dosya değiştirildi +X −Y" + dosya satirlari +
+// İncele (git paneli) ve Geri Al (kontrol noktalari) kestirmeleri.
+function diffCardHTML(diff) {
+  if (!diff?.files?.length) return "";
+  const baslik = diff.fileCount === 1 ? `${diff.files[0].path.split("/").pop()} düzenlendi` : `${diff.fileCount} dosya değiştirildi`;
+  return `<div class="diff-card">
+    <div class="diff-card-head">
+      <span class="diff-card-ico">⧉</span>
+      <b>${esc(baslik)}</b>
+      <span class="diff-nums"><i class="add">+${diff.totalAdd}</i> <i class="del">−${diff.totalDel}</i></span>
+      <span class="diff-card-actions">
+        <button type="button" data-diff-restore title="Kontrol noktalarından geri dön">Geri Al ↺</button>
+        <button type="button" data-diff-review title="Git panelinde incele">İncele</button>
+      </span>
+    </div>
+    ${diff.fileCount > 1 ? `<div class="diff-card-files">${diff.files.map((f) => `<div><span>${esc(f.path)}</span><span class="diff-nums"><i class="add">+${f.add}</i> <i class="del">−${f.del}</i></span></div>`).join("")}</div>` : ""}
+  </div>`;
 }
 
 function msgHTML(m) {
@@ -990,6 +1009,7 @@ function msgHTML(m) {
       </div>
       ${m.steps ? stepsBlockHTML(m.steps) : ""}
       <div class="m-content">${md(m.content)}${media ? `<div class="media-grid">${media}</div>${delivery}` : ""}</div>
+      ${m.diff ? diffCardHTML(m.diff) : ""}
       <div class="msg-actions" data-message-id="${esc(m.id)}">
         <button data-msg-copy title="Yanıtı kopyala">⧉</button>
         <button data-msg-retry title="Yeniden dene">↻</button>
@@ -2319,6 +2339,8 @@ $("media-viewer").addEventListener("click", (e) => { if (e.target.id === "media-
 document.addEventListener("click", async (e) => {
   const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=prompt(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
   const artifact=e.target.closest("[data-artifact-path]");if(artifact){e.preventDefault();openArtifact(artifact.dataset.artifactPath);return;}
+  if(e.target.closest("[data-diff-review]")){openToolPanel("git");return;}
+  if(e.target.closest("[data-diff-restore]")){const id=activeProjectId();if(id)openCheckpoints(id);else alert("Önce proje seçin.");return;}
   const pathCode=e.target.closest("code[data-reveal-path]");
   if(pathCode&&!e.target.closest("a.file-card")){
     fetch("/api/media/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:pathCode.dataset.revealPath})})
