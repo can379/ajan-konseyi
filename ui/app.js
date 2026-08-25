@@ -352,8 +352,17 @@ function renderLive() {
           <span class="lb-live">${esc(statusLabel)}…</span>
         </div>
         <div class="live-timer">${elapsedHTML(state.agents[a]?.since || s.startedAt, null, "live-timer-val")} süredir çalışıyor</div>
-        <div class="live-steps">${(liveSteps[a] || []).slice(-8).map((st) => stepRow(st, { live: true })).join("")}</div>
-        ${(() => { const d = new Set((liveSteps[a] || []).filter((st) => st.kind === "yazdi").map((st) => st.title)); return d.size ? `<div class="live-diff-chip">✎ ${d.size} dosya değişiyor</div>` : ""; })()}
+        ${(() => {
+          // Codex duzeni: akan yanit metni varsa goster; altinda YALNIZ
+          // simdiki eylem satiri (tek, soluk). Gecmis adimlar canlida
+          // listelenmez — bitince katlanmis satirda dururlar.
+          const akan = String(s.text || "").trim();
+          const adimlar = liveSteps[a] || [];
+          const son = adimlar[adimlar.length - 1];
+          const simdiki = son ? `<div class="live-current">${STEP_ICONS[son.kind] || "•"} ${esc(son.title)}${son.count > 1 ? ` ×${son.count}` : ""}…</div>` : "";
+          const degisen = new Set(adimlar.filter((st) => st.kind === "yazdi").map((st) => st.title)).size;
+          return `${akan ? `<div class="live-text">${md(akan.slice(-1500))}</div>` : ""}${simdiki}${degisen ? `<div class="live-diff-chip">✎ ${degisen} dosya değişiyor</div>` : ""}`;
+        })()}
       </div>
     </div>`;
   }).join("");

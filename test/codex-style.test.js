@@ -33,6 +33,8 @@ test("numstat ayristirilir ve tur farki dogru hesaplanir", () => {
   assert.ok(delta.files.some((f) => f.path === "yeni.js"));
   assert.equal(delta.totalAdd, 20);
   assert.equal(diffDelta({}, {}), null, "degisiklik yoksa kart olmamali");
+  const sifir = diffDelta({}, { "cikti/": { add: 0, del: 0 } });
+  assert.equal(sifir, null, "+0 −0 girdiler karta girmemeli");
 });
 
 // ---- Arayuz sozlesmeleri ----

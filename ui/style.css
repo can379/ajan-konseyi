@@ -1492,15 +1492,17 @@ body.split-resizing .split-resizer { pointer-events: auto; }
 @keyframes step-nabiz{0%,100%{opacity:.95}50%{opacity:.45}}
 
 /* Bitmis mesajdaki katlanir blok */
-details.steps-block{margin:2px 0 8px;border:1px solid #2c322e;border-radius:10px;background:#161a18}
-details.steps-block>summary{display:flex;align-items:center;gap:7px;padding:7px 11px;cursor:pointer;
-  list-style:none;color:#8b948f;font-size:12px;user-select:none}
+/* Codex duzeni: katlanmis calisma satiri KUTUSUZ ince gri metindir;
+   altinda zarif bir ayirici cizgi. Acilinca adimlar sol cizgili girintide. */
+details.steps-block{margin:2px 0 10px;border:0;border-bottom:1px solid #23282533;background:transparent}
+details.steps-block>summary{display:flex;align-items:center;gap:7px;padding:4px 0 8px;cursor:pointer;
+  list-style:none;color:#79827c;font-size:12.5px;user-select:none}
 details.steps-block>summary::-webkit-details-marker{display:none}
 details.steps-block>summary::after{content:"›";margin-left:auto;color:#5f6862;transition:transform .15s}
 details.steps-block[open]>summary::after{transform:rotate(90deg)}
 details.steps-block>summary:hover{color:#c3cbc6}
-.steps-gear{opacity:.75}
-.steps-list{padding:2px 8px 8px;display:flex;flex-direction:column;gap:2px}
+.steps-gear{display:none}
+.steps-list{margin:2px 0 8px;padding:2px 0 2px 10px;border-left:2px solid #2c322e;display:flex;flex-direction:column;gap:2px}
 /* Adim detayi: kendi <details> icinde */
 details.step-row{display:block;padding:0}
 details.step-row>summary{display:flex;align-items:baseline;gap:8px;padding:3px 6px;cursor:pointer;list-style:none}
@@ -1534,3 +1536,10 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .diff-card-files{border-top:1px solid #232825;padding:4px 12px 8px}
 .diff-card-files>div{display:flex;justify-content:space-between;gap:10px;padding:5px 0;font-size:12px;color:#aeb6b1}
 .diff-card-files span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11.5px}
+
+
+/* Canli balonda Codex duzeni: akan yanit + tek simdiki eylem satiri */
+.live-text{margin:4px 0 2px;color:#cdd3cf;font-size:13.5px;line-height:1.55;max-width:70ch}
+.live-text p{margin:0 0 6px}
+.live-current{margin:4px 0 2px;color:#8b948f;font-size:12px;
+  font-family:ui-monospace,SFMono-Regular,monospace;opacity:.6;animation:step-nabiz 1.4s ease-in-out infinite}

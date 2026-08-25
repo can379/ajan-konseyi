@@ -776,6 +776,13 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Üretilen dosya sohbet kartında zaten görsel olarak sunulur. Ham file://
     // bağlantılarını, mutlak yolları ve terminal benzeri doğrulama metnini
     // kullanıcıya gösterme; bunlar yalnız iç doğrulama için tutulur.
+    // Kart olarak sunulan dosyanin mutlak yolu metinde ayrica satir olarak
+    // durmasin (Codex yolu karta gomer, metinde tekrarlamaz).
+    for (const a of attachments) {
+      if (!a.path) continue;
+      const yol = a.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      displayContent = String(displayContent).replace(new RegExp(`^\\s*\`?${yol}\`?\\s*$`, "gm"), "");
+    }
     if (attachments.some((a) => a.generated)) {
       displayContent = String(displayContent)
         .replace(/\[[^\]]+\]\(file:\/\/\/[^)]+\)/gi, "")

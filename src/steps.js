@@ -139,6 +139,16 @@ export class StepLog {
     // tek satira iner ("index.html okundu ×3"). Hedefler farkliysa baslik
     // "Dosyaları okudu"ya genellenir; ham komutlar detayda birikir.
     const last = this.steps[this.steps.length - 1];
+    // AYNI baslikli ardisik adimlar HER turde birlesir: ayni dosyaya art
+    // arda 8 duzenleme tek "index.html ×8" satiridir (kullanicinin ekraninda
+    // 8 ayri satir olarak akti — Codex'te boyle bir sey olmaz).
+    if (last && last.kind === normalizeKind(kind) && last.status !== "running" && status === "ok"
+        && clean(title, MAX_TITLE) === last.title) {
+      last.count = (last.count || 1) + 1;
+      if (detail) last.detail = `${last.detail ? last.detail + "\n---\n" : ""}${String(detail).slice(0, 2000)}`.slice(0, MAX_DETAIL);
+      this._emit();
+      return last;
+    }
     const mergeable = ["okudu", "aradi"].includes(normalizeKind(kind));
     if (last && mergeable && last.kind === normalizeKind(kind) && last.status !== "running" && status === "ok") {
       last.count = (last.count || 1) + 1;

@@ -31,7 +31,7 @@ export function diffDelta(before = {}, after = {}) {
     const once = before[path] || { add: 0, del: 0 };
     const add = Math.max(0, sonra.add - once.add);
     const del = Math.max(0, sonra.del - once.del);
-    if (add || del || !before[path]) files.push({ path, add, del });
+    if (add || del) files.push({ path, add, del });
   }
   const total = files.reduce((acc, f) => ({ add: acc.add + f.add, del: acc.del + f.del }), { add: 0, del: 0 });
   return files.length ? { files: files.slice(0, 12), totalAdd: total.add, totalDel: total.del, fileCount: files.length } : null;
@@ -46,7 +46,8 @@ export async function numstatSnapshot(projectDir) {
     const { stdout: st } = await run("git", ["-C", projectDir, "status", "--porcelain"], { maxBuffer: 1024 * 1024 });
     for (const line of st.split("\n")) {
       const m = line.match(/^\?\?\s+(.+)$/);
-      if (m && !map[m[1]]) {
+      // Klasorler dosya degildir: '?? cikti/' gibi girdiler karta girmesin.
+      if (m && !m[1].endsWith("/") && !map[m[1]]) {
         try {
           const { stdout: wc } = await run("wc", ["-l", `${projectDir}/${m[1]}`]);
           map[m[1]] = { add: Number(wc.trim().split(/\s+/)[0]) || 0, del: 0 };
