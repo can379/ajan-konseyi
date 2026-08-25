@@ -156,3 +156,11 @@ test("ekran goruntusu takip cagrisina EK olarak ilistirilir (her uye gorebilsin)
   assert.match(orch, /media:\[\{path:ekranGoruntusu/, "Antigravity icin media olarak gecmeli");
   assert.match(orch, /pikselleri kodla çözmeye çalışma/, "uye piksel cozmeye kalkmamali (canli gozlem)");
 });
+
+test("ekran isinde adim butcesi buyur (12 adim ~6 tiklama ediyordu)", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /step<\(bilgisayarKullanildi\?48:12\)/, "GUI isinde butce buyumeli");
+  assert.match(orch, /bilgisayarKullanildi=true;result=await this\.computerBridge\.request/, "bayrak eylem aninda kalkmali");
+  assert.match(orch, /adım hakkı doldu/, "butce dolunca kullaniciya dogru sebep soylenmeli");
+  assert.match(orch, /her tıklamadan ÖNCE görüntüde hedefi gerçekten gör/, "korlemesine tiklama yonergesi olmali");
+});

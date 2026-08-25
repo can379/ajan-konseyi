@@ -485,7 +485,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // "uygulamsına" gibi yazim kaymalari oluyor ve arac hic tanitilmayinca
     // uye tarayici koprusune sapip bosa dusuyordu (canli gozlem).
     const bilgisayarIstegi=this.bilgisayarIstegiVar?.(run,prompt)===true;
-    const computerHelp=(!opts.lean&&!opts.isolated&&this.computerBridge&&bilgisayarIstegi)?`\n\n--- BİLGİSAYAR KULLANMA ARACI ---\nKullanıcının EKRANINI görmen veya fare/klavye kullanman gerekiyorsa (uygulama penceresi incele, düğmeye tıkla, forma yaz) yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_BILGISAYAR>>>{"action":"screenshot","payload":{}}<<<END>>>\nEylemler: screenshot {}, click {x,y}, double_click {x,y}, type {text}, key {key,cmd,shift,option,ctrl}, open_app {name}.\nÇalışma düzeni: önce screenshot al, dönen PNG yolunu KENDİ dosya okuma aracınla açıp incele, koordinatı hesapla, sonra click gönder. Retina ekranda EKRAN NOKTASI = GÖRÜNTÜ PİKSELİ / 2.\nİlk eylemde kullanıcıdan onay istenir; onaylanmazsa iş bu yoldan yürütülemez.\nParola, kullanıcı adı, OTP ve ödeme alanlarını ASLA doldurma; oraya gelince dur ve kullanıcıdan iste.\n--- BİLGİSAYAR ARACI SONU ---`:"";
+    const computerHelp=(!opts.lean&&!opts.isolated&&this.computerBridge&&bilgisayarIstegi)?`\n\n--- BİLGİSAYAR KULLANMA ARACI ---\nKullanıcının EKRANINI görmen veya fare/klavye kullanman gerekiyorsa (uygulama penceresi incele, düğmeye tıkla, forma yaz) yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_BILGISAYAR>>>{"action":"screenshot","payload":{}}<<<END>>>\nEylemler: screenshot {}, click {x,y}, double_click {x,y}, type {text}, key {key,cmd,shift,option,ctrl}, open_app {name}.\nÇalışma düzeni: önce screenshot al, dönen PNG yolunu KENDİ dosya okuma aracınla açıp incele, koordinatı hesapla, sonra click gönder. Retina ekranda EKRAN NOKTASI = GÖRÜNTÜ PİKSELİ / 2.\nİlk eylemde kullanıcıdan onay istenir; onaylanmazsa iş bu yoldan yürütülemez.\nDİSİPLİN: her tıklamadan ÖNCE görüntüde hedefi gerçekten gör; göremiyorsan körlemesine tıklama, önce open_app ile pencereyi öne getir veya yeni görüntü al. Her tıklamadan SONRA yeni görüntü alıp beklediğin ekranın açıldığını doğrula; açılmadıysa aynı noktaya tekrar tıklama, konumu yeniden hesapla. Uzak masaüstü oturumunda (Windows App vb.) uzak ekran yüklenene kadar birkaç saniye geçebilir; sabırlı ol ve gerekiyorsa yeniden görüntü al.\nParola, kullanıcı adı, OTP ve ödeme alanlarını ASLA doldurma; oraya gelince dur ve kullanıcıdan iste.\n--- BİLGİSAYAR ARACI SONU ---`:"";
     // Uyeler arasi soru koprusu: birden fazla etkin uye varsa tanitilir.
     const digerUyeler=(this.config?.data?.members||[]).filter((m)=>m.enabled&&m.id!==member.id).map((m)=>`${m.name} (${m.id})`).join(", ");
     const askHelp=(!opts.lean&&!opts.isolated&&!opts._askDepth&&digerUyeler)?`\n\n--- ÜYEYE SORU ARACI ---\nBaşka bir konsey üyesinin yazdığı kod veya verdiği karar hakkında kısa bir soruya ihtiyacın olursa yanıtının TAMAMINI şu biçimde döndür:\n<<<AJAN_SORU>>>{"to":"<üye id>","question":"<kısa soru>"}<<<END>>>\nÜyeler: ${digerUyeler}. Yanıt sana otomatik geri verilecek ve işini sürdürmen istenecek. En fazla 2 kez kullan; kendi başına çözebildiğin şeyi sorma.\n--- SORU ARACI SONU ---`:"";
@@ -577,7 +577,13 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     };
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
-    for(let step=0;res.ok&&step<12;step++){
+    // Adim butcesi: normal arac zincirinde 12 yeter, ama EKRAN isinde her
+    // ilerleme "goruntu al + tikla" = 2 adim demektir; 12 adim yalnizca ~6
+    // tiklama eder ve is yarida kalir (canli gozlem: Codex Windows App'i
+    // acti, pencerelerde ilerledi, butce bitti). GUI'ye gecildiginde butce
+    // buyur; onay kapisi zaten kullanicidadir.
+    let bilgisayarKullanildi=false;
+    for(let step=0;res.ok&&step<(bilgisayarKullanildi?48:12);step++){
       const browserAction=browserToken&&parseBrowserAction(res.text);
       const computerAction=(computerHelp&&parseComputerAction(res.text))||null;
       const hostAction=parseHostAction(res.text);
@@ -605,7 +611,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
             });
           }
           if(!run._computerOnay)result={error:"Kullanıcı bilgisayar kullanımını onaylamadı. Bu yolu bırak; işi ekransız tamamla veya kullanıcıya devret."};
-          else result=await this.computerBridge.request(computerAction);
+          else{bilgisayarKullanildi=true;result=await this.computerBridge.request(computerAction);}
         }
         else{
           if(!isExplicitPublishRequest(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
@@ -647,7 +653,13 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       const temiz = stripActionTokens(res.text);
       // Yanit YALNIZ jetondan ibaretse (uye araci kullanip anlatmadan bitirdi)
       // kullaniciya bos ekran degil, ne olduguna dair acik bir cumle dusmeli.
-      res = { ...res, text: temiz || "Bu isteği eldeki araçlarla tamamlayamadım; ayrıntı adım satırında. Masaüstü uygulaması gerekiyorsa isteğinizde \"ekran\" veya \"uygulama\" geçtiğinden emin olun, bilgisayar kullanma aracı öyle açılıyor." };
+      // Yanit yalniz jetondan ibaretse is YARIDA kalmistir. Ekran isinde bu
+      // neredeyse her zaman adim butcesinin dolmasidir; kullaniciya "beceremedim"
+      // demek yanlis olur — nerede kaldigini soyleyip devami teklif et.
+      const yarim = bilgisayarKullanildi
+        ? "Ekran üzerinde ilerledim ama bu tur için ayrılan adım hakkı doldu; iş yarıda kaldı. Nerede kaldığımı adım satırından görebilirsiniz. \"devam et\" derseniz kaldığım yerden sürdürürüm."
+        : "Bu isteği eldeki araçlarla tamamlayamadım; ayrıntı adım satırında. Masaüstü uygulaması gerekiyorsa isteğinizde \"ekran\" veya \"uygulama\" geçtiğinden emin olun, bilgisayar kullanma aracı öyle açılıyor.";
+      res = { ...res, text: temiz || yarim };
     }
     if (identityQuestion && res.ok && !identityResponseMatchesProvider(member, res.text)) {
       this.log(`kimlik yanıtı düzeltildi: ${member.provider} -> ${String(res.text || "").slice(0, 160)}`);
