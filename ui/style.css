@@ -1430,6 +1430,14 @@ body.split-resizing .split-resizer { pointer-events: auto; }
 .intensity-select:hover{border-color:#59665f;color:#eef1ef}
 
 /* ---- Tiklanabilir dosya yollari ---- */
-/* Mesaj icindeki /Users/... gibi kod parcalari Finder'da dosyayi acar. */
-.m-content code[data-reveal-path]{cursor:pointer;text-decoration:underline dotted 1px;text-underline-offset:3px}
-.m-content code[data-reveal-path]:hover{color:#c9bfff;border-color:#59665f}
+/* Mesaj icindeki /Users/... gibi kod parcalari Finder'da dosyayi acar.
+   Gorunum bag gibi olmali: renkli metin + ok imi. Noktali alt cizgi
+   "tiklanabilir" demiyordu; kullanici bagi bag gibi gormek istedi. */
+.m-content code[data-reveal-path]{
+  cursor:pointer;color:#9db8ff;background:rgba(120,150,255,.08);
+  border-color:rgba(120,150,255,.25);
+  text-decoration:underline;text-decoration-color:rgba(157,184,255,.45);
+  text-underline-offset:3px;transition:color .12s,background .12s}
+.m-content code[data-reveal-path]::after{content:" ↗";font-size:.85em;opacity:.65}
+.m-content code[data-reveal-path]:hover{color:#c7d6ff;background:rgba(120,150,255,.16);
+  border-color:rgba(120,150,255,.45);text-decoration-color:#c7d6ff}
