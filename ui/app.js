@@ -9,6 +9,10 @@ let refreshTimer = null;
 let currentMode = "auto";
 let popAgent = null;      // üst çubukta açık ajan paneli
 let liveStreams = {};     // agent -> {label, text} canlı akış
+// Canli OZET satiri: ekranda varsayilan olarak ham akis degil, araliklarla
+// guncellenen tek cumlelik ozet durur (okunamadan degisen yazi yerine).
+// agent -> {text, at}
+const liveSummaries = {};
 let fullCapabilities = null;
 const projectRunLimits = new Map();
 let conversationSearch = "";
@@ -362,7 +366,7 @@ function renderLive() {
   // Artik calismayan ajanlarin ve tur degistiren kartlarin temizligi.
   for (const el of [...live.children]) {
     const eski = el.dataset.agent;
-    if (!busyAgents.includes(eski) || el.classList.contains("image-live") !== imageGeneration) el.remove();
+    if (!busyAgents.includes(eski) || el.classList.contains("image-live") !== imageGeneration) { el.remove(); delete liveSummaries[eski]; }
   }
   for (const a of busyAgents) {
     const s = liveStreams[a];
@@ -389,9 +393,10 @@ function renderLive() {
             <span class="lb-live"></span>
           </div>
           <div class="live-timer">${elapsedHTML(state.agents[a]?.since || s.startedAt, null, "live-timer-val")} süredir çalışıyor</div>
-          <div class="live-text" hidden></div>
+          <div class="live-summary" hidden></div>
           <div class="live-current" hidden></div>
           <div class="live-diff-chip" hidden></div>
+          <details class="live-detail" hidden><summary>Ayrıntılı akışı göster</summary><div class="live-text"></div></details>
         </div>
       </div>`);
       card = live.lastElementChild;
@@ -406,12 +411,31 @@ function renderLive() {
       .replace(/<<<[\s\S]*$/, "")
       .split("\n")
       .filter((ln) => !/^\s*(?:\$|💭)\s/.test(ln)).join("\n").trim();
-    // Kayan pencere karakterle degil PARAGRAFLA ilerler: -1500. karakterden
-    // kesmek ilk blogu her guncellemede degistirip metni titretiyordu.
+    // VARSAYILAN GORUNUM: okunabilir hizda tek cumlelik ozet. Ham akis
+    // (planlama JSON'u dahil) okunamadan degisiyor ve ekrani karistiriyordu;
+    // artik yalniz "Ayrıntılı akışı göster" acilinca gorunur.
+    // Ozet adayi: JSON/sozlesme gorunumlu satirlar atilir, son TAM cumle alinir.
+    const duzYazi = akan.split("\n")
+      .filter((ln) => !/^\s*["'{}\[\]]/.test(ln) && !/"[\w-]+"\s*:/.test(ln) && ln.trim())
+      .join(" ");
+    const cumleler = duzYazi.match(/[^.!?…]{8,}[.!?…]/g) || [];
+    const aday = (cumleler[cumleler.length - 1] || "").trim().slice(0, 180);
+    const oz = liveSummaries[a] ||= { text: "", at: 0 };
+    // Aralikli guncelleme: yeni cumle en erken 4 sn'de bir gecer — goz yetisir.
+    if (aday && aday !== oz.text && Date.now() - oz.at > 4000) { oz.text = aday; oz.at = Date.now(); }
+    const ozetEl = card.querySelector(".live-summary");
+    ozetEl.hidden = !oz.text;
+    if (oz.text && ozetEl.textContent !== oz.text) {
+      ozetEl.textContent = oz.text;
+      // Yeni ozet kayarak girsin: animasyonu yeniden tetikle.
+      ozetEl.classList.remove("flow-in"); void ozetEl.offsetWidth; ozetEl.classList.add("flow-in");
+    }
+    // Ham akis, acilir-kapanir pencerede yasar; acik/kapali durumu kart
+    // yeniden kurulmadigi icin kendiliginden korunur.
     const paras = akan.split(/\n{2,}/).filter(Boolean);
-    const metin = card.querySelector(".live-text");
-    metin.hidden = !paras.length;
-    if (paras.length) patchLiveText(metin, md(paras.slice(-5).join("\n\n")));
+    const detay = card.querySelector(".live-detail");
+    detay.hidden = !paras.length;
+    if (paras.length) patchLiveText(detay.querySelector(".live-text"), md(paras.slice(-5).join("\n\n")));
     const adimlar = liveSteps[a] || [];
     const son = adimlar[adimlar.length - 1];
     const simdiki = card.querySelector(".live-current");

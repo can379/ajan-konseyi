@@ -64,3 +64,14 @@ test("canli akis yerinde guncellenir (kart her deltada yikilmaz)", async () => {
   assert.match(css, /flow-in/, "yeni paragraf kayarak girmeli");
   assert.match(css, /caret-blink/, "akis imleci olmali");
 });
+
+test("canli varsayilan gorunum ozet; ham akis acilir-kapanir pencerede", async () => {
+  const fs = await import("node:fs");
+  const app = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+  assert.match(app, /live-summary/, "ozet satiri olmali");
+  assert.match(app, /Date\.now\(\) - oz\.at > 4000/, "ozet araliklarla guncellenmeli (goz yetissin)");
+  assert.match(app, /live-detail/, "ham akis details icinde olmali");
+  assert.match(app, /Ayrıntılı akışı göster/, "acilir pencere etiketi Turkce olmali");
+  const css = fs.readFileSync(new URL("../ui/style.css", import.meta.url), "utf8");
+  assert.match(css, /\.live-detail\[open\]/, "acik/kapali durumu gorsel isaretli olmali");
+});
