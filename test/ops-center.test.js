@@ -82,3 +82,18 @@ test("arayuz operasyon sekmesi bagli ve parolayi formda birakmaz", () => {
   assert.match(app, /function renderOpsCenter/, "panel cizimi olmali");
   assert.match(app, /e\.target\.reset\(\); \/\/ parola formda da kalmasin/, "parola gonderildikten sonra temizlenmeli");
 });
+
+// ---- Bekleme eylemi (uzak masaustu yuklemeleri) ----
+test("bilgisayar koprusu sinirli bekleme destekler", async () => {
+  const { ComputerBridge, COMPUTER_ACTIONS, describeComputerAction } = await import("../src/computerBridge.js");
+  assert.ok(COMPUTER_ACTIONS.includes("wait"), "wait eylemi olmali");
+  const kopru = new ComputerBridge("/tmp/ajan-test-bin");
+  const basla = Date.now();
+  const sonuc = await kopru.request({ action: "wait", payload: { seconds: 0.3 } });
+  assert.equal(sonuc.ok, true);
+  assert.ok(Date.now() - basla >= 250, "gercekten beklemeli");
+  // Sinir: sonsuz bekleyip turu kilitleyemez.
+  const uzun = await kopru.request({ action: "wait", payload: { seconds: 999 } });
+  assert.ok(uzun.waitedSeconds <= 10, "en fazla 10 saniye beklemeli");
+  assert.match(describeComputerAction({ action: "wait", payload: { seconds: 2 } }).title, /saniye beklendi/);
+});

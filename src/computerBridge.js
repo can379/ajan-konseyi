@@ -22,7 +22,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
-export const COMPUTER_ACTIONS = ["screenshot", "click", "double_click", "type", "key", "open_app"];
+export const COMPUTER_ACTIONS = ["screenshot", "click", "double_click", "type", "key", "open_app", "wait"];
 
 function run(cmd, args, timeoutMs = 20_000) {
   return new Promise((resolve, reject) => {
@@ -91,6 +91,12 @@ export class ComputerBridge {
   async request({ action, payload = {} }) {
     if (!COMPUTER_ACTIONS.includes(action)) throw new Error("Desteklenmeyen bilgisayar eylemi: " + action);
 
+    if (action === "wait") {
+      const seconds = Math.min(10, Math.max(0.25, Number(payload.seconds) || 1));
+      await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+      return { ok: true, waitedSeconds: seconds };
+    }
+
     if (action === "screenshot") {
       fs.mkdirSync(this.shotsDir, { recursive: true });
       const file = path.join(this.shotsDir, `ekran-${Date.now()}.png`);
@@ -158,6 +164,7 @@ export function describeComputerAction(action) {
     case "type": return { kind: "islem", title: "Klavyeyle yazıldı" };
     case "key": return { kind: "islem", title: `Tuşa basıldı: ${p.key}` };
     case "open_app": return { kind: "islem", title: `Uygulama açıldı: ${p.name}` };
+    case "wait": return { kind: "islem", title: `${Math.min(10, Math.max(0.25, Number(p.seconds) || 1))} saniye beklendi` };
     default: return { kind: "islem", title: "Bilgisayar eylemi" };
   }
 }
