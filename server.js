@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Store } from "./src/store.js";
 import { SpeechToText } from "./src/speech.js";
+import { CanSellerAI, temizleKayit } from "./src/cansellerai.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -36,6 +37,7 @@ const BRIDGE_TOKEN = process.env.AJAN_BROWSER_BRIDGE_TOKEN || "";
 fs.mkdirSync(DATA_ROOT, { recursive: true });
 const store = new Store(DATA_ROOT);
 const speech = new SpeechToText(DATA_ROOT);
+const canseller = new CanSellerAI();
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
 openRouterStatus().then((status)=>{
@@ -721,6 +723,74 @@ const server = http.createServer(async (req, res) => {
         }
       }
       return json(res, 200, { day: gun, providers: toplam });
+    }
+
+    // ---- Operasyon Merkezi (CanSellerAI) — FAZ 1: YALNIZ OKUMA ----
+    // Oturum cerezi burada, sunucu katmaninda kalir; ne arayuze ne de konsey
+    // uyelerine gecer. Uyeler yalniz temizlenmis veri gorur (temizleKayit).
+    if (req.method === "GET" && p === "/api/ops/status") {
+      return json(res, 200, canseller.status());
+    }
+    if (req.method === "POST" && p === "/api/ops/connect") {
+      const body = await readBody(req);
+      if (body.serviceKey) { canseller.setServiceKey(String(body.serviceKey)); return json(res, 200, canseller.status()); }
+      try {
+        await canseller.login(body.login, body.password);
+        return json(res, 200, canseller.status());
+      } catch (error) { return json(res, 401, { error: String(error.message || error) }); }
+    }
+    if (req.method === "POST" && p === "/api/ops/disconnect") {
+      canseller.cikis(); canseller.setServiceKey(null);
+      return json(res, 200, canseller.status());
+    }
+    if (req.method === "GET" && p === "/api/ops/accounts") {
+      try { return json(res, 200, await canseller.accounts()); }
+      catch (error) { return json(res, 502, { error: String(error.message || error) }); }
+    }
+    if (req.method === "POST" && p === "/api/ops/switch") {
+      const body = await readBody(req);
+      try { return json(res, 200, await canseller.switchAccount(body.id)); }
+      catch (error) { return json(res, 502, { error: String(error.message || error) }); }
+    }
+    if (req.method === "GET" && p === "/api/ops/overview") {
+      try { return json(res, 200, await canseller.overview()); }
+      catch (error) { return json(res, 502, { error: String(error.message || error) }); }
+    }
+
+    // ---- Golge modu: uye YORUMLAR, hicbir sey YAPMAZ ----
+    // Dokumandaki "shadow mode" adimi: YZ ne yapilmasi gerektigini soyler ama
+    // tiklamaz. Uyeye giden veri temizlenmis ve KISITLIDIR; arac/koprulerin
+    // hepsi kapalidir (isolated), yani bu cagri disariya hicbir eylem yapamaz.
+    if (req.method === "POST" && p === "/api/ops/assess") {
+      const body = await readBody(req);
+      const kayitlar = Array.isArray(body.items) ? body.items.slice(0, 25).map((x) => temizleKayit(x)) : [];
+      if (!kayitlar.length) return json(res, 400, { error: "Değerlendirilecek kayıt yok" });
+      const uye = config.data.members.find((m) => m.enabled && (!body.memberId || m.id === body.memberId));
+      if (!uye) return json(res, 400, { error: "Etkin üye yok" });
+      const istem = `Sen bir e-ticaret operasyon analistisin. Aşağıdaki CanSellerAI kayıtlarını (eBay iadeleri / davalar / sipariş müdahaleleri) İNCELE ve her biri için kısa bir değerlendirme yaz.
+
+GÖLGE MODU: Bu bir tavsiye turudur. Hiçbir işlem yapılmayacak, hiçbir düğmeye basılmayacak. Sen yalnız NE YAPILMASI GEREKTİĞİNİ söylüyorsun.
+
+Her kayıt için şu üç şeyi ver:
+1. Durum özeti (tek cümle, Türkçe)
+2. Önerilen işlem (tek cümle) — yapılabilir somut adım
+3. Risk seviyesi: 0 okuma/kanıt, 1 taslak hazırlama, 2 politika uygunsa otomatik (takip kodu, ücretsiz etiket), 3 sipariş verme/iade başlatma (onay gerekir), 4 para iadesi/ücretli kargo/dava gönderimi (her seferinde onay)
+
+Belirsizlik varsa "bilgi eksik" de ve neyin eksik olduğunu yaz; tahmin uydurma. Alıcı adı/adresi gizlenmiştir, onları isteme.
+
+KAYITLAR (JSON):
+${JSON.stringify(kayitlar, null, 1).slice(0, 60000)}`;
+      try {
+        const run = store.createRun({ kind: "chat", request: "Operasyon değerlendirmesi (gölge modu)", mode: "auto",
+          agents: [uye.id], projectId: null, projectDir: null, attachments: [] });
+        run.status = "idle"; run.title = `🛡 Gölge değerlendirme · ${kayitlar.length} kayıt`;
+        const sonuc = await orch.callMember(run, uye, istem, { isolated: true, label: "gölge değerlendirme", timeoutMs: 240_000 });
+        store.addMessage(run, { from: "kullanici", kind: "message", content: `Gölge modu değerlendirmesi: ${kayitlar.length} kayıt` });
+        store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
+          content: String(sonuc.text || "").slice(0, 16000) });
+        store.updateRun(run, { status: "idle", phase: "idle" });
+        return json(res, 200, { runId: run.id, ok: sonuc.ok !== false, text: String(sonuc.text || "").slice(0, 16000) });
+      } catch (error) { return json(res, 500, { error: String(error.message || error) }); }
     }
 
     // ---- Sesli giris: WAV -> metin (yerel, macOS konusma tanima) ----

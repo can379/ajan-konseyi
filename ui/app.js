@@ -2024,7 +2024,7 @@ function openToolPanel(tab) {
   $("tool-panel").classList.remove("closed");
   $("tool-menu").hidden = true;
   $("btn-tools").setAttribute("aria-expanded", "true");
-  const toolMeta={terminal:"Terminal",browser:"Tarayıcı",preview:"İncele",editor:"Dosyalar",tasks:"Görevler",security:"Proje ayarları",git:"Git ve test"}[tab]||"Araç";
+  const toolMeta={terminal:"Terminal",browser:"Tarayıcı",preview:"İncele",editor:"Dosyalar",tasks:"Görevler",security:"Proje ayarları",git:"Git ve test",ops:"Operasyon"}[tab]||"Araç";
   setToolCurrentIcon(tab);
   $("tool-current-title").textContent=toolMeta;
   document.querySelectorAll("[data-tool-tab]").forEach((b) => b.classList.toggle("active", b.dataset.toolTab === tab));
@@ -2035,13 +2035,127 @@ function openToolPanel(tab) {
   $("tool-tasks").hidden = tab !== "tasks";
   $("tool-security").hidden = tab !== "security";
   $("tool-git").hidden = tab !== "git";
+  $("tool-ops").hidden = tab !== "ops";
   if (tab === "terminal") $("terminal-command").focus();
   if (tab === "browser" && !activeBrowserView()) createBrowserTab($("browser-url").value);
   if(tab==="editor")loadEditorTree();
   if(tab==="tasks")renderTaskCenter();
   if(tab==="security")renderSecurityCenter();
   if(tab==="git")renderGitCenter();
+  if(tab==="ops")renderOpsCenter();
 }
+// ---- Operasyon Merkezi (CanSellerAI) — FAZ 1: YALNIZ OKUMA ----
+// Ekran canli sistemden okur; hicbir yazma yapmaz. "Gölge değerlendirme"
+// dugmesi secili kayitlari bir konsey uyesine YORUMLATIR (arac/koprusuz,
+// izole cagri) — hicbir tiklama, hicbir islem yapilmaz.
+let opsVeri = null;
+const RISK_ETIKET = ["okuma", "taslak", "politika", "onay gerekir", "her seferinde onay"];
+
+async function opsDurum() {
+  try { return await (await fetch("/api/ops/status")).json(); }
+  catch { return { connected: false, mode: "bagli-degil" }; }
+}
+
+async function renderOpsCenter() {
+  const durum = await opsDurum();
+  const bagliMi = durum.connected;
+  $("ops-connect").hidden = bagliMi;
+  $("ops-account-row").hidden = !bagliMi;
+  $("ops-status").innerHTML = bagliMi
+    ? `<span class="ops-ok">✓ Bağlı · ${esc(durum.mode)}</span> <small>${esc(durum.baseUrl || "")}</small>`
+    : (durum.lastError ? `<span class="ops-err">${esc(durum.lastError)}</span>` : "");
+  if (!bagliMi) { $("ops-groups").innerHTML = '<div class="muted" style="padding:18px">Bağlanınca iadeler, davalar ve sipariş müdahaleleri burada listelenir.</div>'; return; }
+  // Magazalar
+  try {
+    const hesaplar = await (await fetch("/api/ops/accounts")).json();
+    const liste = Array.isArray(hesaplar) ? hesaplar : (hesaplar.accounts || hesaplar.items || []);
+    const sec = $("ops-account");
+    sec.innerHTML = liste.map((h) => `<option value="${esc(String(h.id))}">${esc(h.name || h.login || ("Mağaza " + h.id))}</option>`).join("");
+    if (durum.activeAccountId) sec.value = String(durum.activeAccountId);
+  } catch { /* hesap listesi gelmezse mevcut oturumun magazasiyla devam */ }
+  await opsYukle();
+}
+
+async function opsYukle() {
+  const host = $("ops-groups");
+  host.innerHTML = '<div class="muted" style="padding:18px">Okunuyor…</div>';
+  try {
+    opsVeri = await (await fetch("/api/ops/overview")).json();
+  } catch (error) { host.innerHTML = `<div class="ops-err" style="padding:18px">Okunamadı: ${esc(String(error.message || error))}</div>`; return; }
+  const gruplar = [];
+  const iadeler = (opsVeri.returns?.items || opsVeri.returns || []).filter((x) => x && x.acik !== false).slice(0, 40);
+  if (iadeler.length) gruplar.push({ ad: "Açık iadeler", ikon: "↩", tur: "returns", satirlar: iadeler.map((r) => ({
+    ref: r.return_id || r.id, baslik: r.urunAdi || r.item_title || "(ürün adı yok)",
+    detay: [r.sebepAdi, r.aksiyonAdi, r.kalanGun != null ? `${r.kalanGun} gün kaldı` : ""].filter(Boolean).join(" · "),
+    acil: r.kalanGun != null && r.kalanGun <= 2, ham: r })) });
+  const davalar = (opsVeri.cases?.items || opsVeri.cases || []).slice(0, 40);
+  if (davalar.length) gruplar.push({ ad: "Davalar ve talepler", ikon: "⚖", tur: "cases", satirlar: davalar.map((c) => ({
+    ref: c.case_id || c.inquiry_id || c.id, baslik: c.item_title || c.urunAdi || "(kayıt)",
+    detay: [c.type || c.tur, c.status || c.durum].filter(Boolean).join(" · "), ham: c })) });
+  for (const grup of (opsVeri.work?.groups || [])) {
+    if (!grup.items?.length) continue;
+    gruplar.push({ ad: grup.title, ikon: grup.icon || "•", tur: grup.key, satirlar: grup.items.slice(0, 30).map((x) => ({
+      ref: x.ref || x.id, baslik: x.title || "(kayıt)", detay: x.detail || "", ham: x })) });
+  }
+  const hatalar = Object.entries(opsVeri.hatalar || {});
+  host.innerHTML = (hatalar.length ? `<div class="ops-err" style="margin-bottom:10px">${hatalar.map(([k, v]) => `${esc(k)}: ${esc(v)}`).join(" · ")}</div>` : "")
+    + (gruplar.length ? gruplar.map((g, gi) => `<section class="ops-group">
+        <div class="section-title"><div><h3>${esc(g.ikon)} ${esc(g.ad)}</h3><p>${g.satirlar.length} kayıt</p></div>
+          <button data-ops-assess="${gi}" class="btn-ghost small">🛡 Gölge değerlendirme</button></div>
+        <div class="ops-rows">${g.satirlar.map((s) => `<div class="ops-row${s.acil ? " acil" : ""}">
+          <code>${esc(String(s.ref || ""))}</code><div><b>${esc(s.baslik)}</b><small>${esc(s.detay)}</small></div>
+        </div>`).join("")}</div>
+        <div class="ops-assess" data-ops-assess-out="${gi}" hidden></div>
+      </section>`).join("") : '<div class="muted" style="padding:18px">Açık iş görünmüyor.</div>');
+  host._gruplar = gruplar;
+  $("ops-meta").textContent = `${new Date(opsVeri.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })} itibarıyla`;
+}
+
+$("ops-login-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const d = Object.fromEntries(new FormData(e.target));
+  const btn = e.target.querySelector("button"); btn.disabled = true;
+  try {
+    const r = await fetch("/api/ops/connect", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ login: d.login, password: d.password }) });
+    const j = await r.json();
+    e.target.reset(); // parola formda da kalmasin
+    if (!r.ok) return alert(j.error || "Bağlanılamadı");
+    await renderOpsCenter();
+  } finally { btn.disabled = false; }
+});
+$("ops-key-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const d = Object.fromEntries(new FormData(e.target));
+  const r = await fetch("/api/ops/connect", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serviceKey: d.serviceKey }) });
+  e.target.reset();
+  if (!r.ok) return alert((await r.json()).error || "Anahtar kabul edilmedi");
+  await renderOpsCenter();
+});
+$("ops-disconnect")?.addEventListener("click", async () => { await fetch("/api/ops/disconnect", { method: "POST" }); await renderOpsCenter(); });
+$("ops-refresh")?.addEventListener("click", () => opsYukle());
+$("ops-account")?.addEventListener("change", async (e) => {
+  await fetch("/api/ops/switch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(e.target.value) || e.target.value }) });
+  await opsYukle();
+});
+$("ops-groups")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-ops-assess]");
+  if (!btn) return;
+  const gi = Number(btn.dataset.opsAssess);
+  const grup = $("ops-groups")._gruplar?.[gi];
+  if (!grup) return;
+  const cikti = document.querySelector(`[data-ops-assess-out="${gi}"]`);
+  cikti.hidden = false; cikti.innerHTML = '<div class="muted">Üye kayıtları inceliyor (gölge modu — hiçbir işlem yapılmaz)…</div>';
+  btn.disabled = true;
+  try {
+    const r = await fetch("/api/ops/assess", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: grup.satirlar.map((s) => s.ham) }) });
+    const j = await r.json();
+    cikti.innerHTML = r.ok ? md(j.text || "(boş yanıt)") : `<div class="ops-err">${esc(j.error || "değerlendirme başarısız")}</div>`;
+  } finally { btn.disabled = false; }
+});
+
 let gitDiffMode="working";
 async function renderGitCenter(){const project=activeProject(),actions=[$("git-run-test"),$("git-commit")];$("git-empty").hidden=!!project;$("git-content").hidden=!project;actions.forEach(button=>button.disabled=!project);if(!project){$("git-summary").textContent="Başlamak için bir proje seçin.";return;}$("git-summary").textContent="Git durumu okunuyor…";try{const [status,log,diff]=await Promise.all([fetch(`/api/projects/${project.id}/git/status`).then(r=>r.json()),fetch(`/api/projects/${project.id}/git/log`).then(r=>r.json()),fetch(`/api/projects/${project.id}/git/diff?staged=${gitDiffMode==="staged"?1:0}`).then(r=>r.json())]);if(status.error)throw new Error(status.error);$("git-summary").textContent=`${project.name} · ${status.branch} · ${status.ahead} ileri · ${status.behind} geri · ${(status.files||[]).length} değişiklik`;$("git-files").innerHTML=(status.files||[]).map(file=>`<div class="git-file"><code>${esc(file.code)}</code><span>${esc(file.path)}</span></div>`).join("")||'<div class="skill-empty"><div><span>✓</span><b>Çalışma ağacı temiz</b><small>Commit edilmemiş değişiklik bulunmuyor.</small></div></div>';$("git-log").innerHTML=(log.commits||[]).map(commit=>`<div class="git-commit"><b>${esc(commit.subject)}</b><small>${esc(commit.short)} · ${esc(new Date(commit.date).toLocaleString("tr-TR"))}</small></div>`).join("")||'<div class="muted">Henüz commit yok.</div>';$("git-diff").textContent=diff.diff||"Bu bölümde değişiklik yok.";}catch(error){$("git-summary").textContent=`${project.name} · Git kullanılamıyor`;$("git-files").innerHTML=`<div class="skill-empty"><div><span>!</span><b>Git bilgisi okunamadı</b><small>${esc(error.message)}</small></div></div>`;$("git-log").innerHTML="";$("git-diff").textContent="Proje bir Git deposu olmayabilir.";}}
 const securityCapabilities={files:{label:"Proje dosyaları",description:"Dosyaları okuma, oluşturma ve düzenleme"},terminal:{label:"Terminal",description:"Proje klasöründe komut çalıştırma"},browser:{label:"Tarayıcı",description:"Sayfalarda gezinme, tıklama ve yazma"},publish:{label:"GitHub yayını",description:"Commitleri uzak depoya gönderme"},externalServices:{label:"Harici servisler",description:"Bağlı servis ve hesapları kullanma"}};

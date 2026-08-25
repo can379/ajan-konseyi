@@ -1639,3 +1639,22 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .mic-btn.thinking .mic-halo{opacity:1;background:none;border:1.5px solid #4a5049;border-top-color:#c8cec9;border-radius:50%;animation:mic-donuyor .8s linear infinite}
 @keyframes mic-donuyor{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion: reduce){.mic-btn.recording .mic-halo,.mic-btn.thinking .mic-halo{animation:none}}
+
+/* ---- Operasyon Merkezi (CanSellerAI, yalniz okuma) ---- */
+.ops-connect{padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface2);margin-bottom:12px}
+#ops-login-form,#ops-key-form{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+#ops-login-form input,#ops-key-form input{flex:1;min-width:150px}
+.ops-key summary{cursor:pointer;color:var(--dim2);font-size:12px}
+.ops-status{font-size:12px;margin-top:6px}
+.ops-ok{color:var(--ok)} .ops-err{color:var(--err)}
+.ops-account-row{display:flex;align-items:center;gap:12px;margin-bottom:12px;font-size:13px}
+.ops-account-row select{min-width:180px}
+.ops-meta{color:var(--dim2);font-size:11.5px}
+.ops-group{margin-bottom:16px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface2)}
+.ops-rows{display:grid;gap:4px;margin-top:8px}
+.ops-row{display:flex;gap:10px;align-items:baseline;padding:6px 4px;border-bottom:1px solid #23282533}
+.ops-row.acil{background:#f0b9490d;border-left:2px solid var(--warn)}
+.ops-row code{background:none;padding:0;color:var(--dim2);font-size:11.5px;white-space:nowrap}
+.ops-row b{font-weight:600;font-size:13px}
+.ops-row small{display:block;color:var(--dim2);font-size:11.5px}
+.ops-assess{margin-top:10px;padding:10px;border-left:2px solid var(--acc,#2bc9b8);background:#0f1211;border-radius:0 8px 8px 0;font-size:13px}
