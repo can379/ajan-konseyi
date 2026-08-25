@@ -1440,3 +1440,36 @@ body.split-resizing .split-resizer { pointer-events: auto; }
   text-underline-offset:3px;transition:color .12s,text-decoration-color .12s}
 .m-content .code-link::after{content:" ↗";font-size:.85em;opacity:.6}
 .m-content .code-link:hover{color:#c7d6ff;text-decoration-color:#c7d6ff}
+
+
+/* ---- Calisma animasyonlari ---- */
+/* Canli yazim balonunda her yapay zekanin KENDINE OZGU calisma animasyonu
+   vardir (Claude Code'daki nabizli yildiza benzer): Claude'un yildizi doner-
+   nabizlanir, Codex nefes alir, Antigravity yercekimsiz suzulur, Ox Alpha
+   isiltiyla parlar. Ayni renk ailesi + farkli hareket = kim calisiyor bir
+   bakista belli olur. Durum metni de akarak "canli" hissi verir. */
+.live-msg .avatar{will-change:transform}
+.live-msg .avatar svg,.live-msg .avatar .agent-glyph{display:inline-block;transform-origin:center}
+.live-msg.from-claude .avatar .agent-glyph{animation:anim-yildiz 1.6s ease-in-out infinite}
+.live-msg.from-codex .avatar{animation:anim-nefes 1.8s ease-in-out infinite}
+.live-msg.from-antigravity .avatar{animation:anim-suzul 2.2s ease-in-out infinite}
+.live-msg.from-openrouter .avatar{animation:anim-isilti 1.5s ease-in-out infinite}
+.live-msg.from-kullanici .avatar,.live-msg.from-koordinator .avatar{animation:anim-nefes 2s ease-in-out infinite}
+@keyframes anim-yildiz{0%,100%{transform:rotate(0deg) scale(1);opacity:1}50%{transform:rotate(90deg) scale(1.18);opacity:.75}}
+@keyframes anim-nefes{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+@keyframes anim-suzul{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-4px) rotate(2deg)}}
+@keyframes anim-isilti{0%,100%{filter:brightness(1) drop-shadow(0 0 0 rgba(255,180,120,0))}50%{filter:brightness(1.35) drop-shadow(0 0 6px rgba(255,180,120,.45))}}
+/* Durum metni: soldan saga akan isik seridi */
+.live-msg .lb-live{background:linear-gradient(90deg,#8b948f 0%,#e9ede9 45%,#8b948f 90%);background-size:200% 100%;
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;color:transparent;
+  animation:anim-akis 1.8s linear infinite}
+@keyframes anim-akis{from{background-position:180% 0}to{background-position:-20% 0}}
+@media (prefers-reduced-motion: reduce){
+  .live-msg .avatar,.live-msg .avatar .agent-glyph,.live-msg .lb-live{animation:none!important;-webkit-text-fill-color:currentColor}
+}
+
+/* ---- Calisan proje gostergesi ---- */
+/* Gelistirme sunucusu ayaktayken proje adinin yaninda nabiz atan yesil nokta. */
+.dev-dot{display:inline-block;width:7px;height:7px;margin-left:6px;vertical-align:1px;border-radius:50%;
+  background:#4ade80;box-shadow:0 0 0 0 rgba(74,222,128,.55);animation:anim-nabiz 1.6s ease-out infinite}
+@keyframes anim-nabiz{0%{box-shadow:0 0 0 0 rgba(74,222,128,.55)}70%{box-shadow:0 0 0 6px rgba(74,222,128,0)}100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}}

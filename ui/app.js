@@ -480,7 +480,7 @@ function renderProjects() {
     return `<div class="project-group ${selectedBelongs?"has-selected":""}">
       <div class="project-item ${p.id === activeProjectId() ? "active" : ""}" data-proj="${p.id}">
         <span class="p-ico" aria-hidden="true"></span>
-        <span class="p-info"><div class="p-name">${esc(p.name)}</div><div class="p-path">${esc(p.path)}</div></span>
+        <span class="p-info"><div class="p-name">${esc(p.name)}${state.devServers?.[p.id]?.alive ? '<span class="dev-dot" title="Geliştirme sunucusu çalışıyor"></span>' : ""}</div><div class="p-path">${esc(p.path)}</div></span>
       </div>
       <div class="project-runs">${ids.slice(0,limit).map(runHTML).join("")}
         ${ids.length>limit?`<button class="project-more" data-more-project="${p.id}">Daha fazla göster <span>${ids.length-limit}</span></button>`:""}

@@ -353,6 +353,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && p === "/api/state") {
       return json(res, 200, {
         ...store.snapshot(url.searchParams.get("run")),
+        // Calisan gelistirme sunuculari: kenar cubugu projede canli oldugunu
+        // gosterebilsin diye state ile birlikte yayinlanir.
+        devServers: Object.fromEntries([...devSessions.entries()]
+          .filter(([, session]) => session?.alive)
+          .map(([projectId, session]) => [projectId, { alive: true, port: session.port || null, command: session.command || null }])),
         config: config.data,
         roles: ROLES,
         models: MODEL_CATALOG,
