@@ -302,12 +302,19 @@ function connectSSE() {
       renderLive();
       return;
     }
+    if (ev?.type === "steps") {
+      liveSteps[ev.agent] = ev.steps || [];
+      renderLive();
+      return;
+    }
     if (ev?.type === "agent_status" && ev.status !== "busy") {
       delete liveStreams[ev.agent];
+      delete liveSteps[ev.agent];
       renderLive();
     }
     if (ev?.type === "stream_end") {
       delete liveStreams[ev.agent];
+      delete liveSteps[ev.agent];
       renderLive();
       return;
     }
@@ -343,6 +350,8 @@ function renderLive() {
         <div class="m-head">
           <span class="m-name c-${esc(meta.cls)}">${esc(meta.label)}</span>
           <span class="lb-live">${esc(statusLabel)}…</span>
+        </div>
+        <div class="live-steps">${(liveSteps[a] || []).slice(-8).map((st) => stepRow(st, { live: true })).join("")}
           ${elapsedHTML(state.agents[a]?.since || s.startedAt)}
         </div>
       </div>
@@ -924,6 +933,29 @@ async function saveAgentPop() {
 }
 
 
+// ---- Adim gunlugu cizimi (Codex tarzi) ----
+// Canli: ikonlu satirlar akar, surenler soluk yanip söner. Bitince: mesajda
+// tek "⚙ N adım · Xsn ›" satiri kalir; tiklayinca adimlar, adima tiklayinca
+// detay (komut ciktisi, yazilan dosya) acilir. Ayni yere tekrar tiklamak kapatir.
+const STEP_ICONS = { dusundu:"✳", okudu:"🔍", yazdi:"✏️", calistirdi:"⌘", aradi:"🔎", tarayici:"🌐", gorsel:"🎨", devretti:"↳", islem:"•" };
+function stepRow(step, { live = false } = {}) {
+  const icon = STEP_ICONS[step.kind] || "•";
+  const running = step.status === "running";
+  const cls = `step-row${running ? " running" : ""}${step.status === "failed" ? " failed" : ""}`;
+  const title = `<span class="step-ico">${icon}</span><span class="step-title">${esc(step.title)}</span>` +
+    (step.durationMs ? `<span class="step-dur">${(step.durationMs / 1000).toFixed(step.durationMs < 10000 ? 1 : 0)}s</span>` : "") +
+    (step.status === "failed" ? '<span class="step-fail">başarısız</span>' : "");
+  if (live || !String(step.detail || "").trim()) return `<div class="${cls}">${title}</div>`;
+  return `<details class="${cls}"><summary>${title}</summary><pre class="step-detail">${esc(String(step.detail).slice(0, 4000))}</pre></details>`;
+}
+function stepsBlockHTML(data) {
+  if (!data?.steps?.length) return "";
+  const sn = Math.round((data.durationMs || 0) / 1000);
+  const sure = sn >= 60 ? `${Math.floor(sn / 60)}dk ${sn % 60}sn` : `${sn}sn`;
+  return `<details class="steps-block"><summary><span class="steps-gear">⚙</span> ${data.steps.length} adım · ${sure} çalıştı</summary>` +
+    `<div class="steps-list">${data.steps.map((s) => stepRow(s)).join("")}</div></details>`;
+}
+
 function msgHTML(m) {
   if (m.kind === "task") {
     const firstLine = m.content.split("\n")[0];
@@ -956,6 +988,7 @@ function msgHTML(m) {
         <span class="m-kind">${esc(KIND_TR[m.kind] || m.kind)}</span>
         <span class="m-time">${new Date(m.ts).toLocaleTimeString("tr", { hour: "2-digit", minute: "2-digit" })}</span>
       </div>
+      ${m.steps ? stepsBlockHTML(m.steps) : ""}
       <div class="m-content">${md(m.content)}${media ? `<div class="media-grid">${media}</div>${delivery}` : ""}</div>
       <div class="msg-actions" data-message-id="${esc(m.id)}">
         <button data-msg-copy title="Yanıtı kopyala">⧉</button>
@@ -973,6 +1006,7 @@ function msgHTML(m) {
 // Titreme düzeltmesi: sohbet sıfırdan KURULMAZ; yalnızca yeni mesajlar eklenir.
 // Böylece açık <details> öğeleri kapanmaz, metin yanıp sönmez.
 let chatRunId = null, chatCount = 0;
+const liveSteps = {};   // agent -> canli adim listesi (SSE "steps")
 
 let workActivitySig = "";
 function renderWorkActivity(run) {

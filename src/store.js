@@ -88,6 +88,12 @@ export class Store extends EventEmitter {
     this.emit("event", { type: "stream", agent, label, text: String(text).slice(-2000) });
   }
 
+  // Adim gunlugu akisi: ajan calisirken yaptiklari (okudu/yazdi/calistirdi)
+  // canli olarak arayuze gider. Metin akisindan (stream) ayridir.
+  streamSteps(agent, steps) {
+    this.emit("event", { type: "steps", agent, steps });
+  }
+
   clearStream(agent) {
     this.emit("event", { type:"stream_end", agent });
   }
@@ -166,7 +172,7 @@ export class Store extends EventEmitter {
   }
 
   // ---- Mesajlar (ortak konuşma alanı) ----
-  addMessage(run, { from, fromLabel = null, provider = null, model = null, summary = null, engineProvider = null, kind = "message", taskId = null, content, attachments = [] }) {
+  addMessage(run, { from, fromLabel = null, provider = null, model = null, summary = null, engineProvider = null, steps = null, kind = "message", taskId = null, content, attachments = [] }) {
     const msg = {
       id: uid("msg-"),
       ts: now(),
@@ -178,6 +184,7 @@ export class Store extends EventEmitter {
       engineProvider,     // içeriği fiilen üreten farklı sağlayıcı (kimlik devri)
       kind,               // message | task | result | review | debate | vote | decision | error | info
       taskId,
+      steps,              // adım günlüğü: {steps:[{kind,title,detail,status,...}],durationMs,counts}
       content: truncate(String(content ?? ""), 16000),
       attachments: Array.isArray(attachments) ? attachments.map((a) => ({ name:a.name, url:a.url, path:a.path, mime:a.mime, kind:a.kind, size:a.size })) : [],
       feedback: null,

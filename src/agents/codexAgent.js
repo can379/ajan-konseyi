@@ -5,6 +5,7 @@ import { BaseAgent } from "./base.js";
 import { cleanEnv, uid } from "../util.js";
 import { promisify } from "node:util";
 import { CODEX_EFFORT } from "../models.js";
+import { kindForTool } from "../steps.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
 const run = promisify(execFile);
@@ -110,20 +111,38 @@ export class CodexAgent extends BaseAgent {
 
     // Canlı akış: olaylar geldikçe kısmi çıktıyı yayınla
     let live = "", text = "", usage = null;
+    const steps = opts.steps || null;
     const onLine = (line) => {
       if (!line.startsWith("{")) return;
       let ev;
       try { ev = JSON.parse(line); } catch { return; }
       if (ev.type === "thread.started" && ev.thread_id && !opts.fresh) {
         this.setSession(opts, ev.thread_id);
+      } else if (ev.type === "item.started" && ev.item?.type === "reasoning") {
+        steps?.open("dusunme", "dusundu", "Akıl yürütüyor");
       } else if (ev.type === "item.completed" && ev.item) {
         if (ev.item.type === "agent_message") {
+          steps?.close("dusunme", { title: "Akıl yürüttü" });
           text = ev.item.text || text;
           live += (live ? "\n" : "") + (ev.item.text || "");
         } else if (ev.item.type === "command_execution") {
           live += `\n$ ${ev.item.command || ""}`;
+          steps?.add("calistirdi", ev.item.command || "komut",
+            String(ev.item.aggregated_output || ev.item.output || ""),
+            { status: Number(ev.item.exit_code) ? "failed" : "ok" });
+        } else if (ev.item.type === "file_change") {
+          for (const change of ev.item.changes || [{ path: ev.item.path }]) {
+            steps?.add("yazdi", change?.path || "dosya", String(change?.kind || ""));
+          }
+        } else if (ev.item.type === "web_search") {
+          steps?.add("aradi", ev.item.query || "web araması");
+        } else if (ev.item.type === "mcp_tool_call") {
+          steps?.add(kindForTool(ev.item.tool || ev.item.server), ev.item.tool || "araç",
+            "", { status: ev.item.status === "failed" ? "failed" : "ok" });
         } else if (ev.item.type === "reasoning" && ev.item.text) {
           live += `\n💭 ${String(ev.item.text).slice(0, 200)}`;
+          // Ham akil yurutme metni adim detayina girmez; yalniz sure kalir.
+          steps?.close("dusunme", { title: "Akıl yürüttü" });
         }
         if (!opts.silent) this.progress(opts.label || "", live, opts.memberId);
       } else if (ev.type === "turn.completed" && ev.usage) {

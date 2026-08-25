@@ -1473,3 +1473,39 @@ body.split-resizing .split-resizer { pointer-events: auto; }
 .dev-dot{display:inline-block;width:7px;height:7px;margin-left:6px;vertical-align:1px;border-radius:50%;
   background:#4ade80;box-shadow:0 0 0 0 rgba(74,222,128,.55);animation:anim-nabiz 1.6s ease-out infinite}
 @keyframes anim-nabiz{0%{box-shadow:0 0 0 0 rgba(74,222,128,.55)}70%{box-shadow:0 0 0 6px rgba(74,222,128,0)}100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}}
+
+
+/* ---- Adim gunlugu (Codex tarzi calisma akisi) ---- */
+/* Canli: ikonlu satirlar akar; suren adim soluk yanip soner. Bitince mesajda
+   tek "⚙ N adım · Xsn çalıştı" satiri kalir; tiklayinca adimlar, adima
+   tiklayinca detay acilir. */
+.live-steps{display:flex;flex-direction:column;gap:3px;margin:6px 0 2px}
+.step-row{display:flex;align-items:baseline;gap:8px;padding:3px 6px;border-radius:7px;
+  color:#a9b2ac;font-size:12px;line-height:1.45}
+.step-row .step-ico{flex:none;width:16px;text-align:center;opacity:.8;font-size:11px}
+.step-row .step-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:ui-monospace,SFMono-Regular,monospace;font-size:11.5px}
+.step-row .step-dur{flex:none;color:#5f6862;font-size:10.5px}
+.step-row .step-fail{flex:none;color:#ff9c93;font-size:10.5px}
+.step-row.failed .step-title{color:#e8a29b}
+.step-row.running{animation:step-nabiz 1.4s ease-in-out infinite}
+@keyframes step-nabiz{0%,100%{opacity:.95}50%{opacity:.45}}
+
+/* Bitmis mesajdaki katlanir blok */
+details.steps-block{margin:2px 0 8px;border:1px solid #2c322e;border-radius:10px;background:#161a18}
+details.steps-block>summary{display:flex;align-items:center;gap:7px;padding:7px 11px;cursor:pointer;
+  list-style:none;color:#8b948f;font-size:12px;user-select:none}
+details.steps-block>summary::-webkit-details-marker{display:none}
+details.steps-block>summary::after{content:"›";margin-left:auto;color:#5f6862;transition:transform .15s}
+details.steps-block[open]>summary::after{transform:rotate(90deg)}
+details.steps-block>summary:hover{color:#c3cbc6}
+.steps-gear{opacity:.75}
+.steps-list{padding:2px 8px 8px;display:flex;flex-direction:column;gap:2px}
+/* Adim detayi: kendi <details> icinde */
+details.step-row{display:block;padding:0}
+details.step-row>summary{display:flex;align-items:baseline;gap:8px;padding:3px 6px;cursor:pointer;list-style:none}
+details.step-row>summary::-webkit-details-marker{display:none}
+details.step-row>summary:hover{background:#1d2220;border-radius:7px}
+.step-detail{margin:4px 6px 8px 30px;padding:8px 10px;max-height:260px;overflow:auto;
+  border:1px solid #2c322e;border-radius:8px;background:#101312;color:#9aa39d;
+  font:11px/1.5 ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;word-break:break-word}

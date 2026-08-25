@@ -277,6 +277,10 @@ export class OpenRouterAgent extends BaseAgent {
         try {
           payload = await readStream(response, (partial, thinking) => {
             armStall();
+            // Ox Alpha arac kullanamaz; adim gunlugu iki evreyle sinirlidir:
+            // akil yurutme ve yanit yazimi. Durust sinir.
+            if (thinking && !partial) opts.steps?.open("dusunme", "dusundu", "Akıl yürütüyor");
+            if (partial) { opts.steps?.close("dusunme", { title: "Akıl yürüttü" }); opts.steps?.open("yazim", "islem", "Yanıtı yazıyor"); }
             if (opts.silent) return;
             // Model dakikalarca yalnız akıl yürütebilir. Kartı boş bırakmak
             // yerine durumu bildir; ham akıl yürütme metnini kullanıcıya dökme.

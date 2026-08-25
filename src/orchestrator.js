@@ -21,6 +21,7 @@ import { enrichAttachments, attachmentPrompt, unsupportedAttachments, collectGen
 import { analyzeImagesLocally } from "./localVision.js";
 import { bridgePrompt, connectorAccessMode, connectorRoute, CONNECTORS } from "./connectorBridge.js";
 import { canAuthorCode, enforceTaskAssignments, preferredCoder, requiresCodeAuthoring } from "./taskPolicy.js";
+import { StepLog } from "./steps.js";
 import { normalizeTaskContract } from "./taskContract.js";
 import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
 import { assertEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
@@ -456,8 +457,12 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // koru; bu durumda hesabın varsayılan modelini agy seçsin.
     const suppressAntigravityTier = member.provider === "antigravity" && !member.model && !!member.effort;
     const selectedModel = member.model || (suppressAntigravityTier ? "" : (opts.tierModel || undefined));
+    // Adim gunlugu: ajanin yaptiklari (okudu/yazdi/calistirdi...) canli
+    // olarak arayuze akar, bitince mesaja ilistirilip kalici olur.
+    const stepLog = new StepLog({ onChange: (list) => this.store.streamSteps?.(member.id, list) });
     const providerOpts = {
       ...effectiveOpts,
+      steps: stepLog,
       // Kimlik karari tek yerde uretilir; saglayici ajanlari bunu yeniden
       // hesaplamak yerine devralir.
       identityQuestion,
@@ -472,6 +477,12 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     };
     const envStartedAt = new Date().toISOString();
     let res = await provider.send(effectivePrompt, providerOpts);
+    const attachSteps = () => {
+      const finished = stepLog.finish();
+      if (finished && res && typeof res === "object") res.steps = finished;
+      // memberMsg cagrildiginda mesaja ilistirilsin diye uye basina bekletilir.
+      if (finished) (this._pendingSteps ||= {})[member.id] = finished;
+    };
     // Sağlayıcı sandbox'ının localhost erişimine bel bağlama. Üç sağlayıcının da
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
     for(let step=0;res.ok&&step<12;step++){
@@ -500,6 +511,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       this.log(`kimlik yanıtı düzeltildi: ${member.provider} -> ${String(res.text || "").slice(0, 160)}`);
       res = { ...res, text: verifiedMemberIdentity(member), raw: { ...(res.raw || {}), identityCorrected: true } };
     }
+    attachSteps();
     const stopped = run.stopRequested;
     this.store.setAgentStatus(member.id, res.ok || stopped ? "idle" : "error",
       res.ok || stopped ? "" : String(res.error || "").slice(0, 80));
@@ -741,6 +753,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   }
 
   memberMsg(run, member, kind, content, taskId = null, requestText = "", summary = null) {
+    // Uyenin bu cagrida biriken adim gunlugu mesajla birlikte kalici olur;
+    // arayuz bitmis mesajda "⚙ N adım · X sn" katlanir blogu bundan cizer.
+    const stepData = this._pendingSteps?.[member.id] || null;
+    if (stepData) delete this._pendingSteps[member.id];
     let attachments = collectGeneratedAssets(content, this.rootDir, run.projectDir);
     const wantsVector = /(?:\bsvg\b|vektör|vector)/i.test(String(requestText || ""));
     if (!wantsVector && attachments.some((a) => a.kind === "image" && a.mime !== "image/svg+xml")) {
@@ -779,6 +795,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       engineProvider: (attachments.some((a) => a.kind === "image") && run.imageEngineHandoff?.[member.id]?.engineProvider !== member.provider)
         ? run.imageEngineHandoff?.[member.id]?.engineProvider || null : null,
       kind, taskId, content: displayContent, attachments, summary,
+      steps: stepData,
     });
     return attachments;
   }
