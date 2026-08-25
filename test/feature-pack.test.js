@@ -93,3 +93,9 @@ test("gunluk kullanim ucu toplanir ve kota kartinda gosterilir", () => {
   assert.match(app, /fetchUsageToday/, "arayuz periyodik cekmeli");
   assert.match(app, /Bugün<\/small>/, "kota kartinda Bugun hucresi olmali");
 });
+
+test("dosya haritasinin yazan sutunu diff'ten tamamlanir (dolayli yazimlar kacmaz)", () => {
+  const orch = oku("src/orchestrator.js");
+  assert.match(orch, /Yazari diff kaydindan tamamla/, "diff dosyalari haritaya yazar olarak islenmali");
+  assert.match(orch, /kayit\.yazan\.push\(yazarAd\)/, "yazar adi eklenmali");
+});

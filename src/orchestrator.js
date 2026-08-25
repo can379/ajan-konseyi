@@ -1400,6 +1400,18 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         if (delta) {
           const sonMesaj = [...run.messages].reverse().find((m) => m.kind === "message" && m.from !== "kullanici" && m.from !== "sistem");
           if (sonMesaj) { sonMesaj.diff = delta; S.updateRun(run); }
+          // Dosya haritasinin YAZAN sutunu adim basliklarina bel baglamaz:
+          // uye dolayli komutla yazarsa (orn. python betigi) adimda dosya adi
+          // gorunmez; git diff gercegi bilir. Yazari diff kaydindan tamamla.
+          if (sonMesaj) {
+            const yazarAd = this.memberById(sonMesaj.from)?.name || sonMesaj.fromLabel || "Üye";
+            const harita = (run.turnFileMap ||= {});
+            for (const f of delta.files || []) {
+              const ad = String(f.path).split("/").pop();
+              const kayit = (harita[ad] ||= { okuyan: [], yazan: [] });
+              if (!kayit.yazan.includes(yazarAd)) kayit.yazan.push(yazarAd);
+            }
+          }
         }
       }
       if (route.approach === "council") {
