@@ -203,6 +203,7 @@ export class Orchestrator {
     this.rootDir = rootDir;
     this.config = config;
     this.projectContext = new ProjectContext(rootDir);
+    this.computerBridge = new ComputerBridge(this.rootDir);
     this.providers = {
       claude: new ClaudeAgent(store, rootDir),
       codex: new CodexAgent(store, rootDir),
@@ -481,7 +482,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const historyRule = history
       ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
       : "";
-    let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${askHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${computerHelp}${askHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
     // Kullanicinin ARA YONLENDIRMELERI (tur calisirken yazdigi fikirler) ve
     // yarida kesilmis tur notlari bir SONRAKI uye cagrisina islenir: is
     // birakilmaz, kaldigi yerden yeni bilgiyle surdurulur.
@@ -560,10 +561,11 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     // yapılandırılmış isteğini orkestratör kendi güvenilir köprüsünde çalıştırır.
     for(let step=0;res.ok&&step<12;step++){
       const browserAction=browserToken&&parseBrowserAction(res.text);
+      const computerAction=(computerHelp&&parseComputerAction(res.text))||null;
       const hostAction=parseHostAction(res.text);
       const askAction=(!opts._askDepth&&parseAgentAsk(res.text))||null;
-      if(!browserAction&&!hostAction&&!askAction)break;
-      const action=browserAction||hostAction||askAction;
+      if(!browserAction&&!computerAction&&!hostAction&&!askAction)break;
+      const action=browserAction||computerAction||hostAction||askAction;
       let result;
       try{
         if(askAction){
@@ -574,6 +576,19 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
           result=cevap.ok?{answer:String(cevap.text||"").slice(0,4000),from:hedefUye.name}:{error:String(cevap.error||"yanıt alınamadı")};
         }
         else if(browserAction)result=await this.browserBridge.request({token:browserToken,...browserAction});
+        else if(computerAction){
+          // Tur basina BIR KEZ sorulur; kullanicinin karari (evet/hayir) tur boyunca gecerli.
+          if(run._computerOnay===undefined){
+            this.notify("Ajan Konseyi ⚠", "Bilgisayar kullanma onayı bekleniyor");
+            run._computerOnay=await this.store.requestApproval(run,{
+              kind:"computer",
+              title:"Bilgisayar kullanma onayı",
+              detail:`${member.name} ekranınızı görmek ve fare/klavye kullanmak istiyor. İlk eylem: ${describeComputerAction(computerAction).title}. Onay bu tur boyunca geçerlidir; parola, OTP ve ödeme alanlarını üye doldurmaz.`,
+            });
+          }
+          if(!run._computerOnay)result={error:"Kullanıcı bilgisayar kullanımını onaylamadı. Bu yolu bırak; işi ekransız tamamla veya kullanıcıya devret."};
+          else result=await this.computerBridge.request(computerAction);
+        }
         else{
           if(!isExplicitPublishRequest(prompt))throw new Error("Yayınlama için kullanıcının bu mesajda açık talebi gerekli");
           const projectDir=run.projectDir||process.env.AJAN_KONSEYI_SOURCE_DIR;
@@ -589,7 +604,7 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       // Ham istek+sonuc detayda saklanir — tiklaninca acilir (Codex'in
       // "Ran page script ›" davranisi).
       if(!askAction){
-        const tarif=describeAgentAction(action);
+        const tarif=computerAction?describeComputerAction(action):describeAgentAction(action);
         stepLog.add(tarif.kind,tarif.title,
           `istek: ${JSON.stringify(action,null,1).slice(0,1500)}\nsonuç: ${JSON.stringify(result,null,1).slice(0,3000)}`,
           {status:result&&result.error?"failed":"ok"});
@@ -1299,6 +1314,8 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     if (run.turnActive) throw new Error("Bu sohbette bir tur zaten çalışıyor; önce durdurun");
     run.turnActive = true;
     run.stopRequested = false;
+    // Bilgisayar kullanma onayi tur basina gecerlidir; yeni turda yeniden sorulur.
+    delete run._computerOnay;
     run.request = text;
     attachments = await enrichAttachments(attachments);
     run.attachments = attachments;
