@@ -201,12 +201,23 @@ export class RdpController {
     return mevcut;
   }
 
+  // Yardimci ikili KAYNAK DEGISINCE yeniden derlenir. Yalniz "dosya var mi"
+  // bakmak eski ikilinin takili kalmasina yol aciyordu: yeni alanlar (dialog
+  // dugmeleri/metinleri) hic gelmiyor, sertifika penceresi gorunmuyordu.
   async ensureAxTool() {
-    if (fs.existsSync(this.axBin)) return this.axBin;
+    const imza = path.join(this.binDir, "axcihazlar.imza");
+    const guncelImza = String(AX_SWIFT.length);
+    if (fs.existsSync(this.axBin)) {
+      let eski = "";
+      try { eski = fs.readFileSync(imza, "utf8"); } catch {}
+      if (eski === guncelImza) return this.axBin;
+      try { fs.unlinkSync(this.axBin); } catch {}
+    }
     fs.mkdirSync(this.binDir, { recursive: true });
     const src = path.join(this.binDir, "axcihazlar.swift");
     fs.writeFileSync(src, AX_SWIFT);
     await run("/usr/bin/swiftc", ["-O", "-o", this.axBin, src], 180_000);
+    try { fs.writeFileSync(imza, guncelImza); } catch {}
     return this.axBin;
   }
 

@@ -261,3 +261,11 @@ test("uyeye ekran goruntusu hem EK hem YOL olarak verilir", () => {
   assert.match(orch, /görüntü\/dosya eklerini okuman serbesttir/,
     "izole cagride verilen gorseli okumak serbest olmali");
 });
+
+test("AX yardimcisi kaynak degisince yeniden derlenir (eski ikili takili kalmasin)", () => {
+  const kaynak = oku("src/rdpController.js");
+  assert.match(kaynak, /axcihazlar\.imza/, "surum imzasi tutulmali");
+  assert.match(kaynak, /eski ikilinin takili kalmasina yol aciyordu/, "sebep koda not dusulmus olmali");
+  // Canli hata: yeni alanlar (dialog dugmeleri/metinleri) hic gelmedi cunku
+  // "dosya var mi" kontrolu eski ikiliyi kullanmaya devam ediyordu.
+});
