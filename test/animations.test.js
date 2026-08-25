@@ -53,3 +53,14 @@ test("yogunluk secenekleri kendi ikonlarini tasir (hepsi davul degil)", async ()
   assert.ok(!html.includes("🥁"), "davul ikonu kalmamali");
   assert.match(html, /⚖️ Dengeli/); assert.match(html, /🌱 Ekonomik/); assert.match(html, /🔬 Titiz/);
 });
+
+test("canli akis yerinde guncellenir (kart her deltada yikilmaz)", async () => {
+  const fs = await import("node:fs");
+  const app = fs.readFileSync(new URL("../ui/app.js", import.meta.url), "utf8");
+  assert.match(app, /function patchLiveText/, "yerinde yama fonksiyonu olmali");
+  assert.match(app, /o\.innerHTML = news\[i\]\.innerHTML/, "buyuyen blok dugum kimligini korumali");
+  assert.match(app, /paras\.slice\(-5\)/, "pencere paragrafla kaymali, karakterle degil");
+  const css = fs.readFileSync(new URL("../ui/style.css", import.meta.url), "utf8");
+  assert.match(css, /flow-in/, "yeni paragraf kayarak girmeli");
+  assert.match(css, /caret-blink/, "akis imleci olmali");
+});
