@@ -75,9 +75,12 @@ function stripShellWrapper(cmd) {
 
 // Komuttaki dosya hedeflerini yakala (bayrak/desen degil, dosya adi gibi
 // gorunen belirtecler).
+const FILE_EXT = /\.(?:html?|js|mjs|cjs|ts|tsx|jsx|css|scss|json|md|txt|py|rb|go|rs|java|sh|zsh|yml|yaml|toml|xml|svg|sql|swift|kt|c|h|cpp|hpp|plist|lock|env|cfg|ini|csv|patch|diff|log|conf)$/i;
 function commandTargets(inner) {
+  // Yalniz BILINEN dosya uzantilari hedef sayilir; "gorevler.length" gibi
+  // kod ifadeleri dosya adi degildir (kullanici ekraninda basliga sizdi).
   const tokens = inner.split(/\s+/).filter((t) =>
-    /^[\w./~-]+\.[a-z]{1,6}$/i.test(t) && !t.startsWith("-"));
+    /^[\w./~-]+\.[a-z]{1,6}$/i.test(t) && !t.startsWith("-") && FILE_EXT.test(t));
   return [...new Set(tokens.map((t) => t.split("/").pop()))].slice(0, 3);
 }
 
