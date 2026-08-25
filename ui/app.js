@@ -520,8 +520,8 @@ function renderConversations() {
   const query = conversationSearch.trim().toLocaleLowerCase("tr-TR");
   const runs = Object.values(state.runs)
     .filter((run) => run.kind === "chat" && !run.projectId && !run.deletedAt && (showArchivedChats||!run.archived) && (!query || runSearchText(run).includes(query)))
-    .sort((a, b) => (Number(b.pinned)-Number(a.pinned))||String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  el.innerHTML = runs.length ? runs.map((run) => `<div class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""} ${run.status==="running"?"working":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
+    .sort((a, b) => runOrderCompare(a, b));
+  el.innerHTML = runs.length ? runs.map((run) => `<div draggable="true" class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""} ${run.status==="running"?"working":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
     <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
     <div class="r-meta">${run.status==="running"?workingEqHTML():`<span class="status-dot ${run.status === "idle" ? "done" : esc(run.status)}"></span>`}${run.status === "running" ? esc(PHASE_TR[run.phase] || run.phase) : esc(PHASE_TR[run.status] || run.status)}</div>
   </div>`).join("") : `<div class="conversation-empty">${query ? "Eşleşen sohbet bulunamadı." : "Henüz sohbet yok."}</div>`;
@@ -596,13 +596,27 @@ function syncToggles() {
 function workingEqHTML(title = "Bir ajan çalışıyor") {
   return `<span class="work-eq" title="${esc(title)}" aria-label="${esc(title)}"><i></i><i></i><i></i></span>`;
 }
+// Sohbet sirasi: sabitlenenler ustte; elle tasinanlar (sortIndex) kendi
+// sirasinda, tasinmayanlar en yeniden eskiye. Elle siralanan liste kullanici
+// tercihi oldugu icin tarihe gore olanlarin USTUNDE durur.
+function runOrderCompare(x, y) {
+  // pinned hic atanmamis olabilir: Number(undefined)=NaN sabitlemeyi ezer.
+  const p = Number(!!y.pinned) - Number(!!x.pinned);
+  if (p) return p;
+  const sx = Number.isFinite(x.sortIndex) ? x.sortIndex : null;
+  const sy = Number.isFinite(y.sortIndex) ? y.sortIndex : null;
+  if (sx !== null && sy !== null) return sx - sy;
+  if (sx !== null) return -1;
+  if (sy !== null) return 1;
+  return String(y.createdAt || "").localeCompare(String(x.createdAt || ""));
+}
 function renderProjects() {
   const list = state.config.projects;
   const sortedRunIds = Object.keys(state.runs).filter((id)=>!state.runs[id].deletedAt&&(showArchivedChats||!state.runs[id].archived))
-    .sort((a, b) => (Number(state.runs[b].pinned)-Number(state.runs[a].pinned))||state.runs[b].createdAt.localeCompare(state.runs[a].createdAt));
+    .sort((a, b) => runOrderCompare(state.runs[a], state.runs[b]));
   const runHTML = (id) => {
     const r=state.runs[id];
-    return `<div class="run-item ${id === selectedRun ? "selected" : ""} ${r.pinned?"pinned":""} ${r.archived?"archived":""} ${r.status==="running"?"working":""}" data-run="${id}" title="${esc(r.title || r.request)}">
+    return `<div draggable="true" class="run-item ${id === selectedRun ? "selected" : ""} ${r.pinned?"pinned":""} ${r.archived?"archived":""} ${r.status==="running"?"working":""}" data-run="${id}" title="${esc(r.title || r.request)}">
       <div class="r-title">${esc(r.title || r.request)}</div>
       <div class="r-meta">${r.status==="running"?workingEqHTML():`<span class="status-dot ${r.status === "idle" ? "done" : r.status}"></span>`}${r.status === "running" ? esc(PHASE_TR[r.phase] || r.phase) : esc(PHASE_TR[r.status] || r.status)}</div>
     </div>`;
@@ -616,7 +630,7 @@ function renderProjects() {
     // (arama/limit suzgecinden bagimsiz: gizli satirda is olsa da gorunur).
     const calisiyor=Object.values(state.runs).some((r)=>r.projectId===p.id&&!r.deletedAt&&r.status==="running");
     return `<div class="project-group ${selectedBelongs?"has-selected":""}">
-      <div class="project-item ${p.id === activeProjectId() ? "active" : ""} ${calisiyor?"working":""}" data-proj="${p.id}">
+      <div draggable="true" class="project-item ${p.id === activeProjectId() ? "active" : ""} ${calisiyor?"working":""}" data-proj="${p.id}">
         <span class="p-ico" aria-hidden="true"></span>
         <span class="p-info"><div class="p-name">${esc(p.name)}${calisiyor?workingEqHTML("Bu projede bir ajan çalışıyor"):""}${state.devServers?.[p.id]?.alive ? '<span class="dev-dot" title="Geliştirme sunucusu çalışıyor"></span>' : ""}</div><div class="p-path">${esc(p.path)}</div></span>
       </div>
@@ -636,6 +650,76 @@ function renderProjects() {
   if (scroller && scroller.scrollTop !== keepScroll) scroller.scrollTop = keepScroll;
   bindProjectContextMenu();
   bindRunContextMenu(listEl);
+  bindSidebarDrag();
+}
+// ---- Kenar cubugu surukle-birak siralamasi ----
+// Projeler ve sohbetler tutup tasinarak yeniden siralanir. Sohbetler kendi
+// listesi icinde tasinir (proje ici veya serbest); hedefin ust yarisina
+// birakmak ustune, alt yarisina birakmak altina koyar. Kalicilik: sohbetler
+// sortIndex (PATCH), projeler projectOrder (POST /api/config).
+let sidebarDrag = null;
+function bindSidebarDrag() {
+  const sidebar = $("sidebar");
+  if (!sidebar || sidebar.dataset.dragBound) return;
+  sidebar.dataset.dragBound = "1";
+  const temizle = () => sidebar.querySelectorAll(".drop-above,.drop-below").forEach((el) => el.classList.remove("drop-above", "drop-below"));
+  sidebar.addEventListener("dragstart", (e) => {
+    const run = e.target.closest?.(".run-item");
+    const proj = run ? null : e.target.closest?.(".project-item");
+    if (run) sidebarDrag = { type: "run", id: run.dataset.run };
+    else if (proj) sidebarDrag = { type: "proj", id: proj.dataset.proj };
+    else { sidebarDrag = null; return; }
+    e.dataTransfer.effectAllowed = "move";
+    try { e.dataTransfer.setData("text/plain", sidebarDrag.id); } catch {}
+  });
+  sidebar.addEventListener("dragover", (e) => {
+    if (!sidebarDrag) return;
+    const hedef = sidebarDrag.type === "run" ? e.target.closest?.(".run-item") : e.target.closest?.(".project-item");
+    if (!hedef) return;
+    // Sohbet yalniz KENDI listesinde tasinir (ayni proje grubu / serbest liste).
+    if (sidebarDrag.type === "run") {
+      const kaynak = sidebar.querySelector(`.run-item[data-run="${CSS.escape(sidebarDrag.id)}"]`);
+      if (!kaynak || kaynak.parentElement !== hedef.parentElement) return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    temizle();
+    if (hedef.dataset.run === sidebarDrag.id || hedef.dataset.proj === sidebarDrag.id) return;
+    const kutu = hedef.getBoundingClientRect();
+    hedef.classList.add(e.clientY < kutu.top + kutu.height / 2 ? "drop-above" : "drop-below");
+  });
+  sidebar.addEventListener("dragleave", (e) => { if (!sidebar.contains(e.relatedTarget)) temizle(); });
+  sidebar.addEventListener("dragend", () => { temizle(); sidebarDrag = null; });
+  sidebar.addEventListener("drop", async (e) => {
+    if (!sidebarDrag) return;
+    const surukle = sidebarDrag; sidebarDrag = null;
+    const hedef = surukle.type === "run" ? e.target.closest?.(".run-item") : e.target.closest?.(".project-item");
+    temizle();
+    if (!hedef) return;
+    e.preventDefault();
+    const hedefId = surukle.type === "run" ? hedef.dataset.run : hedef.dataset.proj;
+    if (hedefId === surukle.id) return;
+    const kutu = hedef.getBoundingClientRect();
+    const altina = e.clientY >= kutu.top + kutu.height / 2;
+    if (surukle.type === "proj") {
+      const ids = [...$("project-list").querySelectorAll(".project-item")].map((el) => el.dataset.proj);
+      ids.splice(ids.indexOf(surukle.id), 1);
+      ids.splice(ids.indexOf(hedefId) + (altina ? 1 : 0), 0, surukle.id);
+      await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ projectOrder: ids }) });
+    } else {
+      const kaynak = $("sidebar").querySelector(`.run-item[data-run="${CSS.escape(surukle.id)}"]`);
+      if (!kaynak || kaynak.parentElement !== hedef.parentElement) return;
+      const ids = [...hedef.parentElement.querySelectorAll(".run-item")].map((el) => el.dataset.run);
+      ids.splice(ids.indexOf(surukle.id), 1);
+      ids.splice(ids.indexOf(hedefId) + (altina ? 1 : 0), 0, surukle.id);
+      // Gorunur listenin tamamina sira numarasi yazilir; gizli (limit disi)
+      // sohbetler numarasiz kalir ve tarihe gore altta dizilmeyi surdurur.
+      await Promise.all(ids.map((id, i) => fetch(`/api/runs/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sortIndex: i }),
+      })));
+    }
+    await fetchState();
+  });
 }
 let runMenuTimer=null;
 async function openSidebarRun(id){

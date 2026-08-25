@@ -1586,3 +1586,9 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 /* Dosya:satir referansi — kutu degil, sonuk dipnot gorunumu. */
 .m-content code.code-ref{background:none;border:none;padding:0;border-radius:0;
   color:var(--dim2);font-size:.86em;white-space:nowrap}
+
+/* Surukle-birak hedef cizgileri: satirin ustune/altina ince vurgu. */
+.run-item.drop-above,.project-item.drop-above{box-shadow:inset 0 2px 0 var(--acc,#2bc9b8)}
+.run-item.drop-below,.project-item.drop-below{box-shadow:inset 0 -2px 0 var(--acc,#2bc9b8)}
+.run-item[draggable],.project-item[draggable]{cursor:grab}
+.run-item[draggable]:active,.project-item[draggable]:active{cursor:grabbing}

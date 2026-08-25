@@ -118,6 +118,15 @@ export class Config {
       this.data.coordinator = this.sanitizeCoordinator(patch.coordinator);
     }
     if ("activeProject" in patch) this.data.activeProject = patch.activeProject;
+    // Kenar cubugu surukle-birakla proje sirasi: bilinen kimlikler verilen
+    // sirayla one alinir, listede olmayanlar mevcut sirasiyla sona kalir.
+    if (Array.isArray(patch.projectOrder)) {
+      const sira = patch.projectOrder.map(String);
+      this.data.projects = [...this.data.projects].sort((a, b) => {
+        const ia = sira.indexOf(a.id), ib = sira.indexOf(b.id);
+        return (ia === -1 ? 1e9 : ia) - (ib === -1 ? 1e9 : ib);
+      });
+    }
     if ("smartModels" in patch) this.data.smartModels = !!patch.smartModels;
     if ("notifications" in patch) this.data.notifications = !!patch.notifications;
     if (patch.notificationEvents && typeof patch.notificationEvents === "object") {
