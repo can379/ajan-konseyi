@@ -408,7 +408,7 @@ export class Orchestrator {
     const images = opts.isolated ? [] : this.referencedImages(run, prompt, opts.images || []);
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
-Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları bağlı proje ya da ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
+Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları proje bağlıysa PROJENİN İÇİNE (tercihen <proje>/cikti/ altına), proje yoksa ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
 Çalışırken yalnız anlamlı aşamalarda kısa durum bildir; her araç çağrısını, düşünceyi veya ham JSON'u kullanıcıya dökme. Nihai yanıtta sonuçla başla, yapılanları kısa ve doğal biçimde özetle, doğrulamayı belirt ve gereksiz başlık/listeler kullanma. Ajan Konseyi arayüzündeki üslup tüm sağlayıcılarda aynı, sade ve profesyonel olmalıdır.
 --- SÖZLEŞME SONU ---`;
     const browserToken=opts.isolated?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
@@ -657,7 +657,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
               sessionKey:`${run.id}#image#${task.id}`, timeoutMs:5*60*1000,
               shouldStop:()=>run.stopRequested });
           if (!generated.ok) throw new Error(generated.error || "Ortak görsel motoru başarısız");
-          const assets = collectGeneratedAssets(generated.text, this.rootDir)
+          const assets = collectGeneratedAssets(generated.text, this.rootDir, run.projectDir)
             .filter((a) => a.kind === (video ? "video" : "image") && (video || a.mime !== "image/svg+xml") && a.path && fs.existsSync(a.path));
           const accepted = video ? assets.slice(0,1) : await this.validatedImageAssets(task.prompt, assets);
           if (!accepted.length) throw new Error("Native araç konuya uygun, açılabilir bir PNG/JPEG/WebP dosyası döndürmedi");
@@ -682,7 +682,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
 
   async guaranteeImageOutput(run, requestedMember, requestText, responseText, opts = {}) {
     if (!this.isImageGenerationRequest(requestText) && !this.isImageRevisionRequest(run, requestText)) return responseText;
-    const existing = collectGeneratedAssets(responseText, this.rootDir);
+    const existing = collectGeneratedAssets(responseText, this.rootDir, run.projectDir);
     const explicitlySvg=/(?:\bsvg\b|vektör|vector)/i.test(String(requestText||""));
     const needsRaster=!explicitlySvg || /(?:gerçekçi|fotogerçekçi|fotoğraf|photoreal|realistic|insan|portre)/i.test(String(requestText||""));
     const eligible = existing.filter((a)=>a.kind==="image"&&a.path&&fs.existsSync(a.path)&&(!needsRaster||a.mime!=="image/svg+xml"));
@@ -706,7 +706,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       { label:"görsel üretiliyor", cwd:run.projectDir || this.rootDir, images:opts.images || [], media:opts.media || [], timeoutMs:5*60*1000, shouldStop:()=>run.stopRequested }
     );
     if (!generated.ok) throw new Error(`Görsel üretilemedi: ${generated.error}`);
-    const assets = collectGeneratedAssets(generated.text, this.rootDir);
+    const assets = collectGeneratedAssets(generated.text, this.rootDir, run.projectDir);
     const accepted = await this.validatedImageAssets(requestText, assets);
     if (!accepted.length) {
       throw new Error("Görsel motoru yanıt verdi ancak açılabilir bir görsel dosyası oluşturmadı");
@@ -736,7 +736,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   }
 
   memberMsg(run, member, kind, content, taskId = null, requestText = "", summary = null) {
-    let attachments = collectGeneratedAssets(content, this.rootDir);
+    let attachments = collectGeneratedAssets(content, this.rootDir, run.projectDir);
     const wantsVector = /(?:\bsvg\b|vektör|vector)/i.test(String(requestText || ""));
     if (!wantsVector && attachments.some((a) => a.kind === "image" && a.mime !== "image/svg+xml")) {
       attachments = attachments.filter((a) => a.mime !== "image/svg+xml");

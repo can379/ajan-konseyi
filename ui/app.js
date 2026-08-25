@@ -930,7 +930,7 @@ function msgHTML(m) {
     // ZIP/uygulama/APK gibi ciktilarin yeri Finder'dir. Tiklama once
     // /api/media/reveal ile dosyayi Finder'da gosterir; dosya artik diskte
     // yoksa href indirme yedegi devreye girer.
-    return `<a class="file-card" href="${esc(a.url)}" target="_blank" data-reveal-url="${esc(a.url)}"><span>${a.kind === "archive" ? "ZIP" : "DOC"}</span><b>${esc(a.name)}</b><small>${esc(a.mime || a.kind)} · ${size}</small></a>`;
+    return `<a class="file-card" href="${esc(a.url)}" target="_blank" data-reveal-url="${esc(a.url)}" data-reveal-path="${esc(a.path || "")}"><span>${a.kind === "archive" ? "ZIP" : "DOC"}</span><b>${esc(a.name)}</b><small>${esc(a.mime || a.kind)} · ${size}</small></a>`;
   }).join("");
   const delivery = m.attachments?.length && m.from === "kullanici" ? `<div class="attachment-delivery">İletildi: ${(state.config.members||[]).filter(x=>x.enabled && (m.attachments||[]).every(a=>state.capabilities?.[x.provider]?.[a.kind])).map(x=>`<span class="c-${x.provider}">${esc(x.name)}</span>`).join(" · ") || "uyumlu ajan yok"}</div>` : "";
   return `<div class="msg from-${esc(align)} kind-${esc(m.kind)}">
@@ -2056,6 +2056,7 @@ function runCommandAction(command) {
     const id = activeProjectId();
     return id ? openCheckpoints(id) : alert("Önce bir proje seçin (📁 Proje seç).");
   }
+  if (eylem === "yedekle") { runBackupCommand(); return; }
   if (eylem === "mcpBilgi") {
     return showModal(`<div class="m-head"><h2>MCP sunucu modu</h2><button data-modal-close>×</button></div>
       <p>Konsey, Claude Code ve Codex içinden araç olarak çağrılabilir. Uygulama açıkken bir kez kaydedin:</p>
@@ -2085,6 +2086,38 @@ function runCommandAction(command) {
       .then((r) => r.json()).then((j) => { if (j.runId) { selectRun(j.runId); fetchState(); } });
     return;
   }
+}
+
+// /yedekle: hedef ayarli degilse sorar (Google Drive klasoru kuruluysa
+// onerilir), yedegi baslatir ve bitince ozet gosterir. Ilk ayna buyuk
+// oldugu icin is sunucuda arka planda kosar; burada yalniz yoklanir.
+async function runBackupCommand() {
+  const status = await fetch("/api/backup/status").then((r) => r.json()).catch(() => null);
+  if (!status) return alert("Yedek durumu okunamadı.");
+  let dir = status.dir;
+  if (!dir) {
+    const oneri = status.googleDrive ? `${status.googleDrive}/AjanKonseyi-Yedek` : "~/Documents/AjanKonseyi-Yedek";
+    dir = prompt("Yedekler hangi klasöre aynalansın?\n(Google Drive masaüstü uygulaması kuruluysa onun klasörünü verin; dosyalar oradan buluta otomatik eşitlenir.)", oneri);
+    if (!dir) return;
+    const saved = await fetch("/api/backup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir }) }).then((r) => r.json());
+    if (saved.error) return alert(saved.error);
+    dir = saved.dir;
+  }
+  const started = await fetch("/api/backup/run", { method: "POST" }).then((r) => r.json());
+  if (started.error) return alert(started.error);
+  showModal(`<div class="m-head"><h2>Yedekleme sürüyor…</h2><button data-modal-close>×</button></div><p id="backup-progress">Dosyalar aynalanıyor: <code>${esc(dir)}</code></p><div class="m-foot"><button data-modal-close>Arka planda sürsün</button></div>`);
+  const timer = setInterval(async () => {
+    const now = await fetch("/api/backup/status").then((r) => r.json()).catch(() => null);
+    if (!now || now.running) return;
+    clearInterval(timer);
+    const el = document.getElementById("backup-progress");
+    const last = now.last || {};
+    if (el) el.innerHTML = last.error
+      ? `Yedekleme hatası: ${esc(last.error)}`
+      : `✅ Bitti — ${last.copied} dosya kopyalandı (${((last.bytes || 0) / 1048576).toFixed(1)} MB), ${last.skipped} dosya zaten günceldi.<br><code>${esc(last.target || dir)}</code>`;
+    const head = el?.closest(".modal, [class*=m-]")?.querySelector("h2");
+    if (head) head.textContent = last.error ? "Yedekleme başarısız" : "Yedekleme tamamlandı";
+  }, 2000);
 }
 
 function chooseCommand(command) {
@@ -2240,7 +2273,7 @@ document.addEventListener("click", async (e) => {
   const revealCard=e.target.closest("a.file-card[data-reveal-url]");
   if(revealCard){
     e.preventDefault();
-    fetch("/api/media/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:revealCard.dataset.revealUrl})})
+    fetch("/api/media/reveal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:revealCard.dataset.revealUrl,path:revealCard.dataset.revealPath||null})})
       .then((r)=>{if(!r.ok)window.open(revealCard.href,"_blank");})
       .catch(()=>window.open(revealCard.href,"_blank"));
     return;

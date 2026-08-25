@@ -29,6 +29,7 @@ const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = path.resolve(process.env.AJAN_KONSEYI_DATA_DIR || ROOT);
 const PORT = process.env.PORT || 4780;
 const UI_TOKEN = process.env.AJAN_UI_TOKEN || "";
+const { runBackup, detectGoogleDrive } = await import("./src/backup.js");
 const BRIDGE_TOKEN = process.env.AJAN_BROWSER_BRIDGE_TOKEN || "";
 
 fs.mkdirSync(DATA_ROOT, { recursive: true });
@@ -305,6 +306,42 @@ const server = http.createServer(async (req, res) => {
     // MCP koprusu yalniz uye ve proje listesine ihtiyac duyar. /api/state
     // kosu anlik goruntusuyle birlikte yarim megabayti asiyor; koprü her arac
     // cagrisinda onu cekmesin diye hafif ve sabit sozlesmeli bir uc verilir.
+    // ---- Yedekleme ----
+    if (req.method === "GET" && p === "/api/backup/status") {
+      const configured = config.data.backup?.dir || null;
+      return json(res, 200, {
+        dir: configured,
+        auto: config.data.backup?.auto !== false,
+        googleDrive: detectGoogleDrive(HOME),
+        last: lastBackupResult,
+        running: backupRunning,
+      });
+    }
+    if (req.method === "POST" && p === "/api/backup/config") {
+      const body = await readBody(req);
+      const dir = String(body.dir || "").trim();
+      if (!dir) return json(res, 400, { error: "Yedek klasörü boş olamaz" });
+      const resolved = path.resolve(dir.replace(/^~(?=\/|$)/, HOME));
+      try { fs.mkdirSync(resolved, { recursive: true }); }
+      catch (error) { return json(res, 400, { error: `Klasör oluşturulamadı: ${String(error.message || error)}` }); }
+      config.data.backup = { dir: resolved, auto: body.auto !== false };
+      config.save();
+      return json(res, 200, { ok: true, dir: resolved });
+    }
+    if (req.method === "POST" && p === "/api/backup/run") {
+      if (backupRunning) return json(res, 409, { error: "Yedekleme zaten sürüyor" });
+      const dir = config.data.backup?.dir;
+      if (!dir) return json(res, 400, { error: "Önce yedek klasörü seçin" });
+      backupRunning = true;
+      // 6+ GB ilk aynada istek dakikalarca askida kalmasin: is arka planda
+      // kosar, sonuc /api/backup/status'tan okunur.
+      Promise.resolve().then(() => runBackup(DATA_ROOT, dir))
+        .then((result) => { lastBackupResult = result; })
+        .catch((error) => { lastBackupResult = { at: new Date().toISOString(), error: String(error.message || error) }; })
+        .finally(() => { backupRunning = false; });
+      return json(res, 202, { started: true });
+    }
+
     if (req.method === "GET" && p === "/api/mcp/info") {
       return json(res, 200, {
         members: (config.data.members || []).filter((m) => m.enabled)
@@ -581,11 +618,20 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && p === "/api/media/reveal") {
       const body = await readBody(req);
+      // Kanonik yer once denenir: uretilen dosya artik bagli projenin icinde
+      // yasar; Finder kullaniciya o kopyayi gostermelidir. Yol yalniz kayitli
+      // bir proje dizininin ICINDEYSE kabul edilir. uploads yedegi korunur.
+      const candidate = body.path ? path.resolve(String(body.path)) : null;
+      const inProject = candidate && (config.data.projects || []).some((proj) => proj.path && isWithin(proj.path, candidate));
+      if (inProject && fs.existsSync(candidate)) {
+        await execP("open", ["-R", candidate]);
+        return json(res, 200, { ok:true, revealed: candidate });
+      }
       const name = path.basename(String(body.url || body.name || ""));
       const file = path.join(DATA_ROOT, "uploads", name);
       if (!isWithin(path.join(DATA_ROOT, "uploads"), file) || !fs.existsSync(file)) return json(res, 404, { error:"Dosya bulunamadı" });
       await execP("open", ["-R", file]);
-      return json(res, 200, { ok:true });
+      return json(res, 200, { ok:true, revealed: file });
     }
 
     // ---- Klasör gezgini (yalnızca ev dizini altı, yalnızca dizinler) ----
@@ -972,6 +1018,20 @@ function serveFile(res, file) {
 // MCP koprusu ayri bir surectir ve portu/belirteci onceden bilemez. Sunucu
 // bunlari veri dizinine yazar; koprü okur. Dosya yalniz kullaniciya okunur
 // izinle olusturulur, cunku belirtec icerir.
+let lastBackupResult = null;
+let backupRunning = false;
+// Saatlik otomatik yedek: hedef ayarliysa ve onceki tur bitmisse calisir.
+// Ayna artimli oldugu icin sessiz turlarda maliyet birkac stat cagrisidir.
+setInterval(() => {
+  const dir = config.data.backup?.dir;
+  if (!dir || config.data.backup?.auto === false || backupRunning) return;
+  backupRunning = true;
+  Promise.resolve().then(() => runBackup(DATA_ROOT, dir))
+    .then((result) => { lastBackupResult = result; })
+    .catch((error) => { lastBackupResult = { at: new Date().toISOString(), error: String(error.message || error) }; })
+    .finally(() => { backupRunning = false; });
+}, 60 * 60 * 1000);
+
 const MCP_ENDPOINT_FILE = path.join(DATA_ROOT, "mcp-endpoint.json");
 function writeMcpEndpoint() {
   try {

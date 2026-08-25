@@ -63,6 +63,7 @@ const SLASH_COMMANDS = [
   { cmd: "yetenekler", tur: "eylem", grup: "Uygulama", aciklama: "Ajan yetenek envanterini açar", eylem: "ayar:capabilities" },
   { cmd: "guncelle",   tur: "eylem", grup: "Uygulama", aciklama: "Uygulama güncellemelerini denetler", eylem: "ayar:updates" },
   { cmd: "mcp",        tur: "eylem", grup: "Uygulama", aciklama: "MCP sunucu modunu ve kurulum komutlarını gösterir", eylem: "mcpBilgi" },
+  { cmd: "yedekle",    tur: "eylem", grup: "Uygulama", aciklama: "Fotoğraf, video ve sohbetleri yedek klasörüne aynalar", eylem: "yedekle" },
 ];
 
 const KOMUT_RE = /^\/([a-zçğıöşü-]+)(?:\s+([\s\S]*))?$/i;

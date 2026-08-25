@@ -100,14 +100,37 @@ export function attachmentPrompt(list) {
   ).join("\n");
 }
 
-export function collectGeneratedAssets(content, rootDir) {
+// Uretilen dosyanin KANONIK yeri bagli projenin icidir: kullanicinin
+// "YaSel guncellemesi" gibi bir ciktisi Ajan Konseyi'nin uploads deposunda
+// degil, guncellenen projenin kendi klasorunde (cikti/) yasamalidir.
+// uploads kopyasi yalniz arayuz onizleme/indirme SUNUMU icin tutulur.
+export function collectGeneratedAssets(content, rootDir, projectDir = null) {
   const out = [], seen = new Set();
   const text = String(content || "");
   const matches = text.match(/\/?(?:Users|private|tmp)\/[\w\-./ ]+\.(?:png|jpe?g|webp|gif|avif|svg|pdf|docx?|xlsx?|csv|txt|md|html?|mp3|wav|m4a|aac|ogg|mp4|mov|webm|zip)/gi) || [];
   const uploadDir = path.join(rootDir, "uploads"); fs.mkdirSync(uploadDir, { recursive:true });
   for (const raw of matches.slice(0,8)) {
     const source = path.resolve(raw.trim()); if (seen.has(source) || !fs.existsSync(source)) continue; seen.add(source);
-    try { const data=fs.readFileSync(source); const meta=detectMedia(data,path.basename(source)); const name=`generated-${Date.now().toString(36)}-${path.basename(source)}`; const dest=path.join(uploadDir,name); fs.copyFileSync(source,dest); out.push({path:dest,url:"/uploads/"+name,name:path.basename(source),...meta,generated:true}); } catch {}
+    try {
+      const data=fs.readFileSync(source); const meta=detectMedia(data,path.basename(source));
+      const name=`generated-${Date.now().toString(36)}-${path.basename(source)}`;
+      const dest=path.join(uploadDir,name); fs.copyFileSync(source,dest);
+      // Projesiz sohbette kanonik yer uploads kopyasidir (kaynak /tmp gibi
+      // ucucu bir yerde olabilir); proje bagliysa kanonik yer projedir.
+      let canonical = dest;
+      if (projectDir && fs.existsSync(projectDir)) {
+        const resolvedProject = path.resolve(projectDir) + path.sep;
+        if (source.startsWith(resolvedProject)) {
+          canonical = source; // zaten projenin icinde; kopyalama
+        } else {
+          const outDir = path.join(projectDir, "cikti");
+          fs.mkdirSync(outDir, { recursive:true });
+          canonical = path.join(outDir, path.basename(source));
+          fs.copyFileSync(source, canonical);
+        }
+      }
+      out.push({path:canonical,url:"/uploads/"+name,name:path.basename(source),...meta,generated:true});
+    } catch {}
   }
   // Ajan bazen dosya yazmak yerine SVG'yi Markdown kod bloğu olarak döndürür.
   // Güvenli bir SVG dosyasına dönüştürerek gerçek çıktı/önizleme haline getir.
