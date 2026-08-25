@@ -2143,6 +2143,10 @@ async function micBaslat() {
   // Ses seviyesi dugmeye canli aktarilir: kullanici mikrofonun kendisini
   // GERCEKTEN duydugunu gorsun (sessizken cubuklar durur, konusunca oynar).
   let seviye = 0;
+  // Konusma sonu algilama durumu.
+  let konusmaBasladi = false, bitiriliyor = false;
+  const basladi = performance.now();
+  let sonSes = basladi;
   const halo = btn.querySelector(".mic-halo");
   isleyici.onaudioprocess = (e) => {
     const veri = e.inputBuffer.getChannelData(0);
@@ -2153,15 +2157,42 @@ async function micBaslat() {
     // Yumusatma: cubuklar titremesin, konusma temposunda insin ciksin.
     seviye = anlik > seviye ? anlik : seviye * 0.75 + anlik * 0.25;
     btn.style.setProperty("--ses", seviye.toFixed(3));
-    // Cubuk yukseklikleri: ortadaki en cok, kenarlar daha az oynar.
     // Hale sesle birlikte buyur: konusurken belirgin, sessizken sakin.
     if (halo) halo.style.transform = `scale(${(1 + seviye * 0.9).toFixed(2)})`;
+    // KENDILIGINDEN BITIRME: konusma bitince durdurma tusunu beklemeye gerek
+    // yok. Once konusma baslamis olmali (yanlislikla tetiklenmesin), sonra
+    // 1,2 sn sessizlikte kayit kapanip yaziya dokum baslar.
+    const simdi = performance.now();
+    if (seviye > 0.055) { konusmaBasladi = true; sonSes = simdi; }
+    if (bitiriliyor) return;
+    if (konusmaBasladi && simdi - sonSes > 1500) { bitiriliyor = true; micState?.stop(); return; }
+    // Hic konusulmadiysa bos yere kayitta kalma.
+    if (!konusmaBasladi && simdi - basladi > 8000) { bitiriliyor = true; micState?.stop(); }
   };
   kaynak.connect(isleyici); isleyici.connect(ctx.destination);
-  btn.classList.add("recording"); btn.title = "Kaydı bitir ve yazıya dök";
+  btn.classList.add("recording"); btn.title = "Konuşmayı bitirince kendiliğinden yazıya döker (durdurmak için basın)";
+  // CANLI DOKUM: konusma bitmesini beklemeden, o ana kadarki ses duzenli
+  // araliklarla cozumlenip metin kutusunda GUNCELLENIR (eklenmez), boylece
+  // kullanici yazisinin olustugunu aninda gorur.
+  const oncekiMetin = ta.value ? ta.value.trim() + " " : "";
+  let canliCalisiyor = false;
+  const canliYaz = (metin) => { ta.value = oncekiMetin + metin; autoGrow(); };
+  const canliTimer = setInterval(async () => {
+    if (canliCalisiyor || !konusmaBasladi || !parcalar.length || !micState) return;
+    canliCalisiyor = true;
+    try {
+      const wav = pcmToWav(parcalar, ctx.sampleRate);
+      const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
+      const d = await r.json();
+      if (r.ok && d.text && micState) canliYaz(d.text);
+    } catch { /* canli dokum bosa duserse kayit surer; bitiste tam cozumleme yapilir */ }
+    finally { canliCalisiyor = false; }
+  }, 1500);
   micState = {
     async stop() {
+      if (!micState) return; // konusma sonu ve elle basma cakisabilir
       micState = null;
+      clearInterval(canliTimer);
       isleyici.disconnect(); kaynak.disconnect();
       akis.getTracks().forEach((t) => t.stop());
       const wav = pcmToWav(parcalar, ctx.sampleRate);
@@ -2173,8 +2204,9 @@ async function micBaslat() {
         const r = await fetch("/api/speech", { method: "POST", headers: { "Content-Type": "audio/wav" }, body: wav });
         const d = await r.json();
         if (!r.ok) throw new Error(d.error || "çözümlenemedi");
-        if (d.text) { ta.value = (ta.value ? ta.value.trim() + " " : "") + d.text; autoGrow(); ta.focus(); }
-        else alert("Ses anlaşılamadı; daha yakından ve net konuşmayı deneyin.");
+        // Canli dokum sirasinda yazilan metnin YERINE tam cozumleme gecer.
+        if (d.text) { ta.value = oncekiMetin + d.text; autoGrow(); ta.focus(); }
+        else if (konusmaBasladi) alert("Ses anlaşılamadı; daha yakından ve net konuşmayı deneyin.");
       } catch (error) {
         alert("Sesli giriş başarısız: " + String(error.message || error));
       } finally { btn.classList.remove("thinking"); btn.title = "Sesle yaz"; }

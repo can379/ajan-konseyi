@@ -178,3 +178,42 @@ test("mikrofon dugmesi cizgi ikon + kayit animasyonu tasir", () => {
   assert.match(app, /halo\.style\.transform = `scale/, "hale konusma sesiyle olceklenmeli");
   assert.match(app, /Math\.sqrt\(kare/, "ses seviyesi olculmeli");
 });
+
+test("konusma bitince kayit kendiliginden kapanir (durdurma tusu beklenmez)", () => {
+  const app = oku("ui/app.js");
+  const esik = Number(/seviye > (0\.\d+)/.exec(app)[1]);
+  const sessizlik = Number(/simdi - sonSes > (\d+)/.exec(app)[1]);
+  const bosBekleme = Number(/simdi - basladi > (\d+)/.exec(app)[1]);
+  assert.ok(esik > 0.02 && esik < 0.15, "esik makul olmali (fisilti ile gurultu arasi)");
+  assert.ok(sessizlik >= 800 && sessizlik <= 2000, "sessizlik payi konusma arasi duraklamayi kesmemeli");
+  assert.ok(bosBekleme >= 5000, "hic konusulmazsa hemen vazgecmemeli");
+
+  // Benzetim: 2 sn konusma + sessizlik -> kayit kendiliginden kapanmali.
+  const calistir = (uretici, sure) => {
+    let seviye = 0, konusmaBasladi = false, bitti = null, sonSes = 0;
+    for (let t = 0; t < sure; t += 85) {
+      const anlik = uretici(t);
+      seviye = anlik > seviye ? anlik : seviye * 0.75 + anlik * 0.25;
+      if (seviye > esik) { konusmaBasladi = true; sonSes = t; }
+      if (bitti !== null) continue;
+      if (konusmaBasladi && t - sonSes > sessizlik) bitti = t;
+      else if (!konusmaBasladi && t > bosBekleme) bitti = t;
+    }
+    return bitti;
+  };
+  const konusma = calistir((t) => (t < 2000 ? 0.4 : 0.01), 6000);
+  assert.ok(konusma > 2000 && konusma < 4500, "konuşma sonrası makul sürede kapanmalı: " + konusma);
+  assert.equal(calistir(() => 0.005, 12000) > bosBekleme, true, "hic ses yoksa bos bekleme suresinde kapanmali");
+
+  // Cakisma korumasi: elle basma ile otomatik durus ayni anda gelebilir.
+  assert.match(app, /if \(!micState\) return;/, "stop iki kez calismamali");
+});
+
+test("konusurken anlik yaziya dokum yapilir (bekletmeden)", () => {
+  const app = oku("ui/app.js");
+  assert.match(app, /const canliTimer = setInterval/, "duzenli aralikla canli cozumleme olmali");
+  assert.match(app, /if \(canliCalisiyor \|\| !konusmaBasladi/, "istekler ust uste binmemeli");
+  assert.match(app, /clearInterval\(canliTimer\)/, "kayit bitince zamanlayici durmali");
+  assert.match(app, /ta\.value = oncekiMetin \+ metin/, "canli metin eklenmeyip guncellenmeli (tekrar olmasin)");
+  assert.match(app, /ta\.value = oncekiMetin \+ d\.text/, "bitiste tam cozumleme canli metnin yerine gecmeli");
+});
