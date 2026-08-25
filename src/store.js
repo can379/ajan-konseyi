@@ -27,7 +27,14 @@ export class Store extends EventEmitter {
         let recovered = false;
         if (run.status === "running") {
           if (run.kind === "chat") {
-            // Sohbetler kesintiden etkilenmez; yarım kalan tur düşer, sohbet sürer
+            // Sohbetler kesintiden etkilenmez; yarım kalan tur düşer, sohbet sürer.
+            // Ama yarım kalan İŞ UNUTULMAZ: bir sonraki turda üyeye "şu istek
+            // yarıda kesilmişti" notu gider ("kaldığın yerden devam et" gerçekten
+            // kaldığı yeri bilsin).
+            if (run.turnActive && run.request) {
+              run.steeringNotes = [...(run.steeringNotes || []),
+                `Önceki tur uygulama kapanınca YARIDA KESİLDİ. Yarıda kalan istek: "${String(run.request).slice(0, 400)}". Kullanıcı devam etmek isterse bu işi kaldığı yerden sürdür; tamamlanan kısımları yeniden yapma.`];
+            }
             run.status = "idle";
             run.phase = "idle";
           } else {

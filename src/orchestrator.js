@@ -463,6 +463,14 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
       ? "Geçmiş yalnız arka plan bağlamıdır; yanıtını ŞU ANKİ İSTEK bölümüne ver. Geçmişte aynı veya benzer bir istek konudan sapan bir yanıt almışsa onu örnek alma ve tekrarlama. "
       : "";
     let effectivePrompt = `${opts.lean ? "" : capabilityContract + "\n\n"}${history ? `--- ORTAK SOHBET GEÇMİŞİ ---\n${history}\n--- GEÇMİŞ SONU ---\n\n` : ""}${requestBlock}${browserHelp}${opts.lean ? "" : hostHelp}\n\n${historyRule}Önceki konuşmayı ve diğer ajanların yanıtlarını aynı sohbetin bağlamı kabul et. Kullanıcı açıkça konu değiştirmedikçe kaldığı yerden devam et; geçmişte verilmiş bilgi veya eki tekrar isteme.`;
+    // Kullanicinin ARA YONLENDIRMELERI (tur calisirken yazdigi fikirler) ve
+    // yarida kesilmis tur notlari bir SONRAKI uye cagrisina islenir: is
+    // birakilmaz, kaldigi yerden yeni bilgiyle surdurulur.
+    if (!opts.isolated && Array.isArray(run.steeringNotes) && run.steeringNotes.length) {
+      const notlar = run.steeringNotes.splice(0).map((n) => `- ${n}`).join("\n");
+      this.store.updateRun(run);
+      effectivePrompt = `--- KULLANICIDAN ARA YÖNLENDİRME ---\n${notlar}\nBu notları şu anki işine HEMEN dahil et; işi baştan alma, kaldığın yerden sürdür.\n--- ARA YÖNLENDİRME SONU ---\n\n${effectivePrompt}`;
+    }
     if (opts.style === "codex" && !opts.lean && !opts.isolated) effectivePrompt += CODEX_STYLE_CONTRACT;
     if (identityQuestion) effectivePrompt += identityContract;
     if(opts.isolated) effectivePrompt=`--- İZOLE İNCELEME: ORTAK GEÇMİŞ, ARAÇLAR VE BAĞLAYICILAR KAPALI ---\n\n${prompt}\n\nBu çağrı bağımsızdır; önceki konuşma veya sağlayıcı oturumu kullanma.`;
@@ -1358,6 +1366,11 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     } finally {
       run.turnActive = false;
       this.persistSessions(run);
+      // Tur, ara yonlendirme islenemeden bittiyse not KAYBOLMAZ: normal
+      // mesaj olarak kuyruga iner ve hemen yeni tur olarak islenir.
+      if (Array.isArray(run.steeringNotes) && run.steeringNotes.length) {
+        for (const not of run.steeringNotes.splice(0)) this.enqueueMessage(run, { target: "konsey", text: not, mode });
+      }
       S.updateRun(run, { status: "idle", phase: "idle" });
       if (!run.stopRequested) this.notify("Ajan Konseyi ✓", "Yanıt hazır");
       this.drainMessageQueue(run);

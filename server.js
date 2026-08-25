@@ -802,7 +802,18 @@ const server = http.createServer(async (req, res) => {
       if (run && run.kind !== "chat") run = null;
       const approach = ["quick", "pair", "council"].includes(body.approach) ? body.approach : null;
       const intensity = ["ekonomik", "dengeli", "titiz"].includes(body.intensity) ? body.intensity : null;
-      if (run?.turnActive || run?.directActive) {
+      if (run?.turnActive) {
+        // Tur CALISIRKEN gelen mesaj kuyruga degil isin ICINE gider: bir
+        // sonraki uye cagrisinda "ara yonlendirme" olarak islenir; sistem
+        // kaldigi yeri bilir, is birakilmaz. (Kullanici istegi: "arada fikir
+        // verebilirim, sistem onceki kaldigi yeri bilir".)
+        run.steeringNotes = [...(run.steeringNotes || []), text];
+        store.addMessage(run, { from: "kullanici", kind: "message", content: text, attachments: sanitizeAttachments(body.attachments) });
+        store.addMessage(run, { from: "sistem", kind: "info", content: "↪ Mesaj çalışan tura iletildi; üyeler bir sonraki adımda dikkate alacak." });
+        store.updateRun(run);
+        return json(res, 202, { runId: run.id, steered: true });
+      }
+      if (run?.directActive) {
         const chatMode = ["auto", "discussion", "split", "code"].includes(body.mode) ? body.mode : "auto";
         const queued = orch.enqueueMessage(run, {
           target: "konsey", text, mode: chatMode, approach, intensity,
