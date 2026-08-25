@@ -16,6 +16,11 @@ app.setPath("userData", path.join(app.getPath("appData"), "Ajan Konseyi"));
 const root = path.resolve(__dirname, "..");
 const sourceRoot = app.isPackaged ? path.resolve(process.resourcesPath, "../../../../..") : root;
 let serverProcess = null;
+const { openServerLog, nextRespawnDelay } = require("./serverGuard.cjs");
+let serverLog = null;      // tembel acilir: app.getPath "ready" ister
+let quittingApp = false;   // kasitli kapanista bekci yeniden dogurtmaz
+let respawnAttempts = 0;
+let respawnTimer = null;
 let mainWindow = null;
 let browserGuest = null;
 const browserGuests = new Map();
@@ -210,8 +215,10 @@ async function ensureServer() {
     "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
     path.join(home, ".local", "bin"), path.join(home, ".npm-global", "bin"),
   ].join(path.delimiter);
+  serverLog ||= openServerLog(path.join(app.getPath("userData"), "logs"));
+  serverLog.line(`sunucu başlatılıyor (deneme ${respawnAttempts + 1})`);
   serverProcess = spawn(process.execPath, [path.join(root, "server.js")], {
-    cwd: app.getPath("userData"), stdio: "ignore", env: {
+    cwd: app.getPath("userData"), stdio: ["ignore", "pipe", "pipe"], env: {
       ...process.env,
       PATH: `${cliPath}${path.delimiter}${process.env.PATH || ""}`,
       ELECTRON_RUN_AS_NODE: "1",
@@ -221,12 +228,38 @@ async function ensureServer() {
       AJAN_BROWSER_BRIDGE_TOKEN: bridgeToken,
     },
   });
+  serverProcess.stdout.on("data", (d) => serverLog?.stream.write(d));
+  serverProcess.stderr.on("data", (d) => serverLog?.stream.write(d));
+  // Bekci: sunucu olurse sebep gunlukte kalir ve artan gecikmeyle yeniden
+  // dogar. Eskiden olum fark edilmiyor, arayuz sayaclari bosa akiyordu.
+  const child = serverProcess;
+  child.on("exit", (code, signal) => {
+    if (serverProcess === child) serverProcess = null;
+    serverLog?.line(`sunucu öldü (exit=${code} sinyal=${signal || "-"})`);
+    if (quittingApp) return;
+    respawnAttempts += 1;
+    const delay = nextRespawnDelay(respawnAttempts);
+    serverLog?.line(`${delay} ms sonra yeniden başlatılacak`);
+    clearTimeout(respawnTimer);
+    respawnTimer = setTimeout(() => { ensureServer().catch((e) => serverLog?.line(`yeniden başlatma başarısız: ${e.message}`)); }, delay);
+  });
   for (let i = 0; i < 40; i++) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    if (await serverReady()) return;
+    if (await serverReady()) { respawnAttempts = 0; serverLog.line("sunucu hazır"); return; }
   }
   throw new Error("Yerel sunucu başlatılamadı");
 }
+
+// Ikinci savunma hatti: cocuk tutamacimiz olmayan bir sunucu da olebilir
+// (uygulama var olan bir sunucuya baglanmis olabilir). Periyodik saglik
+// yoklamasi olumu 30 saniye icinde yakalar ve yenisini dogurtur.
+setInterval(async () => {
+  if (quittingApp || serverProcess) return;
+  if (!(await serverReady())) {
+    serverLog?.line("sağlık yoklaması başarısız: sunucu yok, yeniden başlatılıyor");
+    ensureServer().catch((e) => serverLog?.line(`sağlık yoklaması yeniden başlatma başarısız: ${e.message}`));
+  }
+}, 30_000);
 
 async function createWindow() {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -289,9 +322,10 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
+    quittingApp = true; clearTimeout(respawnTimer);
     if (serverProcess) serverProcess.kill("SIGTERM");
     app.quit();
   }
 });
 
-app.on("before-quit", () => { if (serverProcess) serverProcess.kill("SIGTERM"); });
+app.on("before-quit", () => { quittingApp = true; clearTimeout(respawnTimer); if (serverProcess) serverProcess.kill("SIGTERM"); });
