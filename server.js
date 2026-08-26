@@ -9,6 +9,8 @@ import { RdpController } from "./src/rdpController.js";
 import { OpsRun } from "./src/opsRun.js";
 import { OpsJobs } from "./src/opsJobs.js";
 import { OpsWorker, FazAyari } from "./src/opsWorker.js";
+import { KillSwitch, DevreKesici, PolitikaKaydi } from "./src/opsGuvenlik.js";
+import { opsMetrikleri } from "./src/opsMetrik.js";
 import { OpsWatcher } from "./src/opsWatcher.js";
 import { komutCoz } from "./src/opsKomut.js";
 import { Orchestrator } from "./src/orchestrator.js";
@@ -51,9 +53,13 @@ const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge }
 const opsJobs = new OpsJobs();
 // Faz kapisi: varsayilan Faz 1. Kullanici tek tek is turu acabilir; genel
 // siniri yukseltmek hepsini birden acardi, bu yuzden tur bazli kapi var.
-const opsFaz = new FazAyari();
+const opsKill = new KillSwitch(DATA_ROOT);
+const opsKesici = new DevreKesici();
+const opsPolitika = new PolitikaKaydi(DATA_ROOT);
+const opsFaz = new FazAyari(undefined, { politika: opsPolitika });
 const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs, faz: opsFaz });
-const opsWorker = new OpsWorker({ jobs: opsJobs, controller: rdp, orchestrator: orch, store, config, faz: opsFaz });
+const opsWorker = new OpsWorker({ jobs: opsJobs, controller: rdp, orchestrator: orch, store, config, faz: opsFaz,
+  killSwitch: opsKill, kesici: opsKesici });
 const opsWatcher = new OpsWatcher({ canseller, jobs: opsJobs, store, faz: opsFaz });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");
@@ -793,6 +799,30 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, opsFaz.durum());
       } catch (error) { return json(res, 400, { error: String(error.message || error) }); }
+    }
+    // Guvenlik kapilari: acil durdurma, devre kesici, politika dogrulama.
+    if (req.method === "GET" && p === "/api/rdp/guvenlik") {
+      return json(res, 200, {
+        acilDurdurma: { aktif: opsKill.aktifMi(), sebep: opsKill.aktifMi() ? opsKill.sebep() : null, dosya: opsKill.dosya },
+        kesiciler: opsKesici.hepsi(),
+        politika: opsPolitika.durum(),
+      });
+    }
+    if (req.method === "POST" && p === "/api/rdp/dur") {
+      const body = await readBody(req);
+      if (body.kaldir) opsKill.kaldir();
+      else opsKill.bas(String(body.sebep || "arayüzden durduruldu"));
+      return json(res, 200, { aktif: opsKill.aktifMi() });
+    }
+    if (req.method === "POST" && p === "/api/rdp/politika") {
+      const body = await readBody(req);
+      if (body.geriAl) return json(res, 200, opsPolitika.geriAl(body.isTuru));
+      const sonuc = opsPolitika.dogrula(body.isTuru, body);
+      return json(res, sonuc.ok ? 200 : 400, sonuc);
+    }
+    if (req.method === "GET" && p === "/api/rdp/metrik") {
+      return json(res, 200, opsMetrikleri(opsJobs.liste(),
+        { izleyici: opsWatcher.durum(), kesici: opsKesici, politika: opsPolitika }));
     }
     // Canli izleyici: CanSellerAI panelini yoklar, yeni kayitlari ise cevirir.
     if (req.method === "GET" && p === "/api/rdp/watcher") {

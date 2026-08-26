@@ -19,11 +19,16 @@
 
 import { IS_DURUM, kanitDogrula } from "./opsJobs.js";
 import { OYUN_KITABI, isYonergesi, RISK, FAZ1_UST_SINIR } from "./opsPlaybook.js";
+import { muhurKontrol, mesajFiltresi } from "./opsGuvenlik.js";
 
 // Faz ayari: kullanici acmadikca Faz 1 sinirinda kalir.
 export class FazAyari {
-  constructor(baslangic = FAZ1_UST_SINIR) {
+  constructor(baslangic = FAZ1_UST_SINIR, { politika = null } = {}) {
     this.ustSinir = baslangic;
+    // policy_verified (konsey karari): bir is turunun politika metni bir
+    // INSAN tarafindan okunup kayda gecmeden o turun kapisi acilamaz.
+    // Kaynak uydurmak yerine dogrulamayi kodda kisita cevirir.
+    this.politika = politika;
     // IS TURU BAZINDA acma: genel siniri yukseltmeden TEK bir is turunu
     // acabilmek gerekir. Kullanici "mesaj ac" dedi — siparis/iade/dava
     // kapali kalmali. Genel siniri yukseltmek hepsini birden acardi.
@@ -35,7 +40,13 @@ export class FazAyari {
     this.ustSinir = sayi;
     return this.ustSinir;
   }
-  turAc(isTuru) { this.acikTurler.add(String(isTuru)); return [...this.acikTurler]; }
+  turAc(isTuru) {
+    if (this.politika && !this.politika.dogrulandiMi(isTuru)) {
+      throw new Error(`"${isTuru}" için politika doğrulaması yok — kapı açılamaz. Önce belgeyi okuyup kaydedin.`);
+    }
+    this.acikTurler.add(String(isTuru));
+    return [...this.acikTurler];
+  }
   turKapat(isTuru) { this.acikTurler.delete(String(isTuru)); return [...this.acikTurler]; }
   izinliMi(risk, isTuru = null) {
     if (isTuru && this.acikTurler.has(String(isTuru))) return true;
@@ -57,7 +68,13 @@ export class FazAyari {
 }
 
 export class OpsWorker {
-  constructor({ jobs, controller, orchestrator, store, config, faz = null, onayIste = null }) {
+  constructor({ jobs, controller, orchestrator, store, config, faz = null, onayIste = null,
+                killSwitch = null, kesici = null, ekranOku = null }) {
+    this.killSwitch = killSwitch;
+    this.kesici = kesici;
+    // ekranOku(is) -> {pencereBasligi, metin, dugme}. Baglam muhru bunu
+    // kullanir; verilmezse muhur DOGRULANAMAZ sayilir ve tiklama yapilmaz.
+    this.ekranOku = ekranOku;
     this.jobs = jobs;
     this.controller = controller;
     this.orch = orchestrator;
@@ -82,6 +99,20 @@ export class OpsWorker {
   async yurut(isId, { sahip = "worker-1" } = {}) {
     const is = this.jobs.bul(isId);
     if (!is) return { ok: false, mesaj: "İş bulunamadı" };
+    // KILL-SWITCH: dosya varsa hicbir is yurutulmez. Arayuz acilmasa bile
+    // kullanici tek komutla durdurabilsin diye dosya tabanli.
+    if (this.killSwitch?.aktifMi()) {
+      this.jobs.kullaniciBekle(is.id, `Acil durdurma etkin: ${this.killSwitch.sebep()}`);
+      return { ok: false, durduruldu: true, mesaj: `Acil durdurma etkin: ${this.killSwitch.sebep()}` };
+    }
+    // DEVRE KESICI: bu magazada ust uste hata varsa yapisal bir sorun var;
+    // denemeye devam etmek ayni hatayi cogaltir. Yalniz O magaza kapanir.
+    if (this.kesici?.kapaliMi(is.hesap)) {
+      const d = this.kesici.durum(is.hesap);
+      this.jobs.kullaniciBekle(is.id,
+        `${d.magaza} devresi kapalı (${d.hata} hata: ${d.sonSebep || "?"}) — ${Math.ceil(d.kalanMs / 60000)} dk sonra yeniden denenir`);
+      return { ok: false, kesici: true, mesaj: `${d.magaza} devresi kapalı` };
+    }
     if (!this.faz.izinliMi(is.risk, is.isTuru)) {
       this.jobs.kullaniciBekle(is.id,
         `Risk ${is.risk} iş, açık faz sınırının (${this.faz.ustSinir}) üstünde — yürütülmedi`);
@@ -119,10 +150,13 @@ export class OpsWorker {
         return { ok: false, mesaj: sonuc.sebep };
       }
       const bitis = this.jobs.bitir(is.id, { kanit: sonuc.kanit, not: sonuc.not });
+      if (bitis.ok) this.kesici?.basari(is.hesap);
+      else this.kesici?.hata(is.hesap, bitis.mesaj || "kanıt doğrulanmadı");
       return bitis.ok
         ? { ok: true, is: bitis.is, caprazDogrulama: bitis.caprazDogrulama }
         : { ok: false, belirsiz: true, mesaj: bitis.mesaj };
     } catch (hata) {
+      this.kesici?.hata(is.hesap, String(hata.message || hata));
       this.jobs.hataVer(is.id, { sebep: String(hata.message || hata) });
       return { ok: false, mesaj: String(hata.message || hata) };
     } finally {
@@ -137,6 +171,18 @@ export class OpsWorker {
     catch { return false; }
   }
 
+  // Muhru bas: ekrani yeniden oku, beklenenle karsilastir.
+  // ekranOku verilmemisse muhur DOGRULANAMAZ — guvenli varsayilan "tiklama".
+  async _muhurBas(is, adimAdi) {
+    if (!this.ekranOku) {
+      return { ok: false, mesaj: `Bağlam mührü basılamadı (ekran okunamıyor) — "${adimAdi}" yapılmadı.` };
+    }
+    let ekran;
+    try { ekran = await this.ekranOku(is); }
+    catch (hata) { return { ok: false, mesaj: `Ekran okunamadı: ${String(hata.message || hata)}` }; }
+    return muhurKontrol({ magaza: is.hesap, varlikId: is.varlikId, dugme: is.veri?.beklenenDugme || "" }, ekran || {});
+  }
+
   // Adim uygulama iskeleti. Gercek ekran islemleri Faz 2+ ile doldurulacak;
   // su an cerceve ve KAPILAR yerinde: geri alinamaz adimda onay sorulur,
   // sonuc dogrulanamazsa BELIRSIZ donulur.
@@ -147,6 +193,18 @@ export class OpsWorker {
       ebay_dava: "Dava yanıtı gönderimi",
       stok_yok_mesaji: "Alıcıya mesaj gönderimi",
     }[is.isTuru];
+    // MESAJ FILTRESI: gonderim ONCESI. Ajan iyi niyetle "whatsapp'tan yazin"
+    // ya da "5 yildiz verirseniz seviniriz" yazip magazayi riske atmasin.
+    if (is.isTuru === "ebay_mesaj" || is.isTuru === "stok_yok_mesaji") {
+      const taslak = is.veri?.mesajTaslagi || is.veri?.taslak || "";
+      if (taslak) {
+        const filtre = mesajFiltresi(taslak);
+        if (!filtre.ok) {
+          this.jobs.kullaniciBekle(is.id, filtre.mesaj);
+          return { ok: false, beklemede: true, sebep: filtre.mesaj };
+        }
+      }
+    }
     if (geriAlinamaz) {
       const onay = await this._onayGerekli(is, geriAlinamaz);
       if (!onay) {
@@ -154,6 +212,15 @@ export class OpsWorker {
         // "beklemede" bayragi sart: yoksa yurut() bunu siradan hata sanip
         // "yeniden denenebilir"e cekiyor ve onaysiz is tekrar kuyruga giriyor.
         return { ok: false, beklemede: true, sebep: `Onay verilmedi: ${geriAlinamaz}` };
+      }
+      // BAGLAM MUHRU — SIRA ONEMLI: onaydan SONRA, tiklamadan HEMEN ONCE.
+      // Onay ile tiklama arasinda gecen surede odak baska pencereye kayabilir;
+      // bugunku kimlik dogrulamasi yalniz oturum acilisinda yapiliyordu ve bu
+      // araligi hic gormuyordu. Muhur tutmazsa TIKLAMA YAPILMAZ.
+      const muhur = await this._muhurBas(is, geriAlinamaz);
+      if (!muhur.ok) {
+        this.kesici?.hata(is.hesap, muhur.mesaj);
+        return { ok: false, belirsiz: true, sebep: muhur.mesaj };
       }
     }
     // Faz 2+ doldurulacak: ekran adimlari. Su an kanit uretilmedigi icin

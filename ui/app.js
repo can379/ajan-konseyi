@@ -2179,6 +2179,54 @@ async function renderOpsEkran() {
   renderOpsIsler();
   renderOpsRuns();
   renderOpsHub();
+  renderOpsMetrik();
+  renderOpsGuvenlik();
+}
+
+// Gozlemlenebilirlik seridi: "bu sistem iyi calisiyor mu?" sorusunun
+// sayisal cevabi. Kuzey yildizi kanitli otonom tamamlama oranidir; kac is
+// yaptigimiz degil, KANITLI kac is bitirdigimiz.
+async function renderOpsMetrik() {
+  const kutu = $("ops-metrik");
+  if (!kutu) return;
+  let m;
+  try { m = await api("/api/rdp/metrik"); } catch { kutu.innerHTML = ""; return; }
+  const ky = m.kuzeyYildizi || {};
+  kutu.innerHTML = `
+    <div class="ops-metrik-yildiz" title="${esc(ky.aciklama || "")}">
+      <b>${esc(ky.metin || "—")}</b>
+      <span>${esc(ky.ad || "")}</span>
+      <small>${ky.payda ? `${ky.pay}/${ky.payda} iş` : "henüz iş denenmedi"}</small>
+    </div>
+    <div class="ops-metrik-satirlar">
+      ${(m.satirlar || []).map((r) => `
+        <div class="ops-metrik-satir${r.uyari ? " uyari" : ""}" title="${esc(r.aciklama || "")}">
+          <span>${esc(r.ad)}</span><b>${esc(String(r.deger))}</b>
+        </div>`).join("")}
+    </div>`;
+}
+
+// Acil durdurma ve devre kesici durumu. Kapali devre = o magaza ust uste
+// hata verdigi icin otomatik durduruldu; digerleri calismaya devam eder.
+async function renderOpsGuvenlik() {
+  const serit = $("ops-acil-serit");
+  const dugme = $("ops-acil");
+  if (!serit) return;
+  let g;
+  try { g = await api("/api/rdp/guvenlik"); } catch { return; }
+  const kapali = (g.kesiciler || []).filter((k) => k.kapali);
+  const parcalar = [];
+  if (g.acilDurdurma?.aktif) parcalar.push(`<b>Acil durdurma etkin</b> — ${esc(g.acilDurdurma.sebep || "")}. Hiçbir iş yürütülmüyor.`);
+  for (const k of kapali) {
+    parcalar.push(`<b>${esc(k.magaza)}</b> devresi kapalı (${k.hata} hata${k.sonSebep ? `: ${esc(k.sonSebep)}` : ""}) — ${Math.ceil(k.kalanMs / 60000)} dk sonra yeniden denenecek.`);
+  }
+  serit.innerHTML = parcalar.map((x) => `<div>${x}</div>`).join("");
+  serit.hidden = !parcalar.length;
+  if (dugme) {
+    dugme.textContent = g.acilDurdurma?.aktif ? "Durdurmayı kaldır" : "Acil durdurma";
+    dugme.classList.toggle("etkin", Boolean(g.acilDurdurma?.aktif));
+    dugme.dataset.aktif = g.acilDurdurma?.aktif ? "1" : "";
+  }
 }
 
 // Bu isi hangi uye yapacak? Kullanici secer; secim hatirlanir.
@@ -2441,6 +2489,14 @@ $("ops-komut-form")?.addEventListener("submit", async (e) => {
 
 $("ops-devices")?.addEventListener("click", () => opsCihazTara());
 $("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });
+// Acil durdurma: dosya tabanli oldugu icin uygulama kapansa bile gecerli.
+$("ops-acil")?.addEventListener("click", async (ev) => {
+  const aktif = ev.currentTarget.dataset.aktif === "1";
+  if (!aktif && !confirm("Acil durdurma: yürütülen ve kuyruktaki tüm işler durur. Devam edilsin mi?")) return;
+  await fetch("/api/rdp/dur", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(aktif ? { kaldir: true } : { sebep: "arayüzden durduruldu" }) });
+  renderOpsGuvenlik();
+});
 $("ops-server-list")?.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-ops-observe]");
   if (!btn) return;
