@@ -2139,6 +2139,7 @@ async function renderOpsEkran() {
   }, 3000);
   opsUyeleriDoldur();
   renderOpsFaz();
+  renderOpsIzleyici();
   renderOpsIsler();
   renderOpsRuns();
   renderOpsHub();
@@ -2298,6 +2299,44 @@ async function renderOpsFaz() {
     <span class="ops-faz-metin">${esc(d.aciklama || "")}</span>
     ${acik.length ? `<span class="ops-faz-acik">Açık: ${acik.map(esc).join(", ")}</span>` : ""}`;
 }
+
+// Canli izleyici: CanSellerAI panelini yoklar, yeni iade/dava/siparis
+// kayitlarini ise cevirir. "Iade oldugu an gorsun" istegi bununla karsilanir.
+async function renderOpsIzleyici() {
+  const el = $("ops-izleyici");
+  if (!el) return;
+  let d = { calisiyor: false };
+  try { d = await (await fetch("/api/rdp/watcher")).json(); } catch { /* uc yoksa gizli kalir */ }
+  const sonYoklama = d.sonYoklama ? new Date(d.sonYoklama).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—";
+  el.innerHTML = `<span class="ops-izleyici-nokta ${d.calisiyor ? "acik" : ""}"></span>
+    <span class="ops-izleyici-metin">${d.calisiyor
+      ? `Canlı izleme <b>açık</b>${d.hesap ? ` · ${esc(d.hesap)}` : ""} · son yoklama ${esc(sonYoklama)} · ${d.izlenen || 0} kayıt izleniyor`
+      : "Canlı izleme kapalı — yeni iade/dava/sipariş kendiliğinden yakalanmaz"}</span>
+    ${d.sonHata ? `<span class="ops-err">${esc(d.sonHata)}</span>` : ""}
+    <button data-izleyici="${d.calisiyor ? "durdur" : "baslat"}" class="btn-ghost small">${d.calisiyor ? "Durdur" : "Başlat"}</button>
+    ${d.calisiyor ? '<button data-izleyici="yokla" class="btn-ghost small">Şimdi yokla</button>' : ""}`;
+}
+
+$("ops-izleyici")?.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-izleyici]");
+  if (!btn) return;
+  const eylem = btn.dataset.izleyici;
+  btn.disabled = true;
+  try {
+    if (eylem === "yokla") {
+      const r = await (await fetch("/api/rdp/watcher/yokla", { method: "POST" })).json();
+      if (r.yeni) alert(`${r.yeni} yeni kayıt işe dönüştü (toplam ${r.toplam} açık kayıt).`);
+      else if (r.error) alert(r.error);
+    } else if (eylem === "durdur") {
+      await fetch("/api/rdp/watcher", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ durdur: true }) });
+    } else {
+      const hesap = prompt("Hangi mağazanın paneli izlensin? (CanSellerAI'da seçili mağaza kullanılır)", $("ops-account")?.selectedOptions?.[0]?.textContent || "");
+      const r = await fetch("/api/rdp/watcher", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hesap }) });
+      const j = await r.json();
+      if (!j.ok) alert(j.mesaj || "İzleyici başlatılamadı — önce CanSellerAI'ya bağlanın.");
+    }
+  } finally { btn.disabled = false; renderOpsIzleyici(); renderOpsIsler(); }
+});
 
 $("ops-faz")?.addEventListener("click", async () => {
   let d = { acikTurler: [] };

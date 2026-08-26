@@ -1813,3 +1813,13 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-faz-etiket{padding:2px 8px;border-radius:999px;background:#2a2e2b;color:var(--dim2);font-size:10.5px;letter-spacing:.03em}
 .ops-faz-metin{color:var(--dim2)}
 .ops-faz-acik{margin-left:auto;color:#2bc9b8}
+
+/* Canlı izleyici şeridi */
+.ops-izleyici{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;
+  padding:9px 13px;border-radius:10px;background:#0f1211;border:1px solid var(--border);font-size:12px}
+.ops-izleyici-nokta{width:8px;height:8px;border-radius:50%;background:#3a4640;flex:none}
+.ops-izleyici-nokta.acik{background:var(--ok);box-shadow:0 0 0 3px #2bc9b81a;animation:pulse 2s infinite}
+.ops-izleyici-metin{color:var(--dim2)}
+.ops-izleyici-metin b{color:#eef1ef}
+.ops-izleyici button{margin-left:auto}
+.ops-izleyici button+button{margin-left:0}
