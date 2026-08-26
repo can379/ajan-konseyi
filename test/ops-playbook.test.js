@@ -196,7 +196,11 @@ test("arastirma uzak masaustunde YALNIZ OKUR", () => {
   const ops = oku("src/opsRun.js");
   assert.match(ops, /ARASTIR_ISTEMI/, "arastirma istemi olmali");
   assert.match(ops, /YALNIZ OKUMA — hiçbir şey değiştirme, gönderme/);
-  assert.match(ops, /eylem": "sekme_degistir\|adres_git\|kaydir\|hazir/, "eylem kumesi dar olmali");
+  assert.match(ops, /eylem": "yer_imi\|sekme_degistir\|adres_git\|kaydir\|hazir/, "eylem kumesi dar olmali");
+  // Yer imi ONCE denenir: adres uydurmak yerine hesabin kendi kisayolu.
+  assert.match(ops, /ÖNCE yer imini dene/, "yer imi oncelikli olmali");
+  assert.match(ops, /_yerImiKonumu/, "yer imi konumu gorselden bulunmali");
+  assert.match(ops, /yanlış yere tıklamak, hiç tıklamamaktan kötüdür/i, "emin degilse tiklamamali");
   // Form doldurma/gonderme eylemi OLMAMALI.
   const blok = ops.slice(ops.indexOf("async _arastir"), ops.indexOf("_planMetni"));
   assert.ok(!/submit|gonder|onayla/i.test(blok), "arastirmada gonderme/onaylama olmamali");
@@ -210,4 +214,18 @@ test("gozlem turlari sohbet listesine DUSMEZ, kendi bolumunde durur", () => {
   assert.match(app, /function renderOpsRuns/, "kendi bolumu olmali");
   assert.match(app, /function opsTurAc/, "tur detayi acilabilmeli");
   assert.match(oku("server.js"), /\/api\/rdp\/runs/, "tur listesi ucu olmali");
+});
+
+test("gezinme once YER IMI, adres ancak kesin kimlik varken", async () => {
+  const { yerImiNotlari, YER_IMLERI, ADRES_KALIPLARI } = await import("../src/opsPlaybook.js");
+  const not = yerImiNotlari();
+  assert.match(not, /ÖNCE YER İMLERİ ÇUBUĞU/, "yer imi oncelikli olmali");
+  assert.match(not, /adres uydurma/);
+  assert.match(not, /Numarayı bilmiyorsan adres uydurma/);
+  // Kullanicinin bildirdigi dort hedef de tanimli olmali.
+  const hedefler = YER_IMLERI.map((y) => y.hedef);
+  for (const h of ["ebay", "amazon", "canseller", "easync"]) assert.ok(hedefler.includes(h), `${h} yer imi olmali`);
+  // Kullanicidan dogrulanan adres kaliplari.
+  assert.equal(ADRES_KALIPLARI.ebay_iade, "https://www.ebay.com/rt/ReturnDetails?returnId=<IADE_NO>");
+  assert.equal(ADRES_KALIPLARI.ebay_siparis, "https://www.ebay.com/sh/ord/details?orderid=<SIPARIS_NO>");
 });

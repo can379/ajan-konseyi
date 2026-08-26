@@ -76,9 +76,9 @@ EKSİK BİLGİ:
 
 GÖREVİN: Bu eksik bilgiyi bulmak için uzak masaüstünde NEREYE bakılacağını söyle. YALNIZ OKUMA — hiçbir şey değiştirme, gönderme, tıklayarak işlem yapma. Sayfa açmak, sekme değiştirmek ve kaydı görüntülemek serbesttir.
 
-Ekranda şu an ne görüyorsan ona göre TEK BİR sonraki adım öner:
-{"eylem": "sekme_degistir|adres_git|kaydir|hazir",
- "hedef": "hangi sekme başlığı veya adres",
+Ekranda şu an ne görüyorsan ona göre TEK BİR sonraki adım öner. Hedef siteye gitmen gerekiyorsa ÖNCE yer imini dene (eylem="yer_imi"); adres uydurma.
+{"eylem": "yer_imi|sekme_degistir|adres_git|kaydir|hazir",
+ "hedef": "yer imi adı (Orders/My eBay/.us/Can SellerAI/easync), sekme başlığı veya tam adres",
  "neden": "hangi eksik bilgiyi bulacaksın",
  "beklenen": "o ekranda ne görmeyi bekliyorsun"}
 
@@ -301,7 +301,16 @@ export class OpsRun {
       }
       // Uzak masaustunde gezinme: sekme degistirme Cmd/Ctrl+Tab yerine
       // dogrudan adres cubugu kullanilir (uzak Windows'ta Ctrl+L).
-      if (adim.eylem === "adres_git" && adim.hedef) {
+      if (adim.eylem === "yer_imi" && adim.hedef) {
+        // Yer imi cubugundaki kisayola tikla: AX agacindan adiyla bulunur,
+        // koordinat tahmini yok. (Uzak masaustu icerigi AX'e kapali oldugu
+        // icin burada gorsel konum kullanilir; bulunamazsa DURULUR.)
+        bilgi(`🔖 Araştırma: **${adim.hedef}** yer imi açılıyor — ${adim.neden || "eksik bilgi"}`);
+        const yer = await this._yerImiKonumu(hedef, adim.hedef, sonEkran, run, uye);
+        if (!yer) { bilgi(`⏸ "${adim.hedef}" yer imi bulunamadı; araştırma durduruldu.`); break; }
+        await bilgisayar.request({ action: "click", payload: { x: yer.x, y: yer.y } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 5 } });
+      } else if (adim.eylem === "adres_git" && adim.hedef) {
         bilgi(`🔎 Araştırma: **${adim.hedef}** açılıyor — ${adim.neden || "eksik bilgi"}`);
         await bilgisayar.request({ action: "key", payload: { key: "l", ctrl: true } });
         await bilgisayar.request({ action: "wait", payload: { seconds: 1 } });
@@ -322,6 +331,24 @@ export class OpsRun {
       toplanan.push(`${adim.hedef || adim.eylem}: ${adim.beklenen || ""}`);
     }
     return { toplanan, sonEkran };
+  }
+
+  // Yer imi konumu: uzak masaustu icerigi yerel AX agacinda GORUNMEZ
+  // (RDP tek bir goruntu olarak gelir). Bu yuzden konum uyeye gorselden
+  // sorulur; bulunamazsa TAHMIN EDILMEZ, arastirma durur.
+  async _yerImiKonumu(hedef, yerImiAdi, ekranYolu, run, uye) {
+    const istem = `Ekran görüntüsünde uzak masaüstündeki tarayıcının YER İMLERİ ÇUBUĞU var.
+
+"${yerImiAdi}" adlı yer imini bul ve TAM KONUMUNU ver.
+
+Yalnız şu JSON: {"bulundu": true|false, "x": <görüntü pikseli>, "y": <görüntü pikseli>, "etiket": "okuduğun yazı"}
+
+Görüntü pikseli ver (ekran noktası değil). Emin değilsen bulundu=false — yanlış yere tıklamak, hiç tıklamamaktan kötüdür.`;
+    const yanit = await this._uyeyeSor(run, uye, istem, ekranYolu);
+    const j = yanit.json;
+    if (!j?.bulundu || !Number.isFinite(Number(j.x)) || !Number.isFinite(Number(j.y))) return null;
+    // Retina: goruntu pikseli -> ekran noktasi.
+    return { x: Math.round(Number(j.x) / 2), y: Math.round(Number(j.y) / 2), etiket: j.etiket || yerImiAdi };
   }
 
   // Plan kullaniciya OKUNUR bicimde sunulur: ne yapardi, nerede dururdu.

@@ -258,6 +258,40 @@ export const NEREDE_BAKILIR = Object.freeze({
   },
 });
 
+// Uzak masaustundeki tarayicida her hesapta YER IMLERI CUBUGU vardir ve
+// dort hedefe kisayol tasir: eBay (Orders / My eBay), Amazon (.us),
+// CanSellerAI ve easync. Kullanici bildirdi: "her hesabin bu bolumunde
+// ebay amazon cansellerai ve easync linki oluyor".
+//
+// ONCELIK: adres uydurmak yerine YER IMINE tikla. Adres cubugu ancak
+// elinde KESIN bir kimlik varken (siparis no, iade no, ASIN) kullanilir.
+export const YER_IMLERI = Object.freeze([
+  { ad: "Orders", hedef: "ebay", ne: "eBay Seller Hub sipariş listesi" },
+  { ad: "My eBay", hedef: "ebay", ne: "eBay hesap ana sayfası" },
+  { ad: ".us", hedef: "amazon", ne: "Amazon (amazon.com) oturumu" },
+  { ad: "Can SellerAI", hedef: "canseller", ne: "mağazanın CanSellerAI paneli" },
+  { ad: "easync", hedef: "easync", ne: "easync.io paneli" },
+]);
+
+// Elde KESIN kimlik varsa dogrudan gidilebilecek adresler. Kullanicidan
+// dogrulandi; uydurma degil.
+export const ADRES_KALIPLARI = Object.freeze({
+  ebay_iade: "https://www.ebay.com/rt/ReturnDetails?returnId=<IADE_NO>",
+  ebay_siparis: "https://www.ebay.com/sh/ord/details?orderid=<SIPARIS_NO>",
+  amazon_siparis: "https://www.amazon.com/your-orders/order-details?orderID=<AMAZON_SIPARIS_NO>",
+  amazon_urun: "https://www.amazon.com/dp/<ASIN>",
+  amazon_iade_baslat: "https://www.amazon.com/spr/returns/cart?itemId=<ITEM_ID>&orderId=<SIPARIS_NO>",
+});
+
+export function yerImiNotlari() {
+  return `\n\nGEZİNME YÖNTEMİ (uzak masaüstündeki tarayıcı):\n`
+    + `1. ÖNCE YER İMLERİ ÇUBUĞU. Her hesapta şu kısayollar var: ${YER_IMLERI.map((y) => `**${y.ad}** (${y.ne})`).join(", ")}. Hedef siteye bunlarla git — adres uydurma.\n`
+    + `2. Elinde KESİN kimlik varsa (sipariş no, iade no, ASIN) doğrudan adres kullanabilirsin:\n`
+    + Object.entries(ADRES_KALIPLARI).map(([k, v]) => `   - ${k}: ${v}`).join("\n")
+    + `\n3. Site zaten açık bir sekmedeyse yeni sekme açma, o sekmeye geç.\n`
+    + `4. Numarayı bilmiyorsan adres uydurma: yer iminden listeye git ve listeden bul.`;
+}
+
 export function gezinmeNotlari(isTuru) {
   const harita = {
     amazon_iade: ["ebay_iade", "ebay_siparis", "canseller", "amazon_siparis"],
@@ -272,6 +306,7 @@ export function gezinmeNotlari(isTuru) {
       const y = NEREDE_BAKILIR[k];
       return `- **${y.ad}**: ${y.nerede}\n  Buradan: ${y.ne}`;
     }).join("\n")
+    + yerImiNotlari()
     + `\nUzak masaüstünde bu siteler zaten açık oturumla duruyor; yeni giriş akışı başlatma, parola girme.`;
 }
 
