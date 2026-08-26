@@ -1910,3 +1910,82 @@ button.ops-acil.etkin { background: rgba(255,90,90,.18); border-color: rgba(255,
 .ops-bos-ikon{font-size:18px;opacity:.55;flex:none}
 /* Bos metrik/serit kutulari hic cizilmesin — bos cerceve birakmasinlar. */
 .ops-metrik:empty,.ops-faz-durum:empty,.ops-izleyici:empty,.ops-komut-sonuc:empty{display:none}
+
+
+/* ---- Bolum simgeleri: dordu de ayni cizim dilinde, her biri kendi rengi
+   ve kendi kucuk hareketiyle. Hareket YALNIZ secili/uzerine gelinen
+   simgede calisir; dordu birden oynarsa raf huzursuz gorunuyor. ---- */
+.bl-ikon{display:grid;place-items:center;width:26px;height:26px;flex:none;border-radius:8px;
+  color:#fff;position:relative;overflow:hidden}
+.bl-ikon.buyuk{width:30px;height:30px;border-radius:10px}
+.bl-ikon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.bl-ikon.buyuk svg{width:18px;height:18px}
+/* Her bolumun rengi, anahtarda ve menude AYNI — tutarlilik icin tek yerde. */
+.bl-ikon[data-bl="chat"]  {background:linear-gradient(135deg,#5d7bf5,#31c6aa);box-shadow:0 5px 16px rgba(74,116,232,.32)}
+.bl-ikon[data-bl="kod"]   {background:linear-gradient(135deg,#806cf3,#b06bf0);box-shadow:0 5px 16px rgba(128,108,243,.32)}
+.bl-ikon[data-bl="images"]{background:linear-gradient(135deg,#f0803f,#f0b949);box-shadow:0 5px 16px rgba(240,128,63,.3)}
+.bl-ikon[data-bl="ops"]   {background:linear-gradient(135deg,#2bb98c,#5ec96a);box-shadow:0 5px 16px rgba(43,185,140,.3)}
+
+/* Secilince simge kutusunun kendisi bir kez canlanir. */
+@keyframes blSecildi{0%{transform:scale(1)}38%{transform:scale(.88) rotate(-5deg)}100%{transform:scale(1)}}
+.bl-ikon.degisti{animation:blSecildi .42s cubic-bezier(.34,1.56,.64,1)}
+/* Parlama: secim aninda kutunun uzerinden bir isik gecer. */
+.bl-ikon.degisti::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(115deg,transparent 35%,rgba(255,255,255,.55) 50%,transparent 65%);
+  animation:blParla .55s ease-out}
+@keyframes blParla{from{transform:translateX(-130%)}to{transform:translateX(130%)}}
+
+/* Her simgenin KENDI hareketi. Hepsi ayni sureye yakin ve dongusel degil —
+   dikkat dagitmasin diye yalniz secili olan ve fareyle uzerine gelinen oynar. */
+.bl-sur{animation-duration:1.9s;animation-iteration-count:infinite}
+
+/* Sohbet: yaziyor noktalari sirayla ziplar. */
+@keyframes blNokta{0%,72%,100%{transform:translateY(0);opacity:.6}30%{transform:translateY(-2.2px);opacity:1}}
+.bl-oyna .bl-p1,.bl-oyna .bl-p2,.bl-oyna .bl-p3{animation:blNokta 1.5s infinite;transform-origin:center}
+.bl-oyna .bl-p2{animation-delay:.16s}
+.bl-oyna .bl-p3{animation-delay:.32s}
+
+/* Proje kodlama: parantezler acilip kapanir, egik cizgi kayar. */
+@keyframes blSol{0%,100%{transform:translateX(0)}50%{transform:translateX(-1.4px)}}
+@keyframes blSag{0%,100%{transform:translateX(0)}50%{transform:translateX(1.4px)}}
+@keyframes blEgik{0%,100%{opacity:.75;transform:translateY(0)}50%{opacity:1;transform:translateY(-1px)}}
+.bl-oyna .bl-sol{animation:blSol 1.7s ease-in-out infinite;transform-origin:center}
+.bl-oyna .bl-sag{animation:blSag 1.7s ease-in-out infinite;transform-origin:center}
+.bl-oyna .bl-egik{animation:blEgik 1.7s ease-in-out infinite;transform-origin:center}
+
+/* Görsel: gunes nefes alir, dag hafifce yukselir. */
+@keyframes blGunes{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.16);opacity:1}}
+@keyframes blDag{0%,100%{transform:translateY(0)}50%{transform:translateY(-.9px)}}
+.bl-oyna .bl-gunes{animation:blGunes 2s ease-in-out infinite;transform-origin:8.75px 10px}
+.bl-oyna .bl-dag{animation:blDag 2s ease-in-out infinite}
+
+/* Mağaza: tente sallanir, kapi nefes alir. */
+@keyframes blTente{0%,100%{transform:rotate(0)}50%{transform:rotate(-2.6deg)}}
+@keyframes blKapi{0%,100%{opacity:.7}50%{opacity:1}}
+.bl-oyna .bl-tente{animation:blTente 2.1s ease-in-out infinite;transform-origin:12px 5px}
+.bl-oyna .bl-kapi{animation:blKapi 2.1s ease-in-out infinite}
+
+/* Menu satirlari: ikon + yazi yan yana. */
+.bolum-menu button{display:flex;align-items:center;gap:11px}
+.bl-yazi{min-width:0;flex:1}
+.bolum-menu button:hover .bl-ikon{transform:scale(1.06)}
+/* Uzerine gelince o satirin simgesi de oynar — hangi bolum oldugunu
+   secmeden once gostermek icin. */
+.bolum-menu button:hover .bl-p1,.bolum-menu button:hover .bl-p2,.bolum-menu button:hover .bl-p3{animation:blNokta 1.5s infinite}
+.bolum-menu button:hover .bl-p2{animation-delay:.16s}
+.bolum-menu button:hover .bl-p3{animation-delay:.32s}
+.bolum-menu button:hover .bl-sol{animation:blSol 1.7s ease-in-out infinite}
+.bolum-menu button:hover .bl-sag{animation:blSag 1.7s ease-in-out infinite}
+.bolum-menu button:hover .bl-egik{animation:blEgik 1.7s ease-in-out infinite}
+.bolum-menu button:hover .bl-gunes{animation:blGunes 2s ease-in-out infinite;transform-origin:8.75px 10px}
+.bolum-menu button:hover .bl-dag{animation:blDag 2s ease-in-out infinite}
+.bolum-menu button:hover .bl-tente{animation:blTente 2.1s ease-in-out infinite;transform-origin:12px 5px}
+.bolum-menu button:hover .bl-kapi{animation:blKapi 2.1s ease-in-out infinite}
+.bl-ikon{transition:transform .16s}
+
+/* Hareketi kapatmis kullaniciya hic oynatma. */
+@media (prefers-reduced-motion:reduce){
+  .bl-ikon.degisti,.bl-ikon.degisti::after,
+  .bl-oyna [class^="bl-"]{animation:none !important}
+}

@@ -145,6 +145,30 @@ function bolumSecildi(bolum) {
   if (menu) menu.hidden = true;
   $("btn-bolum")?.setAttribute("aria-expanded", "false");
 
+  // Anahtardaki simge secilen bolumun simgesi olur; degisimde bir kez
+  // canlanir. Menude secili satirin simgesi ile fareyle uzerine gelinen
+  // satirin simgesi oynar — hepsi birden oynarsa raf huzursuz gorunuyor.
+  // Simgeler SATIR ICI tutulur: <use> kullanildiginda CSS golge agacina
+  // giremiyor ve hareketli parcalar (.bl-tente, .bl-gunes ...) hic
+  // eslesmiyor — animasyonlar yazili ama olu kaliyordu.
+  const kutu = $("bolum-ikon");
+  const kaynak = document.querySelector(`#bolum-menu [data-bolum="${aktifBolum}"] .bl-ikon`);
+  if (kutu && kaynak) {
+    const degisti = kutu.dataset.bl !== aktifBolum;
+    kutu.dataset.bl = aktifBolum;
+    if (degisti) kutu.innerHTML = kaynak.innerHTML;
+    kutu.classList.add("bl-oyna");
+    if (degisti) {
+      // Siniftan cikip yeniden girmesi icin: yoksa ayni animasyon
+      // ikinci secimde hic oynamiyor.
+      kutu.classList.remove("degisti");
+      void kutu.offsetWidth;
+      kutu.classList.add("degisti");
+    }
+  }
+  document.querySelectorAll("#bolum-menu [data-bolum]").forEach((b) =>
+    b.querySelector(".bl-ikon")?.classList.toggle("bl-oyna", b.dataset.bolum === aktifBolum));
+
   const yan = BOLUM_YAN[aktifBolum];
   const sohbetler = $("side-sohbetler");
   const projeler = $("side-projeler");
