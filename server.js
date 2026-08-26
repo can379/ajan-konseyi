@@ -734,6 +734,39 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, 200, await rdp.listele()); }
       catch (error) { return json(res, 502, { error: String(error.message || error) }); }
     }
+    // Gozlem turunun TAM kaydi: zaman cizelgesi, kanitlar, bulgular, planlar.
+    // Sohbet bicimi degil — bu isin kendi gorunumu var.
+    const turMatch = p.match(/^\/api\/rdp\/run\/([\w-]+)$/);
+    if (req.method === "GET" && turMatch) {
+      const run = store.getRun(turMatch[1]);
+      if (!run || run.kind !== "ops") return json(res, 404, { error: "Gözlem turu bulunamadı" });
+      const hedef = String(run.request || "").replace(/^Gözlem turu:\s*/, "");
+      const durum = rdp.durum(hedef);
+      return json(res, 200, {
+        id: run.id, target: hedef, createdAt: run.createdAt,
+        state: durum || null,
+        adimlar: (run.messages || []).map((m) => ({
+          at: m.ts, from: m.from, fromLabel: m.fromLabel || null, kind: m.kind,
+          content: m.content, attachments: (m.attachments || []).map((a) => ({ name: a.name, url: a.url })),
+        })),
+      });
+    }
+    // Tum gozlem turlari (en yeniden eskiye) — bolumun listesi.
+    if (req.method === "GET" && p === "/api/rdp/runs") {
+      const turlar = Object.values(store.runs)
+        .filter((r) => r.kind === "ops" && !r.deletedAt)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+        .slice(0, 50)
+        .map((r) => {
+          const hedef = String(r.request || "").replace(/^Gözlem turu:\s*/, "");
+          const d = rdp.durum(hedef);
+          return { id: r.id, target: hedef, createdAt: r.createdAt,
+            connection_state: d?.connection_state || null,
+            bulgu: (d?.findings || []).length, adim: (r.messages || []).length };
+        });
+      return json(res, 200, { turlar });
+    }
+
     if (req.method === "GET" && p === "/api/rdp/state") {
       return json(res, 200, opsRun.durum());
     }

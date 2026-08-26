@@ -20,7 +20,7 @@
 // 11 ancak bundan sonra siradaki sunucuya gec
 
 import { oturumPenceresi } from "./rdpController.js";
-import { isTuruBul, isYonergesi, OYUN_KITABI, FAZ1_UST_SINIR } from "./opsPlaybook.js";
+import { isTuruBul, isYonergesi, OYUN_KITABI, FAZ1_UST_SINIR, gezinmeNotlari } from "./opsPlaybook.js";
 
 const KIMLIK_ISTEMI = `Sana bir uzak masaüstü oturumunun ekran görüntüsü verildi.
 
@@ -65,6 +65,24 @@ Yalnız şu JSON'u döndür:
  "risk_notu": "para/geri alınamaz etki varsa tek cümle"}
 
 Ekranda göremediğin bir ön koşul varsa uydurma: "eksik_bilgi" listesine yaz ve yapilabilir=false ver.`;
+
+const ARASTIR_ISTEMI = `Sana "%HEDEF%" sunucusunun uzak masaüstü ekran görüntüsü verildi ve bir sorunun eksik bilgileri var.
+
+TESPİT: %BULGU%
+EKSİK BİLGİ:
+%EKSIK%
+
+%GEZINME%
+
+GÖREVİN: Bu eksik bilgiyi bulmak için uzak masaüstünde NEREYE bakılacağını söyle. YALNIZ OKUMA — hiçbir şey değiştirme, gönderme, tıklayarak işlem yapma. Sayfa açmak, sekme değiştirmek ve kaydı görüntülemek serbesttir.
+
+Ekranda şu an ne görüyorsan ona göre TEK BİR sonraki adım öner:
+{"eylem": "sekme_degistir|adres_git|kaydir|hazir",
+ "hedef": "hangi sekme başlığı veya adres",
+ "neden": "hangi eksik bilgiyi bulacaksın",
+ "beklenen": "o ekranda ne görmeyi bekliyorsun"}
+
+Aradığın bilgi ZATEN ekrandaysa eylem="hazir" ver ve neden alanına gördüğünü yaz. Uzak masaüstünde açık olmayan bir uygulamayı açmaya çalışma; parola/OTP ekranı çıkarsa dur.`;
 
 function jsonAyikla(metin) {
   const ham = String(metin || "");
@@ -118,7 +136,7 @@ export class OpsRun {
     const bilgisayar = this.controller.computer;
     if (!bilgisayar) throw new Error("Bilgisayar köprüsü yok");
 
-    const run = this.store.createRun({ kind: "chat", request: `Gözlem turu: ${hedef}`, mode: "auto",
+    const run = this.store.createRun({ kind: "ops", request: `Gözlem turu: ${hedef}`, mode: "auto",
       agents: [uye.id], projectId: null, projectDir: null, attachments: [] });
     run.status = "idle";
     run.title = `🖥 Gözlem · ${hedef}`;
@@ -227,6 +245,20 @@ export class OpsRun {
             .replace("%YONERGE%", yonerge || ""),
           gozlem.screenshotPath);
         bulgu.plan = plan.json || { ham: plan.metin.slice(0, 1500) };
+        // Plan "eksik bilgi" diyorsa uydurma: uzak masaustunde ARA (yalniz okuma).
+        if (bulgu.plan?.yapilabilir === false && (bulgu.plan.eksik_bilgi || []).length) {
+          const arastirma = await this._arastir(run, uye, hedef, bulgu, gozlem.screenshotPath);
+          if (arastirma.toplanan.length) {
+            bulgu.arastirma = arastirma.toplanan;
+            // Toplanan bilgiyle plani TAZELE — artik daha az bosluk olmali.
+            const tazePlan = await this._uyeyeSor(run, uye,
+              PLAN_ISTEMI.replace("%HEDEF%", hedef)
+                .replace("%BULGU%", `${bulgu.isAdi || bulgu.tur}: ${bulgu.ozet}\nAraştırmada görülenler: ${arastirma.toplanan.join(" | ")}`)
+                .replace("%YONERGE%", yonerge || ""),
+              arastirma.sonEkran);
+            if (tazePlan.json) bulgu.plan = tazePlan.json;
+          }
+        }
         this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
           content: this._planMetni(hedef, bulgu) });
       }
@@ -244,6 +276,52 @@ export class OpsRun {
       this.store.addMessage(run, { from: "sistem", kind: "error", content: `Gözlem durdu: ${mesaj}` });
       return this._bitir(run, hedef, "hata", mesaj);
     }
+  }
+
+  // Eksik bilgiyi UZAK MASAUSTUNDE arar: sekme degistirir, adres acar, okur.
+  // Faz 1 siniri: yalniz okuma. Hicbir form doldurulmaz, hicbir sey gonderilmez.
+  // Her adimda ekran yeniden okunur — korukoru tiklama yok.
+  async _arastir(run, uye, hedef, bulgu, ekranYolu, { maxAdim = 3 } = {}) {
+    const bilgisayar = this.controller.computer;
+    const bilgi = (m) => this.store.addMessage(run, { from: "sistem", kind: "info", content: m });
+    const toplanan = [];
+    let sonEkran = ekranYolu;
+    for (let i = 0; i < maxAdim; i++) {
+      const eksik = (bulgu.plan?.eksik_bilgi || []).map((x) => `- ${x}`).join("\n") || "- (belirtilmedi)";
+      const oneri = await this._uyeyeSor(run, uye,
+        ARASTIR_ISTEMI.replace("%HEDEF%", hedef)
+          .replace("%BULGU%", `${bulgu.isAdi || bulgu.tur}: ${bulgu.ozet}`)
+          .replace("%EKSIK%", eksik)
+          .replace("%GEZINME%", gezinmeNotlari(bulgu.isTuru) || ""),
+        sonEkran);
+      const adim = oneri.json;
+      if (!adim || adim.eylem === "hazir") {
+        if (adim?.neden) toplanan.push(adim.neden);
+        break;
+      }
+      // Uzak masaustunde gezinme: sekme degistirme Cmd/Ctrl+Tab yerine
+      // dogrudan adres cubugu kullanilir (uzak Windows'ta Ctrl+L).
+      if (adim.eylem === "adres_git" && adim.hedef) {
+        bilgi(`🔎 Araştırma: **${adim.hedef}** açılıyor — ${adim.neden || "eksik bilgi"}`);
+        await bilgisayar.request({ action: "key", payload: { key: "l", ctrl: true } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 1 } });
+        await bilgisayar.request({ action: "type", payload: { text: String(adim.hedef).slice(0, 300) } });
+        await bilgisayar.request({ action: "key", payload: { key: "enter" } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 5 } });
+      } else if (adim.eylem === "sekme_degistir") {
+        bilgi(`🔎 Araştırma: sekme değiştiriliyor — ${adim.neden || ""}`);
+        await bilgisayar.request({ action: "key", payload: { key: "tab", ctrl: true } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 3 } });
+      } else if (adim.eylem === "kaydir") {
+        await bilgisayar.request({ action: "key", payload: { key: "down" } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 1 } });
+      } else break;
+      const yeni = await bilgisayar.request({ action: "screenshot", payload: {} });
+      sonEkran = yeni.screenshotPath;
+      this.controller._kaydet(hedef, { last_screenshot: sonEkran, current_step: `araştırma: ${adim.hedef || adim.eylem}` });
+      toplanan.push(`${adim.hedef || adim.eylem}: ${adim.beklenen || ""}`);
+    }
+    return { toplanan, sonEkran };
   }
 
   // Plan kullaniciya OKUNUR bicimde sunulur: ne yapardi, nerede dururdu.

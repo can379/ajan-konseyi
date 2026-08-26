@@ -147,3 +147,67 @@ test("varsayilan esleme kimlik eslemesidir; listede olmayan magaza eslesmez", as
   // Kullanicinin olmayan magazasi ("zeynep" baskasina ait) eslesmemeli.
   assert.equal(sunucuBul(esleme, "zeynep").ok, false);
 });
+
+// ---- Pif noktalari (CanSellerAI dersleri) ----
+test("ucretsiz QR yolu ucretli etiketten ustundur", async () => {
+  const { TUZAKLAR, tuzakNotlari } = await import("../src/opsPlaybook.js");
+  const qr = TUZAKLAR.find((t) => /Ücretsiz QR/.test(t.baslik));
+  assert.ok(qr, "QR tuzagi tanimli olmali");
+  assert.match(qr.dogru, /ÜCRETSİZ > tercihe uyan > QR > etiketli/);
+  assert.match(tuzakNotlari("amazon_iade"), /FREE return instead\?' penceresine YES|YES/);
+});
+
+test("teslim noktasi olcutu onay dugmesi DEGIL", async () => {
+  const { TUZAKLAR } = await import("../src/opsPlaybook.js");
+  const t = TUZAKLAR.find((x) => /Teslim noktası/.test(x.baslik));
+  assert.match(t.dogru, /'Choose dropoff location' yazısının VARLIĞI/);
+  assert.match(t.dogru, /'Change Location'a döner/, "secim yapisti dogrulamasi");
+});
+
+test("varyant yonlendirmesi 'stokta var' yalanidir", async () => {
+  const { TUZAKLAR } = await import("../src/opsPlaybook.js");
+  const t = TUZAKLAR.find((x) => /varyant/i.test(x.baslik));
+  assert.match(t.dogru, /SAYFANIN KENDİ ASIN'ini oku/);
+  assert.match(t.kanit, /B0D97QSDC4/, "gercek vaka kaniti");
+});
+
+test("'olcemedim' ile 'degisti' ayrimi korunur", async () => {
+  const { TUZAKLAR } = await import("../src/opsPlaybook.js");
+  const t = TUZAKLAR.find((x) => /ÖLÇEMEDİM/.test(x.baslik));
+  assert.match(t.dogru, /DAMGA BASMA, işlem yapma/);
+});
+
+test("eBay ilan numarasinda rakam suzme YASAK", async () => {
+  const { TUZAKLAR } = await import("../src/opsPlaybook.js");
+  const t = TUZAKLAR.find((x) => /ilan numarası biçimi/.test(x.baslik));
+  assert.match(t.dogru, /legacy/, "ortadaki legacy numara alinmali");
+});
+
+test("tuzaklar ve gezinme haritasi yonergeye giriyor", async () => {
+  const { isYonergesi } = await import("../src/opsPlaybook.js");
+  const y = isYonergesi("amazon_iade");
+  assert.match(y, /BİLİNEN TUZAKLAR/, "tuzaklar yonergede olmali");
+  assert.match(y, /EKSİK BİLGİYİ NEREDE BULURSUN/, "gezinme haritasi olmali");
+  assert.match(y, /yalnız OKU, hiçbir şey değiştirme/);
+});
+
+// ---- Arastirma: yalniz okuma ----
+test("arastirma uzak masaustunde YALNIZ OKUR", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /ARASTIR_ISTEMI/, "arastirma istemi olmali");
+  assert.match(ops, /YALNIZ OKUMA — hiçbir şey değiştirme, gönderme/);
+  assert.match(ops, /eylem": "sekme_degistir\|adres_git\|kaydir\|hazir/, "eylem kumesi dar olmali");
+  // Form doldurma/gonderme eylemi OLMAMALI.
+  const blok = ops.slice(ops.indexOf("async _arastir"), ops.indexOf("_planMetni"));
+  assert.ok(!/submit|gonder|onayla/i.test(blok), "arastirmada gonderme/onaylama olmamali");
+});
+
+test("gozlem turlari sohbet listesine DUSMEZ, kendi bolumunde durur", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /kind: "ops"/, "gozlem turu ayri tur olmali");
+  const app = oku("ui/app.js");
+  assert.match(app, /state\.runs\[id\]\.kind!=="ops"/, "proje listesinden dislanmali");
+  assert.match(app, /function renderOpsRuns/, "kendi bolumu olmali");
+  assert.match(app, /function opsTurAc/, "tur detayi acilabilmeli");
+  assert.match(oku("server.js"), /\/api\/rdp\/runs/, "tur listesi ucu olmali");
+});

@@ -617,7 +617,7 @@ function runOrderCompare(x, y) {
 }
 function renderProjects() {
   const list = state.config.projects;
-  const sortedRunIds = Object.keys(state.runs).filter((id)=>!state.runs[id].deletedAt&&(showArchivedChats||!state.runs[id].archived))
+  const sortedRunIds = Object.keys(state.runs).filter((id)=>state.runs[id].kind!=="ops"&&!state.runs[id].deletedAt&&(showArchivedChats||!state.runs[id].archived))
     .sort((a, b) => runOrderCompare(state.runs[a], state.runs[b]));
   const runHTML = (id) => {
     const r=state.runs[id];
@@ -2044,6 +2044,74 @@ function openToolPanel(tab) {
   if(tab==="git")renderGitCenter();
   if(tab==="ops")renderOpsCenter();
 }
+// ---- Gozlem turlari bolumu: sohbet degil, kendi gorunumu ----
+// Her tur bir zaman cizelgesi: adimlar, kanit goruntuleri, bulgular, planlar.
+const TUR_IKON = { sistem: "◆", "m-claude": "✳", "m-codex": "◈", "m-antigravity": "▲" };
+
+async function renderOpsRuns() {
+  const host = $("ops-run-list");
+  if (!host) return;
+  let veri = { turlar: [] };
+  try { veri = await (await fetch("/api/rdp/runs")).json(); } catch { /* liste yoksa bolum bos kalir */ }
+  host.innerHTML = veri.turlar?.length
+    ? veri.turlar.map((t) => `<button class="ops-run-satir" data-ops-run-ac="${esc(t.id)}">
+        <span class="ops-run-hedef">${esc(t.target)}</span>
+        <span class="ops-run-durum durum-${esc(t.connection_state || "bilinmiyor")}">${esc(DURUM_ETIKET[t.connection_state] || "—")}</span>
+        <span class="ops-run-sayi">${t.bulgu} bulgu · ${t.adim} adım</span>
+        <time>${esc(new Date(t.createdAt).toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }))}</time>
+      </button>`).join("")
+    : '<div class="muted">Henüz gözlem turu yok.</div>';
+}
+
+async function opsTurAc(id) {
+  const kutu = $("ops-run-detay");
+  kutu.hidden = false;
+  kutu.innerHTML = '<div class="muted">Tur okunuyor…</div>';
+  let t;
+  try { t = await (await fetch(`/api/rdp/run/${id}`)).json(); }
+  catch (e) { kutu.innerHTML = `<div class="ops-err">Tur okunamadı</div>`; return; }
+  const d = t.state || {};
+  const bulgular = (d.findings || []).map((b) => `<div class="ops-bulgu onem-${esc(b.onem || "dusuk")}">
+      <div class="ops-bulgu-bas"><b>${esc(b.isAdi || b.tur || "kayıt")}</b>
+        ${b.risk != null ? `<span class="ops-risk r${b.risk}">risk ${b.risk}</span>` : ""}
+        ${b.durum ? `<span class="ops-durum-etiket">${b.durum === "onay-bekliyor" ? "onay bekliyor" : b.durum}</span>` : ""}</div>
+      <div class="ops-bulgu-ozet">${esc(b.ozet || "")}</div>
+      ${b.plan ? `<details class="ops-plan"><summary>Planı gör</summary><div>${md(planMetni(b))}</div></details>` : ""}
+    </div>`).join("");
+  const cizelge = (t.adimlar || []).map((a) => `<div class="ops-adim ${a.kind === "error" ? "hata" : ""}">
+      <span class="ops-adim-ikon">${TUR_IKON[a.from] || "•"}</span>
+      <div><div class="ops-adim-metin">${md(String(a.content || "").slice(0, 4000))}</div>
+        ${(a.attachments || []).filter((x) => x.url).map((x) => `<a class="ops-kanit" href="${esc(x.url)}" target="_blank"><img src="${esc(x.url)}" alt="${esc(x.name)}" loading="lazy"><span>${esc(x.name)}</span></a>`).join("")}</div>
+      <time>${esc(new Date(a.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</time>
+    </div>`).join("");
+  kutu.innerHTML = `<div class="ops-detay-bas">
+      <div><b>${esc(t.target)}</b><small>${esc(new Date(t.createdAt).toLocaleString("tr-TR"))}</small></div>
+      <button data-ops-detay-kapat class="btn-ghost small">Kapat</button>
+    </div>
+    ${bulgular ? `<div class="ops-detay-bolum"><h4>Bulgular</h4>${bulgular}</div>` : ""}
+    <div class="ops-detay-bolum"><h4>Zaman çizelgesi</h4><div class="ops-cizelge">${cizelge || '<div class="muted">Adım yok.</div>'}</div></div>`;
+  kutu.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// Plan JSON'unu okunur metne cevirir (sunucudaki _planMetni'nin arayuz esi).
+function planMetni(bulgu) {
+  const p = bulgu.plan || {};
+  if (p.ham) return String(p.ham);
+  const adimlar = (p.adimlar || []).map((a) => `${a.no}. ${a.ne}${a.nerede ? ` _(${a.nerede})_` : ""}${a.dogrulama ? `\n   ↳ doğrulama: ${a.dogrulama}` : ""}`).join("\n");
+  return (p.yapilabilir === false ? `⚠ Şu an yapılamaz — eksik bilgi:\n${(p.eksik_bilgi || []).map((x) => `- ${x}`).join("\n")}\n\n` : "")
+    + (adimlar ? `**Adımlar**\n${adimlar}\n\n` : "")
+    + ((p.durma_noktalari || []).length ? `**Nerede sorardım**\n${p.durma_noktalari.map((x) => `- ${x}`).join("\n")}\n\n` : "")
+    + (p.risk_notu ? `**Risk:** ${p.risk_notu}` : "");
+}
+
+$("ops-run-list")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-ops-run-ac]");
+  if (btn) opsTurAc(btn.dataset.opsRunAc);
+});
+$("ops-run-detay")?.addEventListener("click", (e) => {
+  if (e.target.closest("[data-ops-detay-kapat]")) { $("ops-run-detay").hidden = true; }
+});
+
 // ---- Uzak sunucu gozlemi (Faz 1) ----
 // Panel: kayitli sunucular, baglanti durumu, su anki adim, bulgular, kanit.
 const DURUM_ETIKET = { hazir: "hazır", listeleniyor: "cihazlar okunuyor", baglaniyor: "bağlanıyor",
@@ -2055,6 +2123,7 @@ async function renderOpsCenter() {
   if (!opsSunucular.length) await opsCihazTara().catch(() => {});
   if (opsTimer) clearInterval(opsTimer);
   opsTimer = setInterval(() => { if (!$("tool-ops").hidden) opsDurumCiz(); else { clearInterval(opsTimer); opsTimer = null; } }, 3000);
+  renderOpsRuns();
   renderOpsHub();
 }
 
@@ -2220,6 +2289,7 @@ async function opsYukle() {
         <div class="ops-assess" data-ops-assess-out="${gi}" hidden></div>
       </section>`).join("") : '<div class="muted" style="padding:18px">Açık iş görünmüyor.</div>');
   host._gruplar = gruplar;
+  renderOpsRuns();
   $("ops-meta").textContent = `${new Date(opsVeri.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })} itibarıyla`;
 }
 
