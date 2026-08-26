@@ -43,7 +43,7 @@
 
     <nav class="side-nav" aria-label="Ana gezinme">
       <button id="btn-new" class="side-nav-item"><span><svg><use href="#i-compose"/></svg></span> Yeni sohbet</button>
-      <section class="conversation-history" aria-label="Sohbet geçmişi">
+      <section id="side-sohbetler" class="conversation-history" aria-label="Sohbet geçmişi">
         <label class="conversation-search" for="conversation-search">
           <span aria-hidden="true"><svg><use href="#i-search"/></svg></span>
           <input id="conversation-search" type="search" placeholder="Sohbetlerde ara" autocomplete="off">
@@ -54,7 +54,7 @@
       <button id="btn-ops" class="side-nav-item"><span><svg><use href="#i-panel"/></svg></span> Mağaza Operasyonu</button>
     </nav>
 
-    <div class="side-section grow project-history-section">
+    <div id="side-projeler" class="side-section grow project-history-section">
       <div class="side-title">Projeler</div>
       <div id="project-list"></div>
       <div class="row-btns">

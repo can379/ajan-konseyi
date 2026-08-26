@@ -121,13 +121,39 @@ function renderImageBatchStatus() {
 // Bolum secici (sol ust) — Codex'teki gibi tek yerden bolum degistirme.
 const BOLUM_ADI = { chat: "Sohbet", kod: "Proje kodlama", images: "Görsel", ops: "Mağaza Operasyonu" };
 
+// Secili bolum, KENAR CUBUGUNU da yonetir — Codex'te oldugu gibi. Onceden
+// menu yalniz basligi degistiriyordu; solda sohbetler ve projeler her zaman
+// birlikte duruyordu, yani "ayri bolum" diye bir sey yoktu.
+//   Sohbet          -> yalniz projesiz sohbetler
+//   Proje kodlama   -> yalniz projeler ve onlarin sohbetleri
+//   Görsel / Mağaza -> ikisi de gizli; o ekranin kendi icerigi var
+const BOLUM_YAN = {
+  chat:   { sohbetler: true,  projeler: false },
+  kod:    { sohbetler: false, projeler: true },
+  images: { sohbetler: false, projeler: false },
+  ops:    { sohbetler: false, projeler: false },
+};
+let aktifBolum = "chat";
+
 function bolumSecildi(bolum) {
+  aktifBolum = BOLUM_YAN[bolum] ? bolum : "chat";
   const ad = $("bolum-ad");
-  if (ad) ad.textContent = BOLUM_ADI[bolum] || BOLUM_ADI.chat;
+  if (ad) ad.textContent = BOLUM_ADI[aktifBolum] || BOLUM_ADI.chat;
   document.querySelectorAll("#bolum-menu [data-bolum]").forEach((b) =>
-    b.classList.toggle("secili", b.dataset.bolum === bolum));
-  $("bolum-menu").hidden = true;
+    b.classList.toggle("secili", b.dataset.bolum === aktifBolum));
+  const menu = $("bolum-menu");
+  if (menu) menu.hidden = true;
   $("btn-bolum")?.setAttribute("aria-expanded", "false");
+
+  const yan = BOLUM_YAN[aktifBolum];
+  const sohbetler = $("side-sohbetler");
+  const projeler = $("side-projeler");
+  if (sohbetler) sohbetler.hidden = !yan.sohbetler;
+  if (projeler) projeler.hidden = !yan.projeler;
+  // "Yeni sohbet" dugmesi Gorsel/Magaza bolumlerinde anlamsiz.
+  const yeni = $("btn-new");
+  if (yeni) yeni.hidden = !(yan.sohbetler || yan.projeler);
+  try { localStorage.setItem("ajan.bolum", aktifBolum); } catch {}
 }
 
 function showMainView(view) {
@@ -145,7 +171,11 @@ function showMainView(view) {
   $("btn-ops")?.classList.toggle("active", ops);
   if (studio) renderImageStudio();
   if (ops) renderOpsEkran();
-  bolumSecildi(view === "images" ? "images" : view === "ops" ? "ops" : (activeProjectId() ? "kod" : "chat"));
+  // Sohbet gorunumunde hangi bolumde oldugumuz KULLANICININ secimidir; proje
+  // secili diye kendiliginden "Proje kodlama"ya atlamamali (ve tersi).
+  bolumSecildi(view === "images" ? "images" : view === "ops" ? "ops"
+    : (aktifBolum === "kod" || aktifBolum === "chat") ? aktifBolum
+    : (activeProjectId() ? "kod" : "chat"));
 }
 
 
@@ -1951,11 +1981,11 @@ $("bolum-menu")?.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-bolum]");
   if (!btn) return;
   const bolum = btn.dataset.bolum;
-  if (bolum === "kod") {
-    // Proje kodlama: sohbet gorunumu + proje secili olmali.
-    showMainView("chat");
-    if (!activeProjectId()) $("btn-pick-folder")?.click();
-  } else showMainView(bolum);
+  // Proje kodlama ve Sohbet ayni ana gorunumu (workspace) kullanir; ayrimi
+  // kenar cubugu yapar. Klasor secme kutusu ZORLA acilmaz — kullanici bolume
+  // bakmak istedigi icin de gecebilir.
+  aktifBolum = bolum;
+  showMainView(bolum === "kod" || bolum === "chat" ? "chat" : bolum);
   bolumSecildi(bolum);
 });
 document.addEventListener("click", () => {
@@ -3525,6 +3555,15 @@ initializeSplitLayout();
 
 // Dar ekranda kenar çubuğu varsayılan gizli: çalışma alanı ferah kalsın
 if (window.innerWidth < 1100) $("sidebar").classList.add("hidden");
+
+// Son secili bolumu geri yukle: uygulama her acilista "Sohbet"e dusmesin.
+(() => {
+  let kayit = "chat";
+  try { kayit = localStorage.getItem("ajan.bolum") || "chat"; } catch {}
+  if (kayit === "images") showMainView("images");
+  else if (kayit === "ops") showMainView("ops");
+  else { aktifBolum = kayit === "kod" ? "kod" : "chat"; bolumSecildi(aktifBolum); }
+})();
 
 connectSSE();
 fetchState();
