@@ -1732,3 +1732,58 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-kanit{display:inline-block;margin-top:8px;margin-right:8px;border:1px solid var(--border);border-radius:8px;overflow:hidden;text-decoration:none}
 .ops-kanit img{display:block;width:190px;height:auto}
 .ops-kanit span{display:block;padding:4px 7px;color:var(--dim2);font-size:10.5px;background:#0f1211}
+
+/* ================= OPERASYON MERKEZİ — ana ekran ================= */
+#ops-screen{overflow-y:auto;padding:28px 32px 60px;max-width:1180px;margin:0 auto;width:100%}
+#ops-screen[hidden]{display:none}
+
+.ops-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:28px;flex-wrap:wrap;
+  padding:22px 24px;margin-bottom:20px;border-radius:18px;
+  background:linear-gradient(135deg,#141917 0%,#101413 60%,#0f1614 100%);
+  border:1px solid #232a26;position:relative;overflow:hidden}
+.ops-hero::before{content:"";position:absolute;inset:-40% -10% auto auto;width:340px;height:340px;
+  background:radial-gradient(circle,#2bc9b81f,transparent 65%);pointer-events:none}
+.ops-hero-metin{max-width:620px;position:relative}
+.ops-rozet{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;letter-spacing:.03em;
+  background:#f0b9491a;color:#d8c79a;border:1px solid #4a453040}
+.ops-hero h1{margin:10px 0 6px;font-size:26px;font-weight:800;letter-spacing:-.02em}
+.ops-hero p{margin:0;color:var(--dim2);font-size:13.5px;line-height:1.6}
+.ops-hero-sayac{display:flex;gap:26px;position:relative}
+.ops-hero-sayac div{text-align:right}
+.ops-hero-sayac b{display:block;font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.ops-hero-sayac small{color:var(--dim2);font-size:11px}
+
+.ops-kontrol{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:22px;
+  padding:14px 16px;border:1px solid var(--border);border-radius:14px;background:var(--surface2)}
+.ops-alan{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--dim2)}
+.ops-alan.genis{flex:1;min-width:260px}
+.ops-alan em{font-style:normal;opacity:.7}
+.ops-alan select,.ops-alan input{height:34px;border-radius:9px}
+.ops-alan-dugmeler{display:flex;gap:8px;margin-left:auto}
+
+.ops-bolum{margin-bottom:26px}
+.ops-bolum-bas{display:flex;align-items:baseline;gap:10px;margin-bottom:12px}
+.ops-bolum-bas h2{margin:0;font-size:15px;font-weight:700;letter-spacing:-.01em}
+.ops-bolum-bas small{color:var(--dim2);font-size:11.5px}
+
+/* Sunucu kartları */
+.ops-kart-izgara{display:grid;grid-template-columns:repeat(auto-fill,minmax(206px,1fr));gap:12px}
+.ops-kart{display:flex;flex-direction:column;gap:7px;padding:14px;border-radius:14px;
+  border:1px solid var(--border);background:linear-gradient(160deg,#161a18,#111514);transition:border-color .15s,transform .15s}
+.ops-kart:hover{border-color:#3a4640;transform:translateY(-1px)}
+.ops-kart.calisiyor{border-color:#f0b94966;background:linear-gradient(160deg,#1a1712,#131110)}
+.ops-kart-ust{display:flex;align-items:center;justify-content:space-between}
+.ops-kart-ad{font-weight:700;font-size:14.5px;letter-spacing:-.01em}
+.ops-kart-nokta{width:8px;height:8px;border-radius:50%;background:#3a4640}
+.ops-kart.durum-bitti .ops-kart-nokta{background:var(--ok);box-shadow:0 0 0 3px #2bc9b81a}
+.ops-kart.durum-hata .ops-kart-nokta{background:var(--err);box-shadow:0 0 0 3px #ff6b5e1a}
+.ops-kart.calisiyor .ops-kart-nokta{background:var(--warn);animation:pulse 1.2s infinite}
+.ops-kart-durum{display:flex;align-items:center;gap:6px;color:var(--dim2);font-size:11.5px}
+.ops-kart-hata{color:var(--err);font-size:11px;line-height:1.4}
+.ops-kart-alt{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  padding-top:8px;border-top:1px solid #23282533;color:var(--dim2);font-size:11px}
+.ops-kart-sayi b{color:var(--err)}
+.ops-kart button{margin-top:4px;height:32px;border-radius:9px;font-size:12.5px;font-weight:600}
+.ops-kart button:disabled{opacity:.45}
+
+.ops-current:empty{display:none}

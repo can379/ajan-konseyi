@@ -73,15 +73,20 @@ test("operasyon uclari yazma icermez", () => {
   assert.match(blok, /p === "\/api\/ops\/overview"/, "okuma ucu olmali");
 });
 
-test("arayuz operasyon sekmesi bagli ve parolayi formda birakmaz", () => {
+test("operasyon KENDI ANA EKRANI; parola formda birakilmaz", () => {
   const html = oku("ui/index.html");
-  assert.match(html, /data-tool-tab="ops"/, "sekme olmali");
-  assert.match(html, /id="tool-ops"/, "panel olmali");
+  // Kullanici: "operasyon bolumunun yeri cok sacma" — arac panelinden cikip
+  // sohbetle ayni duzeyde bir ana ekran oldu.
+  assert.match(html, /id="ops-screen"/, "ana ekran olmali");
+  assert.match(html, /id="btn-ops"/, "kenar cubugunda girisi olmali");
+  assert.ok(!/data-tool-tab="ops"/.test(html), "arac sekmesi kalmamali");
+  assert.ok(!/id="tool-ops"/.test(html), "arac paneli surumu kalmamali");
   assert.match(html, /parolanız kaydedilmez/i, "kullaniciya sinir acikca soylenmeli");
-  assert.match(html, /Faz 1 — iade başlatma, sipariş geçme/, "yalniz-okuma siniri panelde yazmali");
+  assert.match(html, /Faz 1 · yalnız gözlem/, "yalniz-okuma siniri ekranda yazmali");
+  assert.match(html, /Para etkileyen hiçbir işlem yapılmaz/, "sinir acikca soylenmeli");
   assert.match(html, /renderOpsCenter|ops-server-list/, "ana yontem uzak sunucu gozlemi olmali");
   const app = oku("ui/app.js");
-  assert.match(app, /function renderOpsCenter/, "panel cizimi olmali");
+  assert.match(app, /function renderOpsEkran/, "ana ekran cizimi olmali");
   assert.match(app, /function renderOpsHub/, "hub verisi yardimci bolum olmali");
   assert.match(app, /e\.target\.reset\(\); \/\/ parola formda da kalmasin/, "parola gonderildikten sonra temizlenmeli");
 });
@@ -115,7 +120,15 @@ test("uye jetonu unutup duz JSON dondurse de eylem islenir, ekrana sizmaz", asyn
   assert.equal(parseComputerAction('{"action":"rm_rf","payload":{}}'), null);
 });
 
-test("operasyon merkezi araclar menusunden acilabilir", () => {
+test("operasyonu yapacak uye secilebilir ve ek talimat verilebilir", () => {
   const html = oku("ui/index.html");
-  assert.match(html, /data-open-tool="ops"/, "menude giris olmali (sekme satiri varsayilan gizli)");
+  assert.match(html, /id="ops-uye"/, "uye secici olmali");
+  assert.match(html, /id="ops-not"/, "ek talimat alani olmali");
+  const app = oku("ui/app.js");
+  assert.match(app, /memberId: \$\("ops-uye"\)\?\.value/, "secilen uye gozleme gecmeli");
+  assert.match(app, /not: \$\("ops-not"\)\?\.value/, "ek talimat gozleme gecmeli");
+  assert.match(app, /localStorage\.setItem\("ajan\.ops\.uye"/, "secim hatirlanmali");
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /KULLANICININ EK TALİMATI/, "ek talimat istemlere gecmeli");
+  assert.match(ops, /üye: \*\*\$\{uye\.name\}\*\*/, "hangi uyenin calistigi kayda gecmeli");
 });

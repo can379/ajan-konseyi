@@ -775,7 +775,7 @@ const server = http.createServer(async (req, res) => {
       const hedef = String(body.target || "").trim();
       if (!hedef) return json(res, 400, { error: "Hedef cihaz adı gerekli" });
       // Tur arka planda yurur; arayuz /api/rdp/state ile izler.
-      opsRun.gozlemle(hedef, { memberId: body.memberId || null })
+      opsRun.gozlemle(hedef, { memberId: body.memberId || null, not: String(body.not || "").slice(0, 400) })
         .catch((error) => store.emit("event", { type: "ops_error", error: String(error.message || error) }));
       return json(res, 202, { ok: true, target: hedef });
     }

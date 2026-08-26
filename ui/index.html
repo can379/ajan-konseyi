@@ -51,6 +51,7 @@
         <div id="conversation-list" aria-live="polite"></div>
       </section>
       <button id="btn-image-studio" class="side-nav-item"><span><svg><use href="#i-image"/></svg></span> Görsel Oluştur</button>
+      <button id="btn-ops" class="side-nav-item"><span><svg><use href="#i-panel"/></svg></span> Operasyon Merkezi</button>
     </nav>
 
     <div class="side-section grow project-history-section">
@@ -155,6 +156,67 @@
 
     <div id="health-banner" hidden></div>
 
+    <section id="ops-screen" hidden aria-labelledby="ops-screen-title">
+      <header class="ops-hero">
+        <div class="ops-hero-metin">
+          <span class="ops-rozet">Faz 1 · yalnız gözlem</span>
+          <h1 id="ops-screen-title">Operasyon Merkezi</h1>
+          <p>Mağaza sunucularına bağlanır, iade · dava · sipariş sorunlarını bulur, çözüm planını çıkarır. Para etkileyen hiçbir işlem yapılmaz.</p>
+        </div>
+        <div class="ops-hero-sayac">
+          <div><b id="ops-sayac-sunucu">—</b><small>sunucu</small></div>
+          <div><b id="ops-sayac-bulgu">—</b><small>açık bulgu</small></div>
+          <div><b id="ops-sayac-tur">—</b><small>tur</small></div>
+        </div>
+      </header>
+
+      <div class="ops-kontrol">
+        <label class="ops-alan"><span>Bu işi yapacak üye</span>
+          <select id="ops-uye"></select>
+        </label>
+        <label class="ops-alan genis"><span>Ek talimat <em>(isteğe bağlı)</em></span>
+          <input id="ops-not" type="text" placeholder="ör. önce iade kayıtlarına bak, mesajları atla" maxlength="400">
+        </label>
+        <div class="ops-alan-dugmeler">
+          <button id="ops-devices" class="btn-ghost small">Sunucuları tara</button>
+          <button id="ops-stop" class="btn-ghost small">Durdur</button>
+        </div>
+      </div>
+
+      <section id="ops-approval" class="ops-approval" hidden></section>
+      <div id="ops-current" class="ops-current"></div>
+
+      <section class="ops-bolum">
+        <div class="ops-bolum-bas"><h2>Sunucular</h2><small>Hedef adı birebir eşleşmezse bağlantı açılmaz</small></div>
+        <div id="ops-server-list" class="ops-kart-izgara"></div>
+      </section>
+
+      <section class="ops-bolum">
+        <div class="ops-bolum-bas"><h2>Bulgular</h2><small>İade · dava · sipariş · oturum</small></div>
+        <div id="ops-findings-list"></div>
+      </section>
+
+      <section class="ops-bolum">
+        <div class="ops-bolum-bas"><h2>Turlar</h2><small>Zaman çizelgesi, kanıt görüntüleri ve planlar</small></div>
+        <div id="ops-run-list"></div>
+        <div id="ops-run-detay" class="ops-run-detay" hidden></div>
+      </section>
+
+      <details id="ops-hub" class="ops-hub"><summary>CanSellerAI panel verisi (yardımcı)</summary>
+        <div class="ops-connect">
+          <p class="muted" style="font-size:12px">Ana yöntem uzak masaüstü gözlemidir. Bu bölüm yalnız panel verisini okumak içindir; parolanız kaydedilmez.</p>
+          <form id="ops-login-form">
+            <input name="login" placeholder="Hub kullanıcı adı" autocomplete="username" required>
+            <input name="password" type="password" placeholder="Parola" autocomplete="current-password" required>
+            <button type="submit">Bağlan</button>
+          </form>
+          <form id="ops-key-form"><input name="serviceKey" placeholder="Servis anahtarı" autocomplete="off" required><button type="submit">Anahtarı kullan</button></form>
+          <div id="ops-status" class="ops-status"></div>
+          <div id="ops-account-row" class="ops-account-row" hidden><label>Mağaza <select id="ops-account"></select></label><span id="ops-meta" class="ops-meta"></span><button id="ops-refresh" class="btn-ghost small">Yenile</button></div>
+          <div id="ops-groups"></div>
+        </div>
+      </details>
+    </section>
     <section id="image-studio" hidden aria-labelledby="image-studio-title">
       <header class="image-studio-head"><div><span class="image-studio-kicker">YARATICI STÜDYO</span><h1 id="image-studio-title">Görsel ve video üretin.</h1><p>Bir fikirden başlayın veya görsel yükleyip doğal dille düzenleyin. Çalışmalarınız sohbetlerden ayrı kalır.</p></div></header>
       <div class="media-kind-tabs" role="tablist"><button type="button" data-media-kind="image" class="active">Görsel</button><button type="button" data-media-kind="video">Video</button></div>
@@ -279,7 +341,6 @@
         <button data-tool-tab="tasks" title="Uzun görevleri yönet"><span>◷</span>Görevler</button>
         <button data-tool-tab="security" title="İzinler ve yetenek paketleri"><span>⌾</span>İzinler</button>
         <button data-tool-tab="git" title="Git değişiklikleri ve testler"><span>⑂</span>Git</button>
-        <button data-tool-tab="ops" title="eBay / Amazon operasyon merkezi"><span>◈</span>Operasyon</button>
       </div>
       <div class="tool-current"><span id="tool-current-icon">›_</span><div><b id="tool-current-title">Terminal</b><small id="tool-project">Proje seçilmedi</small></div></div>
       <button id="btn-tool-close" class="icon-btn" title="Kapat">×</button>
@@ -293,7 +354,6 @@
         <button data-open-tool="editor"><span><svg><use href="#i-files"/></svg></span><b>Dosyalar</b><small>Proje dosyalarını düzenle</small><kbd>⌘P</kbd></button>
         <button data-open-tool="tasks"><span><svg><use href="#i-tasks"/></svg></span><b>Görevler</b><small>Uzun görevleri yönet</small><kbd></kbd></button>
         <button data-open-tool="git"><span><svg><use href="#i-git"/></svg></span><b>Git ve test</b><small>Değişiklikleri doğrula</small><kbd></kbd></button>
-        <button data-open-tool="ops"><span><svg><use href="#i-tasks"/></svg></span><b>Operasyon</b><small>eBay iade, dava ve sipariş takibi</small><kbd></kbd></button>
       </div>
       <div class="tool-picker-foot"><button data-open-tool="security"><span><svg><use href="#i-sliders"/></svg></span><b>Proje ayarları</b><small>İzinler ve yetenekler</small></button><button id="open-output-center"><span><svg><use href="#i-output"/></svg></span><b>Çıktı merkezi</b><small>Üretilen dosyalar</small></button></div>
     </div>
@@ -332,41 +392,6 @@
       <div id="preview-empty">Bir ajan HTML, SVG, Markdown veya metin dosyası ürettiğinde dosya bağlantısına tıklayın.</div>
     </div>
     <div id="tool-editor" class="tool-body" hidden><div class="editor-head"><label><span>⌕</span><input id="editor-search" placeholder="Projede dosya ara"></label><button id="editor-new">Yeni dosya</button><button id="editor-save" class="primary-action">Kaydet</button></div><div class="editor-layout"><aside id="editor-tree"></aside><section class="editor-pane"><div id="editor-path">Dosya seçin</div><textarea id="editor-content" spellcheck="false" placeholder="Düzenlemek için soldan bir dosya seçin"></textarea></section></div></div>
-    <div id="tool-ops" class="tool-body" hidden>
-      <header class="task-center-head">
-        <div><b>Operasyon Merkezi</b><small>Uzak sunucu gözlemi · Faz 1: yalnız okuma</small></div>
-        <div><button id="ops-devices">Sunucuları tara</button><button id="ops-stop" class="btn-ghost small">Durdur</button></div>
-      </header>
-      <div id="ops-banner" class="ops-banner">Faz 1 — iade başlatma, sipariş geçme, mesaj gönderme ve para etkileyen işlemler kapalıdır.</div>
-      <section class="ops-servers"><div class="section-title"><div><h3>Kayıtlı sunucular</h3><p>Windows App içindeki cihazlar; hedef adı birebir eşleşmezse bağlantı açılmaz.</p></div></div>
-        <div id="ops-server-list"></div>
-      </section>
-      <section id="ops-approval" class="ops-approval" hidden></section>
-      <section class="ops-live"><div class="section-title"><div><h3>Kontrol durumu</h3><p>Şu an kontrol edilen sunucu ve adım</p></div></div>
-        <div id="ops-current"></div>
-      </section>
-      <section class="ops-findings"><div class="section-title"><div><h3>Bulgular ve kanıtlar</h3><p>İade, dava ve sorun kayıtları · ekran görüntüleri</p></div></div>
-        <div id="ops-findings-list"></div>
-      </section>
-      <section class="ops-runs"><div class="section-title"><div><h3>Gözlem turları</h3><p>Her tur: zaman çizelgesi, kanıt görüntüleri, bulgular ve planlar</p></div></div>
-        <div id="ops-run-list"></div>
-      </section>
-      <div id="ops-run-detay" class="ops-run-detay" hidden></div>
-      <details id="ops-hub" class="ops-hub"><summary>CanSellerAI panel verisi (yardımcı, isteğe bağlı)</summary>
-        <div class="ops-connect">
-          <p class="muted" style="font-size:12px">Ana çalışma yöntemi uzak masaüstü gözlemidir. Bu bölüm yalnız panel verisini okumak isterseniz vardır; parolanız kaydedilmez.</p>
-          <form id="ops-login-form">
-            <input name="login" placeholder="Hub kullanıcı adı" autocomplete="username" required>
-            <input name="password" type="password" placeholder="Parola" autocomplete="current-password" required>
-            <button type="submit">Bağlan</button>
-          </form>
-          <form id="ops-key-form"><input name="serviceKey" placeholder="Servis anahtarı (üretim yolu)" autocomplete="off" required><button type="submit">Anahtarı kullan</button></form>
-          <div id="ops-status" class="ops-status"></div>
-          <div id="ops-account-row" class="ops-account-row" hidden><label>Mağaza <select id="ops-account"></select></label><span id="ops-meta" class="ops-meta"></span><button id="ops-refresh" class="btn-ghost small">Yenile</button></div>
-          <div id="ops-groups"></div>
-        </div>
-      </details>
-    </div>
     <div id="tool-tasks" class="tool-body" hidden><header class="task-center-head"><div><b>Görev merkezi</b><small>Tüm uzun çalışmalar ve kaynak sahiplikleri</small></div><div><button id="task-schedule">Zamanla</button><button id="task-refresh">Yenile</button></div></header><section class="resource-lease-panel"><div class="section-title"><div><h3>Aktif kaynaklar</h3><p>Port, container, DB, cache ve dış servis yazma sahiplikleri.</p></div></div><div id="resource-lease-list"></div></section><section class="schedule-panel"><div class="section-title"><div><h3>Zamanlanmış görevler</h3><p>Her gün belirlenen saatte konseye istem gönderilir.</p></div></div><form id="schedule-form"><input name="name" placeholder="Ad (ör. Sabah test turu)" required maxlength="60"><input name="time" type="time" value="09:00" required><textarea name="prompt" placeholder="Konseye gönderilecek istem…" required maxlength="2000" rows="2"></textarea><label class="schedule-project"><input type="checkbox" name="useProject" checked> Aktif projeye bağla</label><button type="submit">Ekle</button></form><div id="schedule-list"></div></section><div id="task-center-list"></div></div>
     <div id="tool-security" class="tool-body" hidden>
       <header class="security-head"><div><span class="section-kicker">PROJE KONTROLÜ</span><b>İzinler ve yetenekler</b><small>Ajanların bu projede neleri doğrudan yapabileceğini yönetin.</small></div><div><button id="security-refresh" class="icon-action" title="Yenile">↻</button><button id="security-market">Yetenek mağazası</button><button id="security-new-skill" class="primary-action">＋ Yetenek ekle</button></div></header>

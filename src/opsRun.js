@@ -114,6 +114,8 @@ export class OpsRun {
 
   // Uyeye YALNIZ ekran goruntusu ve soru gider; arac/kopru yok (isolated).
   async _uyeyeSor(run, uye, istem, ekranYolu) {
+    // Kullanicinin bu tura ozel ek talimati (varsa) her istemin basina gecer.
+    if (this._ekTalimat) istem = `--- KULLANICININ EK TALİMATI ---\n${this._ekTalimat}\n--- EK TALİMAT SONU ---\n\n${istem}`;
     // Gorseli SAGLAYICIYA gore iki yoldan birden ver: bazi uyeler dosyayi
     // kendi okuma araciyla acar (Claude), bazilari ek olarak alir (Codex,
     // Antigravity). Yalniz ek olarak vermek yetmiyordu: uye "hicbir ekran
@@ -129,7 +131,7 @@ export class OpsRun {
     return { ok: sonuc.ok !== false, metin: String(sonuc.text || ""), json: jsonAyikla(sonuc.text) };
   }
 
-  async gozlemle(hedef, { memberId = null } = {}) {
+  async gozlemle(hedef, { memberId = null, not = "" } = {}) {
     if (this.aktif) throw new Error(`Zaten bir gözlem sürüyor: ${this.aktif.target}`);
     const uye = (this.config?.data?.members || []).find((m) => m.enabled && (!memberId || m.id === memberId));
     if (!uye) throw new Error("Etkin üye yok");
@@ -142,11 +144,13 @@ export class OpsRun {
     run.title = `🖥 Gözlem · ${hedef}`;
     this.store.updateRun(run);
     this.aktif = { target: hedef, runId: run.id, iptal: false };
+    this._ekTalimat = String(not || "").trim();
     const bilgi = (metin) => this.store.addMessage(run, { from: "sistem", kind: "info", content: metin });
     const durdurulduMu = () => { if (this.aktif?.iptal) throw new Error("Gözlem kullanıcı tarafından durduruldu"); };
 
     try {
-      bilgi(`▶ Gözlem turu başladı — hedef: **${hedef}** (Faz 1: yalnız okuma, hiçbir işlem yapılmaz)`);
+      bilgi(`▶ Gözlem turu başladı — hedef: **${hedef}** · üye: **${uye.name}** (Faz 1: yalnız okuma, hiçbir işlem yapılmaz)`);
+      if (this._ekTalimat) bilgi(`📌 Ek talimat: ${this._ekTalimat}`);
 
       // 1) Windows App'i one getir.
       await bilgisayar.request({ action: "open_app", payload: { name: this.controller.appName } });

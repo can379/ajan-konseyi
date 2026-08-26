@@ -119,10 +119,20 @@ function renderImageBatchStatus() {
 }
 
 function showMainView(view) {
-  activeMainView = view; const studio = view === "images";
-  $("image-studio").hidden = !studio; $("workspace").hidden = studio; $("composer-wrap").hidden = studio;
+  activeMainView = view;
+  const studio = view === "images";
+  const ops = view === "ops";
+  // Operasyon kendi ANA EKRANI: arac panelinin dibinde degil, sohbetle ayni
+  // duzeyde bir bolum (kullanici istegi).
+  $("image-studio").hidden = !studio;
+  const opsEkran = $("ops-screen");
+  if (opsEkran) opsEkran.hidden = !ops;
+  $("workspace").hidden = studio || ops;
+  $("composer-wrap").hidden = studio || ops;
   $("btn-image-studio").classList.toggle("active", studio);
+  $("btn-ops")?.classList.toggle("active", ops);
   if (studio) renderImageStudio();
+  if (ops) renderOpsEkran();
 }
 
 
@@ -2024,7 +2034,7 @@ function openToolPanel(tab) {
   $("tool-panel").classList.remove("closed");
   $("tool-menu").hidden = true;
   $("btn-tools").setAttribute("aria-expanded", "true");
-  const toolMeta={terminal:"Terminal",browser:"Tarayıcı",preview:"İncele",editor:"Dosyalar",tasks:"Görevler",security:"Proje ayarları",git:"Git ve test",ops:"Operasyon"}[tab]||"Araç";
+  const toolMeta={terminal:"Terminal",browser:"Tarayıcı",preview:"İncele",editor:"Dosyalar",tasks:"Görevler",security:"Proje ayarları",git:"Git ve test"}[tab]||"Araç";
   setToolCurrentIcon(tab);
   $("tool-current-title").textContent=toolMeta;
   document.querySelectorAll("[data-tool-tab]").forEach((b) => b.classList.toggle("active", b.dataset.toolTab === tab));
@@ -2035,14 +2045,12 @@ function openToolPanel(tab) {
   $("tool-tasks").hidden = tab !== "tasks";
   $("tool-security").hidden = tab !== "security";
   $("tool-git").hidden = tab !== "git";
-  $("tool-ops").hidden = tab !== "ops";
   if (tab === "terminal") $("terminal-command").focus();
   if (tab === "browser" && !activeBrowserView()) createBrowserTab($("browser-url").value);
   if(tab==="editor")loadEditorTree();
   if(tab==="tasks")renderTaskCenter();
   if(tab==="security")renderSecurityCenter();
   if(tab==="git")renderGitCenter();
-  if(tab==="ops")renderOpsCenter();
 }
 // ---- Gozlem turlari bolumu: sohbet degil, kendi gorunumu ----
 // Her tur bir zaman cizelgesi: adimlar, kanit goruntuleri, bulgular, planlar.
@@ -2118,13 +2126,35 @@ const DURUM_ETIKET = { hazir: "hazır", listeleniyor: "cihazlar okunuyor", bagla
   dogrulaniyor: "kimlik doğrulanıyor", gozlemde: "gözlemde", kapaniyor: "kapatılıyor", bitti: "tamamlandı", hata: "hata" };
 let opsSunucular = [], opsTimer = null;
 
-async function renderOpsCenter() {
+async function renderOpsEkran() {
   await opsDurumCiz();
   if (!opsSunucular.length) await opsCihazTara().catch(() => {});
   if (opsTimer) clearInterval(opsTimer);
-  opsTimer = setInterval(() => { if (!$("tool-ops").hidden) opsDurumCiz(); else { clearInterval(opsTimer); opsTimer = null; } }, 3000);
+  opsTimer = setInterval(() => {
+    if (activeMainView === "ops") opsDurumCiz();
+    else { clearInterval(opsTimer); opsTimer = null; }
+  }, 3000);
+  opsUyeleriDoldur();
   renderOpsRuns();
   renderOpsHub();
+}
+
+// Bu isi hangi uye yapacak? Kullanici secer; secim hatirlanir.
+function opsUyeleriDoldur() {
+  const sec = $("ops-uye");
+  if (!sec) return;
+  const uyeler = (state.config?.members || []).filter((m) => m.enabled);
+  const onceki = localStorage.getItem("ajan.ops.uye") || sec.value;
+  sec.innerHTML = uyeler.map((m) => `<option value="${esc(m.id)}">${esc(m.name)}</option>`).join("")
+    || '<option value="">Etkin üye yok</option>';
+  if (onceki && uyeler.some((m) => m.id === onceki)) sec.value = onceki;
+  sec.onchange = () => localStorage.setItem("ajan.ops.uye", sec.value);
+  const not = $("ops-not");
+  if (not && !not.dataset.baglandi) {
+    not.dataset.baglandi = "1";
+    not.value = localStorage.getItem("ajan.ops.not") || "";
+    not.addEventListener("input", () => localStorage.setItem("ajan.ops.not", not.value));
+  }
 }
 
 async function opsCihazTara() {
@@ -2148,14 +2178,29 @@ async function opsDurumCiz() {
   $("ops-server-list").innerHTML = opsSunucular.length ? opsSunucular.map((d) => {
     const k = kayit[d.name];
     const dur = k?.connection_state || "hazir";
-    const sonKontrol = k?.finished_at ? new Date(k.finished_at).toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—";
+    const sonKontrol = k?.finished_at ? new Date(k.finished_at).toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "hiç";
     const calisiyor = durum.aktif?.target === d.name;
-    return `<div class="ops-server${calisiyor ? " calisiyor" : ""} durum-${esc(dur)}">
-      <div class="ops-server-ad"><b>${esc(d.name)}</b><small>${esc(DURUM_ETIKET[dur] || dur)}${k?.error ? " · " + esc(String(k.error).slice(0, 60)) : ""}</small></div>
-      <div class="ops-server-meta"><small>son kontrol: ${esc(sonKontrol)}</small>${k?.findings?.length ? `<span class="ops-rozet">${k.findings.length} bulgu</span>` : ""}</div>
-      <button data-ops-observe="${esc(d.name)}" ${durum.aktif ? "disabled" : ""}>Gözlemle</button>
-    </div>`;
-  }).join("") : '<div class="muted">Sunucu bulunamadı. Windows App açık mı? "Sunucuları tara"ya basın.</div>';
+    const bulgu = k?.findings?.length || 0;
+    const acil = (k?.findings || []).filter((b) => b.onem === "yuksek").length;
+    return `<article class="ops-kart${calisiyor ? " calisiyor" : ""} durum-${esc(dur)}">
+      <div class="ops-kart-ust">
+        <span class="ops-kart-ad">${esc(d.name)}</span>
+        <span class="ops-kart-nokta" title="${esc(DURUM_ETIKET[dur] || dur)}"></span>
+      </div>
+      <div class="ops-kart-durum">${calisiyor ? workingEqHTML("Gözlem sürüyor") : ""}${esc(DURUM_ETIKET[dur] || dur)}</div>
+      ${k?.error ? `<div class="ops-kart-hata">${esc(String(k.error).slice(0, 90))}</div>` : ""}
+      <div class="ops-kart-alt">
+        <span class="ops-kart-sayi">${bulgu ? `${bulgu} bulgu${acil ? ` · <b>${acil} acil</b>` : ""}` : "bulgu yok"}</span>
+        <span class="ops-kart-zaman">${esc(sonKontrol)}</span>
+      </div>
+      <button data-ops-observe="${esc(d.name)}" ${durum.aktif ? "disabled" : ""}>${calisiyor ? "sürüyor…" : "Gözlemle"}</button>
+    </article>`;
+  }).join("") : '<div class="muted" style="padding:20px">Sunucu bulunamadı. Windows App açık mı? "Sunucuları tara"ya basın.</div>';
+  // Ust sayaclar
+  const toplamBulgu = (durum.sunucular || []).reduce((t, s) => t + (s.findings || []).length, 0);
+  $("ops-sayac-sunucu").textContent = opsSunucular.length || "—";
+  $("ops-sayac-bulgu").textContent = toplamBulgu || "0";
+  $("ops-sayac-tur").textContent = (durum.gecmis || []).length || "0";
 
   // Onay bekleyen is: sunucu adresi sabitleme (sertifika penceresi).
   const onay = durum.bekleyenOnay;
@@ -2214,7 +2259,8 @@ $("ops-server-list")?.addEventListener("click", async (e) => {
   const hedef = btn.dataset.opsObserve;
   if (!confirm(`"${hedef}" sunucusuna bağlanılıp YALNIZ GÖZLEM yapılacak.\nHiçbir işlem, mesaj veya değişiklik yapılmayacak.\n\nBaşlatılsın mı?`)) return;
   btn.disabled = true;
-  const r = await fetch("/api/rdp/observe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ target: hedef }) });
+  const r = await fetch("/api/rdp/observe", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ target: hedef, memberId: $("ops-uye")?.value || null, not: $("ops-not")?.value?.trim() || "" }) });
   if (!r.ok) alert((await r.json()).error || "Gözlem başlatılamadı");
   opsDurumCiz();
 });
