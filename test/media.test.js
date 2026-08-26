@@ -31,3 +31,33 @@ test("sunum ve yaygın arşiv türleri doğru sınıflandırılır", () => {
   assert.equal(detectMedia(Buffer.from("x"), "sunum.pptx").kind, "document");
   assert.equal(detectMedia(Buffer.from("x"), "paket.7z").kind, "archive");
 });
+
+// ---- Eklerin okunabilirligi: uploads proje disinda ----
+test("Claude cagrisina ek dizinleri --add-dir olarak gecer", async () => {
+  const { ClaudeAgent } = await import("../src/agents/claudeAgent.js");
+  const agent = Object.create(ClaudeAgent.prototype);
+  Object.assign(agent, {
+    rootDir: process.cwd(), bin: "claude", getSession: () => null,
+    getModel: () => "", getEffort: () => "", progress() {}, setSession() {},
+  });
+  let gorulen = null;
+  agent.spawnCollect = async (_bin, args, _stdin, _cwd, _t, onLine) => {
+    gorulen = args;
+    onLine(JSON.stringify({ type: "result", result: "ok", usage: {} }));
+    return { code: 0, timedOut: false, stdout: "", stderr: "" };
+  };
+  // Kullanicinin yasadigi hata: ekler ~/Library/.../uploads icinde, proje
+  // disinda. --add-dir verilmeyince Claude "calisma kopyamin disinda ve
+  // okuma izni verilmedi" diyip acamiyordu.
+  await agent.invoke("eki oku", { readRoots: ["/veri/uploads", "/veri/generated"] });
+  const i = gorulen.indexOf("--add-dir");
+  assert.ok(i > -1, "--add-dir bulunmalı");
+  assert.equal(gorulen[i + 1], "/veri/uploads");
+  assert.equal(gorulen[gorulen.lastIndexOf("--add-dir") + 1], "/veri/generated");
+});
+
+test("orkestrator her uye cagrisinda readRoots verir", async () => {
+  const fs = await import("node:fs");
+  const kaynak = fs.readFileSync(new URL("../src/orchestrator.js", import.meta.url), "utf8");
+  assert.match(kaynak, /readRoots: \[`\$\{this\.rootDir\}\/uploads`, `\$\{this\.rootDir\}\/generated`\]/);
+});

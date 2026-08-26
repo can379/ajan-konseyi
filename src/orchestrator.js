@@ -568,6 +568,10 @@ Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulun
     const stepLog = new StepLog({ onChange: (list) => this.store.streamSteps?.(member.id, list) });
     const providerOpts = {
       ...effectiveOpts,
+      // Eklerin ve uretilen dosyalarin kok dizinleri: proje disinda kalan
+      // bu yollara okuma erisimi acilmazsa uye kullanicinin gonderdigi
+      // dosyayi acamiyor (claudeAgent bunlari --add-dir yapar).
+      readRoots: [`${this.rootDir}/uploads`, `${this.rootDir}/generated`],
       steps: stepLog,
       // Kimlik karari tek yerde uretilir; saglayici ajanlari bunu yeniden
       // hesaplamak yerine devralir.

@@ -59,6 +59,12 @@ export class ClaudeAgent extends BaseAgent {
     // skill, MCP ve alt ajan araçlarını kullanmasına izin ver. `auto` modu
     // riskli eylemleri Claude'un kendi güvenlik değerlendirmesinden geçirir.
     args.push("--permission-mode", opts.codeMode ? "acceptEdits" : "auto");
+    // EK DOSYALARA ERISIM: kullanicinin yukledigi gorsel/PDF/videolar
+    // uygulamanin veri dizininde (uploads) durur — proje dizininin DISINDA.
+    // --add-dir verilmeyince Claude ekleri ACAMIYORDU: "dosyalar calisma
+    // kopyamin disinda ve okuma izni verilmedi" (canli goruldu). Codex'te
+    // sorun yoktu cunku gorseli -i bayragiyla gomulu aliyor.
+    for (const kok of opts.readRoots || []) args.push("--add-dir", kok);
 
     let live = "";
     let result = null;
