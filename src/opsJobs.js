@@ -193,3 +193,72 @@ export class OpsJobs {
   // once dis sistemde (Amazon/eBay) ne oldugu okunur.
   uzlastirmaBekleyenler() { return this.liste({ durum: IS_DURUM.BELIRSIZ }); }
 }
+
+// ---- KURTARMA STRATEJILERI ----
+// Konseyin (D) sorusunun cevabi: yarida kalan is, dusen oturum, CAPTCHA,
+// MFA, fiyat degisikligi. Her biri icin TEK bir dogru davranis vardir;
+// dogaclama burada pahaliya patlar.
+export const KURTARMA = Object.freeze({
+  oturum_dustu: {
+    ad: "Oturum düştü / çıkış yapılmış",
+    davranis: "yeniden-dene",
+    adim: "Bir kez otomatik yeniden bağlanma denenir (uzak masaüstündeki AÇIK oturum kullanılır). Giriş formu çıkarsa DUR — parola girilmez.",
+    tekrarSiniri: 1,
+  },
+  captcha: {
+    ad: "CAPTCHA",
+    davranis: "kullaniciya-devret",
+    adim: "ASLA çözülmez. İş 'kullanıcı bekliyor' durumuna alınır, ekran görüntüsü kanıt olarak saklanır.",
+    tekrarSiniri: 0,
+  },
+  mfa: {
+    ad: "MFA / OTP / doğrulama kodu",
+    davranis: "kullaniciya-devret",
+    adim: "Kod girilmez, istenmez. Kullanıcı doğrulamayı yapınca aynı oturumla devam edilir.",
+    tekrarSiniri: 0,
+  },
+  fiyat_degisti: {
+    ad: "Fiyat değişmiş",
+    davranis: "esige-bak",
+    adim: "Fark kabul edilen sınırın altındaysa devam; üstündeyse DUR ve kullanıcıya sor. Sınır bilinmiyorsa DUR.",
+    tekrarSiniri: 0,
+  },
+  stok_yok: {
+    ad: "Ürün stokta yok",
+    davranis: "yol-degistir",
+    adim: "Sipariş VERİLMEZ. İş, eBay tarafındaki iptal/mesaj politikasına aktarılır (ayrı iş açılır).",
+    tekrarSiniri: 0,
+  },
+  varyant_degisti: {
+    ad: "Amazon başka varyanta yönlendirdi",
+    davranis: "durdur",
+    adim: "Sayfanın kendi ASIN'i istenenden farklıysa sipariş verilmez; varyant kalkmış sayılır, stok 0 işlenir.",
+    tekrarSiniri: 0,
+  },
+  sonuc_belirsiz: {
+    ad: "İşlem sonucu okunamadı",
+    davranis: "uzlastir",
+    adim: "TEKRAR DENEME YOK. Önce dış sistemde (Amazon Orders / eBay iade kaydı) işlemin gerçekten oluşup oluşmadığı okunur; ancak 'kesin oluşmamış' sonucundan sonra yeni deneme yapılabilir.",
+    tekrarSiniri: 0,
+  },
+  sayfa_degisti: {
+    ad: "Beklenen ekran gelmedi",
+    davranis: "yeniden-dene",
+    adim: "Yeni ekran görüntüsü alınır, hedef yeniden bulunur. Aynı noktaya körlemesine ikinci kez tıklanmaz.",
+    tekrarSiniri: 2,
+  },
+});
+
+// Ekranda/hatada gorulen durumu kurtarma stratejisine baglar.
+export function kurtarmaBul(belirti) {
+  const metin = String(belirti || "").toLocaleLowerCase("tr-TR");
+  if (/captcha|robot değil|i'm not a robot/.test(metin)) return { anahtar: "captcha", ...KURTARMA.captcha };
+  if (/otp|mfa|doğrulama kodu|verification code|two-step/.test(metin)) return { anahtar: "mfa", ...KURTARMA.mfa };
+  if (/oturum|sign in|giriş yap|log in|session expired/.test(metin)) return { anahtar: "oturum_dustu", ...KURTARMA.oturum_dustu };
+  if (/fiyat|price changed|tutar farkı/.test(metin)) return { anahtar: "fiyat_degisti", ...KURTARMA.fiyat_degisti };
+  if (/stokta yok|out of stock|currently unavailable/.test(metin)) return { anahtar: "stok_yok", ...KURTARMA.stok_yok };
+  if (/varyant|başka asin|yönlendir/.test(metin)) return { anahtar: "varyant_degisti", ...KURTARMA.varyant_degisti };
+  if (/belirsiz|okunamadı|unknown/.test(metin)) return { anahtar: "sonuc_belirsiz", ...KURTARMA.sonuc_belirsiz };
+  if (/beklenen ekran|sayfa gelmedi|yüklenmedi/.test(metin)) return { anahtar: "sayfa_degisti", ...KURTARMA.sayfa_degisti };
+  return null;
+}

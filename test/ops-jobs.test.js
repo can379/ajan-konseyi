@@ -156,3 +156,42 @@ test("arayuz belirsiz isleri ayri vurgular", () => {
     "kullaniciya tekrar yasagi soylenmeli");
   assert.match(oku("ui/index.html"), /aynı iş ikinci kez açılmaz/, "kural ekranda yazili olmali");
 });
+
+// ---- KURTARMA STRATEJILERI ----
+// Her belirti icin TEK dogru davranis; dogaclama pahaliya patlar.
+
+test("CAPTCHA ve MFA asla cozulmez, kullaniciya devredilir", async () => {
+  const { kurtarmaBul, KURTARMA } = await import("../src/opsJobs.js");
+  assert.equal(kurtarmaBul("CAPTCHA doğrulaması çıktı").davranis, "kullaniciya-devret");
+  assert.equal(kurtarmaBul("Verification code istendi").davranis, "kullaniciya-devret");
+  assert.equal(KURTARMA.captcha.tekrarSiniri, 0, "CAPTCHA'da tekrar denemesi olmamali");
+  assert.match(KURTARMA.captcha.adim, /ASLA çözülmez/);
+  assert.match(KURTARMA.mfa.adim, /Kod girilmez, istenmez/);
+});
+
+test("belirsiz sonuc UZLASTIRMAYA gider, tekrar denenmez", async () => {
+  const { kurtarmaBul, KURTARMA } = await import("../src/opsJobs.js");
+  const k = kurtarmaBul("Place Order sonucu okunamadı");
+  assert.equal(k.davranis, "uzlastir");
+  assert.equal(k.tekrarSiniri, 0);
+  assert.match(KURTARMA.sonuc_belirsiz.adim, /TEKRAR DENEME YOK/);
+  assert.match(KURTARMA.sonuc_belirsiz.adim, /kesin oluşmamış' sonucundan sonra/);
+});
+
+test("stok yoksa siparis verilmez, yol degistirilir", async () => {
+  const { kurtarmaBul, KURTARMA } = await import("../src/opsJobs.js");
+  assert.equal(kurtarmaBul("Ürün currently unavailable").davranis, "yol-degistir");
+  assert.match(KURTARMA.stok_yok.adim, /Sipariş VERİLMEZ/);
+  assert.match(KURTARMA.stok_yok.adim, /iptal\/mesaj politikasına aktarılır/);
+});
+
+test("fiyat degisiminde esik bilinmiyorsa DURULUR", async () => {
+  const { KURTARMA } = await import("../src/opsJobs.js");
+  assert.match(KURTARMA.fiyat_degisti.adim, /Sınır bilinmiyorsa DUR/);
+});
+
+test("oturum dusunce parola girilmez", async () => {
+  const { KURTARMA } = await import("../src/opsJobs.js");
+  assert.equal(KURTARMA.oturum_dustu.tekrarSiniri, 1, "bir kez denenir");
+  assert.match(KURTARMA.oturum_dustu.adim, /Giriş formu çıkarsa DUR — parola girilmez/);
+});
