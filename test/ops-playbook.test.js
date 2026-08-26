@@ -167,7 +167,7 @@ test("teslim noktasi olcutu onay dugmesi DEGIL", async () => {
 test("varyant yonlendirmesi 'stokta var' yalanidir", async () => {
   const { TUZAKLAR } = await import("../src/opsPlaybook.js");
   const t = TUZAKLAR.find((x) => /varyant/i.test(x.baslik));
-  assert.match(t.dogru, /SAYFANIN KENDİ ASIN'ini oku/);
+  assert.match(t.dogru, /Sayfanın KENDİ ASIN'ini oku/);
   assert.match(t.kanit, /B0D97QSDC4/, "gercek vaka kaniti");
 });
 
