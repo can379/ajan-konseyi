@@ -296,3 +296,36 @@ test("sessiz basarisizlik guard'lari tanimli", async () => {
   assert.match(kurallar, /UNKNOWN != OUT/, "belirsizde tekrar olmamali");
   assert.match(kurallar, /ilan no \+ alıcı birlikte/, "dava eslesmesi cift alanli olmali");
 });
+
+// ---- GOREV ODAKLI TUR + OZETLER ----
+// Kullanici bildirdi: "her yaptigi seyi sunucuya giris yaptiktan sonra ozet
+// gecsin" ve "mesajlara filan girmedi".
+
+test("sunucuya girince GIRIS OZETI yazilir", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /GIRIS_OZETI_ISTEMI/, "giris ozeti istemi olmali");
+  assert.match(ops, /giriş özeti/, "kullaniciya mesaj olarak dusmeli");
+  assert.match(ops, /Gördüğüm:/, "ne gorduğu yazilmali");
+  assert.match(ops, /Planım:/, "ne yapacagi yazilmali");
+  assert.match(ops, /Bu turdaki görevler/, "gorevler soylenmeli");
+});
+
+test("acik is turleri GOREV olur ve ajan hedefe GIDER", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /_gorevler\(\)/, "acik is turlerinden gorev uretilmeli");
+  assert.match(ops, /this\.faz \? \[\.\.\.\(this\.faz\.acikTurler/, "gorevler acik turlerden gelmeli");
+  assert.match(ops, /_goreveGit\(run, uye, hedef, gorev/, "goreve gidilmeli");
+  assert.match(ops, /mesajlara filan girmedi/, "canli sikayet koda not dusulmus olmali");
+  // Gezinme eylemleri dar: gonderme/onaylama yok.
+  const blok = ops.slice(ops.indexOf("async _goreveGit"), ops.indexOf("_varlikKimligi"));
+  assert.ok(!/submit|gonder|onayla|"type", payload: \{ text: [^}]*mesaj/i.test(blok),
+    "gorev turunda gonderme olmamali");
+});
+
+test("tur sonunda TAM OZET verilir ve yapilamayanlar da yazilir", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /TUR_OZETI_ISTEMI/, "tur ozeti istemi olmali");
+  assert.match(ops, /Yapmadığın şeyi yaptım deme/, "durustluk sarti istemde olmali");
+  assert.match(ops, /\*\*Yapamadıklarım\*\*/, "yapilamayanlar ayri bolum olmali");
+  assert.match(ops, /tur özeti/, "ozet kullaniciya dusmeli");
+});

@@ -46,10 +46,10 @@ const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
 const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge });
 const opsJobs = new OpsJobs();
-const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs });
 // Faz kapisi: varsayilan Faz 1. Kullanici tek tek is turu acabilir; genel
 // siniri yukseltmek hepsini birden acardi, bu yuzden tur bazli kapi var.
 const opsFaz = new FazAyari();
+const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs, faz: opsFaz });
 const opsWorker = new OpsWorker({ jobs: opsJobs, controller: rdp, orchestrator: orch, store, config, faz: opsFaz });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");

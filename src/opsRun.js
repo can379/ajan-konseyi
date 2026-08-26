@@ -84,6 +84,47 @@ Ekranda şu an ne görüyorsan ona göre TEK BİR sonraki adım öner. Hedef sit
 
 Aradığın bilgi ZATEN ekrandaysa eylem="hazir" ver ve neden alanına gördüğünü yaz. Uzak masaüstünde açık olmayan bir uygulamayı açmaya çalışma; parola/OTP ekranı çıkarsa dur.`;
 
+const GIRIS_OZETI_ISTEMI = `"%HEDEF%" sunucusuna yeni bağlandın. Ekran görüntüsü verildi.
+
+GÖREVİN: Kullanıcıya kısa bir GİRİŞ ÖZETİ yaz. Ne gördüğünü ve bu turda ne yapacağını söyle.
+
+BU TURDAKİ GÖREVLER:
+%GOREVLER%
+
+Yalnız şu JSON:
+{"gordugum": "ekranda ne var — tek cümle, açık uygulamalar ve dikkat çeken durum",
+ "hazir_mi": true|false,
+ "engel": "görevleri yapmama engel bir şey varsa (oturum kapalı, hata penceresi), yoksa boş",
+ "plan": "bu turda sırayla ne yapacağım — tek cümle"}`;
+
+const GOREV_ISTEMI = `"%HEDEF%" sunucusundasın. Şu görevi yürüteceksin:
+
+%YONERGE%
+
+Ekran görüntüsü verildi. Şu an ekranda ne olduğuna bakıp GÖREVE GİTMEK için TEK bir sonraki adımı söyle.
+
+Yalnız şu JSON:
+{"eylem": "yer_imi|adres_git|sekme_degistir|tikla|kaydir|oku|bitti",
+ "hedef": "yer imi adı / adres / tıklanacak öğenin GÖRÜNTÜDEKİ piksel konumu {x,y} / okunacak alan",
+ "neden": "bu adım görevin neresi",
+ "beklenen": "sonrasında ne görmeyi bekliyorum"}
+
+Göreve ulaştıysan ve okunacak şey ekrandaysa eylem="oku" ver ve "hedef" alanına ne okuduğunu yaz.
+Görev tamamlandıysa eylem="bitti" ver.
+Tıklaman gerekiyorsa hedef alanına {"x":..,"y":..} biçiminde GÖRÜNTÜ pikseli ver; emin değilsen tıklama, başka adım öner.`;
+
+const TUR_OZETI_ISTEMI = `"%HEDEF%" sunucusundaki tur bitti. Yaptıklarının kaydı:
+
+%KAYIT%
+
+GÖREVİN: Kullanıcıya TUR ÖZETİ yaz. Kısa, dürüst ve somut ol. Yapmadığın şeyi yaptım deme.
+
+Yalnız şu JSON:
+{"yaptiklarim": ["kısa madde", "..."],
+ "buldugum": ["dikkat isteyen somut şey", "..."],
+ "yapamadigim": ["denedim ama olmadı / erişemedim", "..."],
+ "onerim": "sıradaki adım — tek cümle"}`;
+
 function jsonAyikla(metin) {
   const ham = String(metin || "");
   const blok = ham.match(/\{[\s\S]*\}/);
@@ -92,8 +133,9 @@ function jsonAyikla(metin) {
 }
 
 export class OpsRun {
-  constructor({ controller, orchestrator, store, config, jobs = null }) {
+  constructor({ controller, orchestrator, store, config, jobs = null, faz = null }) {
     this.jobs = jobs;
+    this.faz = faz;
     this.controller = controller;
     this.orch = orchestrator;
     this.store = store;
@@ -214,8 +256,37 @@ export class OpsRun {
       this.controller.kimlikOnayla(hedef, true, "kimlik doğrulandı, gözlem başlıyor");
       durdurulduMu();
 
+      // 7b) GIRIS OZETI — kullanici bildirdi: "her yaptigi seyi sunucuya giris
+      // yaptiktan sonra ozet gecsin". Once ne gordugunu ve ne yapacagini yaz.
+      const girisEkran = await bilgisayar.request({ action: "screenshot", payload: {} });
+      const gorevler = this._gorevler();
+      const girisOzet = await this._uyeyeSor(run, uye,
+        GIRIS_OZETI_ISTEMI.replace("%HEDEF%", hedef)
+          .replace("%GOREVLER%", gorevler.length
+            ? gorevler.map((g, i) => `${i + 1}. ${g.ad}`).join("\n")
+            : "(açık görev yok — yalnız genel gözlem)"),
+        girisEkran.screenshotPath);
+      const gj = girisOzet.json;
+      this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
+        content: `**${hedef} — giriş özeti**\n\n`
+          + `Gördüğüm: ${gj?.gordugum || girisOzet.metin.slice(0, 300)}\n\n`
+          + (gj?.engel ? `⚠ Engel: ${gj.engel}\n\n` : "")
+          + (gorevler.length ? `Bu turdaki görevler: ${gorevler.map((g) => g.ad).join(", ")}\n\n` : "")
+          + (gj?.plan ? `Planım: ${gj.plan}` : ""),
+        attachments: girisEkran.screenshotPath ? [{ name: "giris.png", path: girisEkran.screenshotPath, kind: "image", mime: "image/png" }] : [] });
+
+      // 7c) ACIK GOREVLERE GIT. Kullanici bildirdi: "mesajlara filan girmedi".
+      const gorevKayitlari = [];
+      let gorevEkran = girisEkran.screenshotPath;
+      for (const gorev of gorevler) {
+        durdurulduMu();
+        const sonuc = await this._goreveGit(run, uye, hedef, gorev, gorevEkran);
+        gorevKayitlari.push({ gorev: gorev.ad, adimlar: sonuc.kayit });
+        gorevEkran = sonuc.sonEkran || gorevEkran;
+      }
+
       // 8-9) Gozlem: ekrani oku, bulgulari kaydet. (Yalniz okuma.)
-      const gozlem = await bilgisayar.request({ action: "screenshot", payload: {} });
+      const gozlem = { screenshotPath: gorevEkran } ;
       this.controller._kaydet(hedef, { last_screenshot: gozlem.screenshotPath, current_step: "ekran okunuyor" });
       const rapor = await this._uyeyeSor(run, uye, GOZLEM_ISTEMI.replace("%HEDEF%", hedef), gozlem.screenshotPath);
       // Her bulguyu bir IS TURUNE bagla: boylece "ne yapilmali" sorusu
@@ -292,6 +363,23 @@ export class OpsRun {
         this.store.updateRun(run);
       }
 
+      // 10b) TUR OZETI — yaptiklarinin tam dokumu.
+      const kayitMetni = [
+        `Bağlantı: ${hedef} · sertifika geçildi · kimlik doğrulandı`,
+        ...gorevKayitlari.map((g) => `Görev "${g.gorev}": ${g.adimlar.join(" → ") || "adım yok"}`),
+        `Bulgular: ${(this.controller.durum(hedef)?.findings || []).map((b) => `${b.isAdi || b.tur}: ${b.ozet}`).join(" | ") || "yok"}`,
+      ].join("\n");
+      const ozet = await this._uyeyeSor(run, uye,
+        TUR_OZETI_ISTEMI.replace("%HEDEF%", hedef).replace("%KAYIT%", kayitMetni.slice(0, 6000)), gorevEkran);
+      const oj = ozet.json;
+      this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
+        content: `**${hedef} — tur özeti**\n\n`
+          + ((oj?.yaptiklarim || []).length ? `**Yaptıklarım**\n${oj.yaptiklarim.map((x) => `- ${x}`).join("\n")}\n\n` : "")
+          + ((oj?.buldugum || []).length ? `**Bulduklarım**\n${oj.buldugum.map((x) => `- ${x}`).join("\n")}\n\n` : "")
+          + ((oj?.yapamadigim || []).length ? `**Yapamadıklarım**\n${oj.yapamadigim.map((x) => `- ${x}`).join("\n")}\n\n` : "")
+          + (oj?.onerim ? `**Öneri:** ${oj.onerim}\n\n` : "")
+          + (oj ? "" : ozet.metin.slice(0, 1500)) });
+
       // 10) Oturumu kapat ve cihaz listesine donuldugunu dogrula.
       const kapanis = await this.controller.kapat(hedef);
       bilgi(kapanis.connection_state === "bitti"
@@ -359,6 +447,72 @@ export class OpsRun {
       toplanan.push(`${adim.hedef || adim.eylem}: ${adim.beklenen || ""}`);
     }
     return { toplanan, sonEkran };
+  }
+
+  // Bu turda hangi gorevler var? Acik is turleri gorevi belirler; hicbiri
+  // acik degilse tur yalniz genel gozlemdir.
+  _gorevler() {
+    const acik = this.faz ? [...(this.faz.acikTurler || [])] : [];
+    return acik.filter((t) => OYUN_KITABI[t]).map((t) => ({ isTuru: t, ad: OYUN_KITABI[t].ad }));
+  }
+
+  // Goreve GIT: ekrana bakip adim adim ilerler. Yalniz okuma eylemleri;
+  // tiklama yalniz gezinme icin (yer imi, sekme, bag). Kullanici bildirdi:
+  // "mesajlara filan girmedi" — onceki tur ekranda ne varsa onu okuyup
+  // biraktigi icin acik gorev es geciliyordu.
+  async _goreveGit(run, uye, hedef, gorev, ekranYolu, { maxAdim = 6 } = {}) {
+    const bilgisayar = this.controller.computer;
+    const bilgi = (m) => this.store.addMessage(run, { from: "sistem", kind: "info", content: m });
+    const yonerge = isYonergesi(gorev.isTuru, { fazUstSinir: this.faz?.ustSinir ?? 1 });
+    const kayit = [];
+    let sonEkran = ekranYolu;
+    bilgi(`🎯 Görev: **${gorev.ad}** — hedefe gidiliyor.`);
+    for (let i = 0; i < maxAdim; i++) {
+      if (this.aktif?.iptal) break;
+      const oneri = await this._uyeyeSor(run, uye,
+        GOREV_ISTEMI.replace("%HEDEF%", hedef).replace("%YONERGE%", yonerge || gorev.ad), sonEkran);
+      const adim = oneri.json;
+      if (!adim || adim.eylem === "bitti") { if (adim?.neden) kayit.push(adim.neden); break; }
+
+      if (adim.eylem === "oku") {
+        kayit.push(`okundu: ${typeof adim.hedef === "string" ? adim.hedef : JSON.stringify(adim.hedef)}`);
+        bilgi(`👁 ${String(adim.hedef).slice(0, 300)}`);
+        continue;
+      }
+      if (adim.eylem === "yer_imi" && adim.hedef) {
+        const yer = await this._yerImiKonumu(hedef, String(adim.hedef), sonEkran, run, uye);
+        if (!yer) { bilgi(`⏸ "${adim.hedef}" yer imi bulunamadı — görev durduruldu.`); break; }
+        bilgi(`🔖 ${adim.hedef} açılıyor — ${adim.neden || ""}`);
+        await bilgisayar.request({ action: "click", payload: { x: yer.x, y: yer.y } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 4 } });
+      } else if (adim.eylem === "adres_git" && adim.hedef) {
+        bilgi(`🔎 ${adim.hedef} — ${adim.neden || ""}`);
+        await bilgisayar.request({ action: "key", payload: { key: "l", ctrl: true } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 1 } });
+        await bilgisayar.request({ action: "type", payload: { text: String(adim.hedef).slice(0, 300) } });
+        await bilgisayar.request({ action: "key", payload: { key: "enter" } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 5 } });
+      } else if (adim.eylem === "tikla" && adim.hedef?.x != null) {
+        // Uzak masaustu icerigi AX'te gorunmez; konum gorselden gelir.
+        // Retina: goruntu pikseli / 2 = ekran noktasi.
+        bilgi(`🖱 Tıklanıyor — ${adim.neden || ""}`);
+        await bilgisayar.request({ action: "click",
+          payload: { x: Math.round(Number(adim.hedef.x) / 2), y: Math.round(Number(adim.hedef.y) / 2) } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 3 } });
+      } else if (adim.eylem === "sekme_degistir") {
+        await bilgisayar.request({ action: "key", payload: { key: "tab", ctrl: true } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 3 } });
+      } else if (adim.eylem === "kaydir") {
+        await bilgisayar.request({ action: "key", payload: { key: "down" } });
+        await bilgisayar.request({ action: "wait", payload: { seconds: 1 } });
+      } else break;
+
+      const yeni = await bilgisayar.request({ action: "screenshot", payload: {} });
+      sonEkran = yeni.screenshotPath;
+      this.controller._kaydet(hedef, { last_screenshot: sonEkran, current_step: `${gorev.ad}: ${adim.eylem}` });
+      kayit.push(`${adim.eylem}${adim.hedef && typeof adim.hedef === "string" ? " → " + adim.hedef : ""}`);
+    }
+    return { kayit, sonEkran };
   }
 
   // Bulgudan VARLIK KIMLIGI cikar (siparis no, iade no, dava no). Kimlik
