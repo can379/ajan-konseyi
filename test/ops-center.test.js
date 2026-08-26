@@ -135,3 +135,28 @@ test("operasyonu yapacak uye secilebilir ve ek talimat verilebilir", () => {
   assert.match(ops, /KULLANICININ EK TALİMATI/, "ek talimat istemlere gecmeli");
   assert.match(ops, /üye: \*\*\$\{uye\.name\}\*\*/, "hangi uyenin calistigi kayda gecmeli");
 });
+
+// ---- Tek komut alani ve sohbet bolumunun sadeligi ----
+test("uye secimi ve ek talimat komut kutusunda birlesti", () => {
+  const html = oku("ui/index.html");
+  // Kullanici: "bu varken üsttekine gerek var mı, ikisini birleştir."
+  assert.ok(!/class="ops-kontrol"/.test(html), "ayrı kontrol şeridi kalmamalı");
+  const form = html.slice(html.indexOf('id="ops-komut-form"'), html.indexOf('id="ops-komut-sonuc"'));
+  for (const id of ["ops-uye", "ops-komut", "ops-not", "ops-faz", "ops-devices", "ops-stop", "ops-acil"]) {
+    assert.ok(form.includes(`id="${id}"`), `${id} tek komut kutusunda olmalı`);
+  }
+  // Formun icindeki yardimci dugmeler formu GONDERMEMELI.
+  for (const id of ["ops-faz", "ops-devices", "ops-stop", "ops-acil"]) {
+    const i = form.indexOf(`id="${id}"`);
+    assert.match(form.slice(Math.max(0, i - 80), i), /type="button"/,
+      `${id} type="button" olmalı, yoksa formu gönderir`);
+  }
+});
+
+test("sohbet bolumunde proje secimi gorunmez", () => {
+  const app = oku("ui/app.js");
+  // Kullanici: "sohbet bölümü sadece sohbet etmek, öğrenmek, araştırmak
+  // için olmalı; proje seçme olmasın."
+  assert.match(app, /const projeliBolum = aktifBolum === "kod"/);
+  assert.match(app, /\["btn-project", "tb-project", "btn-open-project-app"\]/);
+});

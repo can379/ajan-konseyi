@@ -125,7 +125,7 @@ Yalnız şu JSON:
  "yapamadigim": ["denedim ama olmadı / erişemedim", "..."],
  "onerim": "sıradaki adım — tek cümle"}`;
 
-function jsonAyikla(metin) {
+export function jsonAyikla(metin) {
   const ham = String(metin || "");
   const blok = ham.match(/\{[\s\S]*\}/);
   if (!blok) return null;

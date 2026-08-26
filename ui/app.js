@@ -169,6 +169,15 @@ function bolumSecildi(bolum) {
   document.querySelectorAll("#bolum-menu [data-bolum]").forEach((b) =>
     b.querySelector(".bl-ikon")?.classList.toggle("bl-oyna", b.dataset.bolum === aktifBolum));
 
+  // SOHBET bolumu yalniz sohbet icin: proje secimi, proje rozeti ve proje
+  // uygulamalari burada gorunmez. Kullanici: "sohbet bölümü sadece sohbet
+  // etmek, bir şeyler öğrenmek, araştırmak için olmalı; proje seçme olmasın."
+  const projeliBolum = aktifBolum === "kod";
+  for (const id of ["btn-project", "tb-project", "btn-open-project-app"]) {
+    const el = $(id);
+    if (el) el.hidden = !projeliBolum;
+  }
+
   const yan = BOLUM_YAN[aktifBolum];
   const sohbetler = $("side-sohbetler");
   const projeler = $("side-projeler");
@@ -2543,20 +2552,25 @@ $("ops-komut-form")?.addEventListener("submit", async (e) => {
   const kutu = $("ops-komut-sonuc");
   kutu.hidden = false;
   kutu.innerHTML = '<div class="muted">Komut çözülüyor…</div>';
-  const btn = e.target.querySelector("button"); btn.disabled = true;
+  const btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true;
   try {
     const r = await (await fetch("/api/rdp/komut", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ metin, memberId: $("ops-uye")?.value || null }) })).json();
+      body: JSON.stringify({ metin, memberId: $("ops-uye")?.value || null,
+        not: $("ops-not")?.value.trim() || "" }) })).json();
     if (r.error) { kutu.innerHTML = `<div class="ops-err">${esc(r.error)}</div>`; return; }
     if (!r.ok) {
+      // Uye de yorumlayamadiysa NEDEN yorumlayamadigi yazilir: kullanici
+      // "anlamadim"dan sonra ne yapacagini bilmeli.
       kutu.innerHTML = `<div class="ops-komut-eksik"><b>Anlamadım</b>
         <ul>${(r.eksik || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
-        <small>Örnek: "WOOY mağazasına gir, geçilemeyen siparişleri geç" · "ANNE iadelerini al" · "CanSelim okunmamış mesajlara bak"</small></div>`;
+        ${r.yorumHatasi ? `<div class="ops-yorum-not">${esc(r.yorumlayan || "Üye")} da çözemedi: ${esc(r.yorumHatasi)}</div>` : ""}
+        <small>Örnek: "wooya gir, en son gelen mesajı kontrol et" · "ANNE iadelerini al" · "CanSelim okunmamış mesajlara bak"</small></div>`;
       return;
     }
     kutu.innerHTML = `<div class="ops-komut-tamam">
       <b>${esc(r.ozet)}</b>
+      ${r.yorumlayan && r.yorumNedeni ? `<div class="ops-yorum-not">${esc(r.yorumlayan)} yorumladı: ${esc(r.yorumNedeni)}</div>` : ""}
       <div>${r.calistirildi ? "▶ Başlatıldı — aşağıdan izleyebilirsin."
         : r.yinelenen ? "↺ Bu iş zaten kuyrukta; ikinci kez açılmadı."
         : r.kapali ? `⏸ ${esc(r.kapaliMesaj)} İş kuyruğa alındı.`
@@ -2666,7 +2680,7 @@ async function opsYukle() {
 $("ops-login-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const d = Object.fromEntries(new FormData(e.target));
-  const btn = e.target.querySelector("button"); btn.disabled = true;
+  const btn = e.target.querySelector('button[type="submit"]'); btn.disabled = true;
   try {
     const r = await fetch("/api/ops/connect", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ login: d.login, password: d.password }) });

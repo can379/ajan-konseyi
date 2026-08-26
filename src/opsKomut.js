@@ -25,12 +25,25 @@ export function uyeCoz(metin, uyeler = []) {
 }
 
 // Magaza adi -> kayitli cihaz. BIREBIR eslesme sart; benzer ad kabul edilmez.
+//
+// Turkce ek sorunu: kullanici "WOOY'a gir" degil, cogu zaman "wooya gir",
+// "anneye bak", "lutufa gir" yaziyor — kesme isareti koymuyor. Ilk surum
+// yalniz kesmeli hali taniyordu ve "wooya gir" komutu "hangi magaza
+// yazilmamis" diye reddediliyordu. Artik ad, dogrudan yapisik gelen en
+// fazla 4 harflik bir ekle de eslesir.
+//
+// Yanlis eslesmeyi onleyen sinir: ekten SONRA harf/rakam gelmemeli, yani
+// "anne" -> "anneye" (ek) eslesir ama daha uzun bir kelimenin ORTASINA
+// denk gelen ad eslesmez. Ad 3 harften kisaysa ek aranmaz; iki harflik bir
+// ad her kelimeye uyar.
 export function magazaCoz(metin, cihazlar = []) {
   const sade = String(metin || "").toLocaleLowerCase("tr-TR");
   const bulunanlar = cihazlar.filter((c) => {
     const ad = String(c.name || "").toLocaleLowerCase("tr-TR");
     if (!ad) return false;
-    const desen = new RegExp(`(?<![\\p{L}\\p{N}])${ad.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(?:['’][a-zçğıöşü]{1,4})?(?![\\p{L}\\p{N}])`, "iu");
+    const kacis = ad.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const ek = ad.length >= 3 ? "(?:['’]?[a-zçğıöşü]{1,4})?" : "(?:['’][a-zçğıöşü]{1,4})?";
+    const desen = new RegExp(`(?<![\\p{L}\\p{N}])${kacis}${ek}(?![\\p{L}\\p{N}])`, "iu");
     return desen.test(sade);
   });
   if (bulunanlar.length === 1) return { ok: true, magaza: bulunanlar[0].name };
@@ -88,4 +101,61 @@ export function komutCoz(metin, { uyeler = [], cihazlar = [] } = {}) {
       : null,
     ham: String(metin || "").slice(0, 500),
   };
+}
+
+// ---- YAPAY ZEKA YORUMU ------------------------------------------------
+//
+// Kullanici: "bunu yapay zeka bakmalı; hangi yapay zekanın bakacağına karar
+// veren ben olmalıyım."
+//
+// Sira: ONCE kural. Kural cozerse uyeye hic gidilmez — hizli, ucuz, ve her
+// seferinde ayni sonucu verir. Kural cozemezse SECILEN uye yorumlar.
+//
+// Uyenin yorumu SERBEST DEGIL: yalniz verilen magaza ve is turu listesinden
+// secebilir. Liste disi bir sey donerse yorum REDDEDILIR. Sebep: "WOOY'a
+// gir" derken yanlis magazaya baglanmak bu projedeki en pahali hata; modele
+// magaza adi UYDURMA yetkisi verilemez.
+export function yorumIstemi(metin, { cihazlar = [], isTurleri = {} } = {}) {
+  const magazalar = cihazlar.map((c) => c.name).filter(Boolean);
+  const turler = Object.entries(isTurleri).map(([k, v]) => `  ${k} = ${v}`).join("\n");
+  return `Bir mağaza operatörünün serbest yazdığı komutu anlamaya çalışıyorsun.
+
+KOMUT: "${String(metin || "").slice(0, 500)}"
+
+Yalnız aşağıdaki listelerden seçebilirsin. Listede olmayan bir şey YAZMA.
+
+MAĞAZALAR:
+${magazalar.map((m) => `  ${m}`).join("\n")}
+
+İŞ TÜRLERİ:
+${turler}
+
+Türkçe ekleri hesaba kat: "wooya gir" = WOOY, "anneye bak" = ANNE.
+
+Yalnız şu JSON'u döndür, başka hiçbir şey yazma:
+{"magaza":"<listeden bir ad ya da null>","isTuru":"<listeden bir anahtar ya da null>","guven":"yuksek|dusuk","neden":"<tek cümle>"}
+
+Emin değilsen null yaz ve guven "dusuk" olsun. Tahmin yürütme —
+yanlış mağazaya bağlanmak geri alınamaz işlem yapılmasına yol açar.`;
+}
+
+// Uyenin dondugu yorumu DOGRULA. Liste disi deger, uydurulmus ad ya da
+// dusuk guven -> kabul edilmez.
+export function yorumDogrula(ham, { cihazlar = [], isTurleri = {} } = {}) {
+  if (!ham || typeof ham !== "object") return { ok: false, mesaj: "Yorum okunamadı." };
+  const adlar = cihazlar.map((c) => String(c.name));
+  const magaza = ham.magaza == null ? null : String(ham.magaza);
+  const isTuru = ham.isTuru == null ? null : String(ham.isTuru);
+
+  if (magaza && !adlar.includes(magaza)) {
+    return { ok: false, mesaj: `Kayıtlı olmayan mağaza önerildi: "${magaza}"` };
+  }
+  if (isTuru && !Object.keys(isTurleri).includes(isTuru)) {
+    return { ok: false, mesaj: `Tanımsız iş türü önerildi: "${isTuru}"` };
+  }
+  if (!magaza || !isTuru) return { ok: false, mesaj: "Yorumlanamadı: eksik kaldı." };
+  if (String(ham.guven || "").toLocaleLowerCase("tr-TR") !== "yuksek") {
+    return { ok: false, mesaj: `Emin olunamadı${ham.neden ? `: ${String(ham.neden).slice(0, 160)}` : ""}` };
+  }
+  return { ok: true, magaza, isTuru, neden: String(ham.neden || "").slice(0, 200) };
 }

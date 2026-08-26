@@ -179,25 +179,28 @@
         </div>
       </header>
 
-      <div class="ops-kontrol">
-        <label class="ops-alan"><span>Bu işi yapacak üye</span>
-          <select id="ops-uye"></select>
-        </label>
-        <label class="ops-alan genis"><span>Ek talimat <em>(isteğe bağlı)</em></span>
-          <input id="ops-not" type="text" placeholder="ör. önce iade kayıtlarına bak, mesajları atla" maxlength="400">
-        </label>
-        <div class="ops-alan-dugmeler">
-          <button id="ops-faz" class="btn-ghost small" title="Hangi iş türlerinin yürütülmesine izin verildiği">Yetkiler</button>
-          <button id="ops-devices" class="btn-ghost small">Sunucuları tara</button>
-          <button id="ops-stop" class="btn-ghost small">Durdur</button>
-          <button id="ops-acil" class="btn-ghost small ops-acil" title="Her şeyi anında durdurur; dosya tabanlıdır, uygulama açılmasa bile geçerlidir">Acil durdurma</button>
-        </div>
-      </div>
-
+      <!-- Tek komut alani: uye secimi, komut ve ek talimat bir arada.
+           Onceden ayri bir "kontrol" seridi vardi; ayni isi iki yerde
+           yapiyorlardi ve hangisinin ne oldugu belirsizdi. -->
       <form id="ops-komut-form" class="ops-komut">
-        <input id="ops-komut" type="text" autocomplete="off" maxlength="500"
-          placeholder="Ne yapmamı istersin? ör. Codex'e WOOY mağazasına gir, geçilemeyen siparişleri geç">
-        <button type="submit">Gönder</button>
+        <div class="ops-komut-ust">
+          <label class="ops-komut-uye" title="Komutu bu üye yorumlar ve yürütür">
+            <span>Üye</span><select id="ops-uye"></select>
+          </label>
+          <input id="ops-komut" type="text" autocomplete="off" maxlength="500"
+            placeholder="Ne yapmamı istersin? ör. wooya gir, en son gelen mesajı kontrol et">
+          <button type="submit" class="ops-komut-gonder">Gönder</button>
+        </div>
+        <div class="ops-komut-alt">
+          <input id="ops-not" type="text" maxlength="400"
+            placeholder="Ek talimat (isteğe bağlı) — ör. önce iade kayıtlarına bak, mesajları atla">
+          <div class="ops-komut-dugmeler">
+            <button type="button" id="ops-faz" class="btn-ghost small" title="Hangi iş türlerinin yürütülmesine izin verildiği">Yetkiler</button>
+            <button type="button" id="ops-devices" class="btn-ghost small">Sunucuları tara</button>
+            <button type="button" id="ops-stop" class="btn-ghost small">Durdur</button>
+            <button type="button" id="ops-acil" class="btn-ghost small ops-acil" title="Her şeyi anında durdurur; dosya tabanlıdır, uygulama açılmasa bile geçerlidir">Acil durdurma</button>
+          </div>
+        </div>
       </form>
       <div id="ops-komut-sonuc" class="ops-komut-sonuc" hidden></div>
       <div id="ops-acil-serit" class="ops-acil-serit" hidden></div>

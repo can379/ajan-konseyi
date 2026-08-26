@@ -6,13 +6,14 @@ import { Store } from "./src/store.js";
 import { SpeechToText } from "./src/speech.js";
 import { CanSellerAI, temizleKayit } from "./src/cansellerai.js";
 import { RdpController } from "./src/rdpController.js";
-import { OpsRun } from "./src/opsRun.js";
+import { OpsRun, jsonAyikla } from "./src/opsRun.js";
 import { OpsJobs } from "./src/opsJobs.js";
 import { OpsWorker, FazAyari } from "./src/opsWorker.js";
 import { KillSwitch, DevreKesici, PolitikaKaydi } from "./src/opsGuvenlik.js";
 import { opsMetrikleri } from "./src/opsMetrik.js";
 import { OpsWatcher } from "./src/opsWatcher.js";
-import { komutCoz } from "./src/opsKomut.js";
+import { komutCoz, yorumIstemi, yorumDogrula } from "./src/opsKomut.js";
+import { OYUN_KITABI } from "./src/opsPlaybook.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -846,7 +847,44 @@ const server = http.createServer(async (req, res) => {
       let cihazlar = [];
       try { cihazlar = (await rdp.listele()).devices; } catch { /* liste yoksa magaza cozulemez */ }
       const uyeler = (config.data.members || []).filter((m) => m.enabled);
-      const cozum = komutCoz(metin, { uyeler, cihazlar });
+      let cozum = komutCoz(metin, { uyeler, cihazlar });
+
+      // Kural cozemediyse SECILEN uye yorumlar. Kullanici: "bunu yapay zeka
+      // bakmalı; hangi yapay zekanın bakacağına karar veren ben olmalıyım."
+      // Uye serbest degil: yalniz kayitli magaza ve tanimli is turu
+      // listesinden secebilir, dusuk guvende reddedilir.
+      if (!cozum.ok) {
+        const secilen = uyeler.find((u) => u.id === (cozum.uye?.id || body.memberId)) || uyeler[0];
+        if (secilen) {
+          const isTurleri = Object.fromEntries(
+            Object.entries(OYUN_KITABI).map(([k, v]) => [k, v.ad || k]));
+          try {
+            const run = store.createRun({ kind: "ops", request: `Komut yorumu: ${metin.slice(0, 60)}`,
+              mode: "auto", agents: [secilen.id], projectId: null, projectDir: null, attachments: [] });
+            const yanit = await orch.callMember(run, secilen,
+              yorumIstemi(metin, { cihazlar, isTurleri }),
+              { isolated: true, label: "komut yorumu", timeoutMs: 60_000 });
+            const dogru = yorumDogrula(jsonAyikla(String(yanit?.text || "")), { cihazlar, isTurleri });
+            if (dogru.ok) {
+              cozum = komutCoz(`${dogru.magaza} ${metin}`, { uyeler, cihazlar });
+              if (!cozum.ok || cozum.isTuru !== dogru.isTuru) {
+                // Yorum is turunu farkli okuduysa onu esas al.
+                cozum = { ...cozum, ok: true, magaza: dogru.magaza, isTuru: dogru.isTuru,
+                  isAdi: isTurleri[dogru.isTuru] || dogru.isTuru,
+                  risk: OYUN_KITABI[dogru.isTuru]?.risk ?? 3, eksik: [],
+                  ozet: `${dogru.magaza} · ${isTurleri[dogru.isTuru]}${secilen ? ` · ${secilen.name}` : ""}` };
+              }
+              cozum.yorumlayan = secilen.name;
+              cozum.yorumNedeni = dogru.neden;
+            } else {
+              cozum.yorumHatasi = dogru.mesaj;
+              cozum.yorumlayan = secilen.name;
+            }
+          } catch (hata) {
+            cozum.yorumHatasi = `Yorumlanamadı: ${String(hata.message || hata)}`;
+          }
+        }
+      }
       if (!cozum.ok) return json(res, 200, { ...cozum, calistirildi: false });
       // Cozulen komut ISE donusur; faz kapisi ve onay kurallari aynen gecerli.
       const varlik = cozum.kimlik || `komut-${Date.now()}`;
