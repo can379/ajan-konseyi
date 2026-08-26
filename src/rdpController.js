@@ -65,7 +65,14 @@ func kutu(_ el: AXUIElement) -> (CGPoint, CGSize)? {
   return (nokta, boyut)
 }
 func kacisla(_ s: String) -> String {
-  return s.replacingOccurrences(of: "\\\\", with: "\\\\\\\\").replacingOccurrences(of: "\\"", with: "\\\\\\"")
+  // Satir sonlari ve sekmeler de kacislanmali: uyari pencerelerinin metni cok
+  // satirli oluyor ve ham \\n JSON'u bozuyordu ("cikti bozuk" hatasi).
+  var c = s.replacingOccurrences(of: "\\\\", with: "\\\\\\\\")
+  c = c.replacingOccurrences(of: "\\"", with: "\\\\\\"")
+  c = c.replacingOccurrences(of: "\\n", with: "\\\\n")
+  c = c.replacingOccurrences(of: "\\r", with: "\\\\r")
+  c = c.replacingOccurrences(of: "\\t", with: "\\\\t")
+  return c
 }
 
 var cihazlar: [String] = []
@@ -172,6 +179,15 @@ export function sertifikaPenceresi(texts = [], buttons = []) {
   return { host, devam: devam || null, iptal: iptal || null, metin: metin.slice(0, 400) };
 }
 
+// Uyari penceresi: "Your session was disconnected ... Error code: 0x5" gibi.
+// Kullanici bildirdi: "bu hatayi gorunce close basip tekrar acmayi denemeli".
+export function oturumUyarisi(texts = [], buttons = []) {
+  const metin = (texts || []).join(" ");
+  if (!/disconnected|error code|bağlantı kesildi|hata kodu/i.test(metin)) return null;
+  const kapat = (buttons || []).find((b) => /^(close|kapat|ok|tamam)$/i.test(String(b.name || "").trim()));
+  return { metin: metin.slice(0, 300), kapat: kapat || null };
+}
+
 // Acik oturum penceresini bul: Windows App, RDP oturumunu cihaz ADIYLA
 // baslikli ayri bir pencerede acar ("[AXWindow] ANNE"). Kimligi modele
 // sordurmak yerine bunu okumak KESIN ve deterministiktir — canli olculdu:
@@ -262,11 +278,75 @@ export class RdpController {
     return cikti;
   }
 
+  // CIHAZ LISTESINI HAZIRLA — baglanmadan once ekrani bilinen duruma getir.
+  // Canli olculdu, uc ayri takilma durumu var:
+  //   1) "Your session was disconnected" uyarisi acik  -> Close'a bas
+  //   2) Eski bir OTURUM penceresi acik (baslik = cihaz adi) -> Cmd+W ile kapat
+  //   3) Uygulamanin hic penceresi yok -> open -a ile geri getir
+  // Hicbiri cozmezse cihaz listesi bos kalir ve hedef "bulunamadi" gorunur —
+  // kullanici bunu "ANNE adinda kayitli cihaz yok" diye gordu.
+  async cihazListesiniHazirla({ deneme = 20 } = {}) {
+    const gunluk = [];
+    for (let i = 0; i < deneme; i++) {
+      let ham;
+      try { ham = await this.listele({ ham: true }); }
+      catch (hata) {
+        // Uygulama kapaliysa ac ve yeniden dene.
+        if (/açık değil/.test(String(hata.message))) {
+          await this.computer.request({ action: "open_app", payload: { name: this.appName } });
+          await this.computer.request({ action: "wait", payload: { seconds: 3 } });
+          gunluk.push("uygulama açıldı");
+          continue;
+        }
+        throw hata;
+      }
+      if ((ham.devices || []).length) return { ok: true, devices: ham.devices, gunluk };
+
+      // 1) Uyari penceresi
+      const uyari = oturumUyarisi(ham.texts, ham.buttons);
+      if (uyari?.kapat) {
+        await this.computer.request({ action: "click", payload: { x: uyari.kapat.x, y: uyari.kapat.y } });
+        await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+        gunluk.push("bağlantı kesildi uyarısı kapatıldı");
+        continue;
+      }
+      // 2) Acik oturum penceresi (baslik "Windows App" degilse oturumdur)
+      const oturum = (ham.windows || []).find((w) => w.title && !/^windows app$/i.test(w.title));
+      if (oturum) {
+        await this.computer.request({ action: "key", payload: { key: "w", cmd: true } });
+        await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+        gunluk.push(`"${oturum.title}" oturum penceresi kapatıldı`);
+        continue;
+      }
+      // 3) Hic pencere yok: "open -a" YETMIYOR (canli olculdu, pencere
+      // gelmiyor). macOS'ta kapatilmis pencereleri geri getiren dogru yol
+      // "reopen"dir. Not: takilmis birden fazla oturum penceresi olabilir;
+      // her reopen birini geri getirir, dongu sirayla kapatir.
+      if (!(ham.windows || []).length) {
+        await run("/usr/bin/osascript", ["-e", `tell application "${this.appName}" to reopen`,
+          "-e", `tell application "${this.appName}" to activate`]).catch(() => {});
+        await this.computer.request({ action: "wait", payload: { seconds: 3 } });
+        gunluk.push("pencere geri getirildi (reopen)");
+        continue;
+      }
+      await this.computer.request({ action: "wait", payload: { seconds: 2 } });
+    }
+    return { ok: false, devices: [], gunluk,
+      mesaj: "Cihaz listesi getirilemedi. Windows App'te açık bir oturum veya uyarı penceresi kalmış olabilir." };
+  }
+
   // 3-5. adim: hedefi birebir dogrula, belirsizse DURDUR, degilse kartin
   // KENDI merkezine tikla (koordinat tahmini yok).
   async baglan(hedef, { beklenenKimlik = "" } = {}) {
     if (!this.computer) throw new Error("Bilgisayar köprüsü yok; bağlantı açılamaz.");
     this._kaydet(hedef, { ...yeniDurum(hedef, beklenenKimlik), connection_state: "listeleniyor", current_step: "cihaz listesi okunuyor", started_at: new Date().toISOString() });
+    // Ekrani once bilinen duruma getir: takilmis uyari/oturum penceresi varsa
+    // cihaz listesi hic gorunmez ve hedef "bulunamadi" sanilir.
+    const hazirlik = await this.cihazListesiniHazirla();
+    if (!hazirlik.ok) {
+      this._kaydet(hedef, { connection_state: "hata", current_step: "cihaz listesi getirilemedi", error: hazirlik.mesaj, finished_at: new Date().toISOString() });
+      throw new Error(hazirlik.mesaj);
+    }
     const { devices, sidebar } = await this.listele();
     const secim = hedefSec(devices, hedef);
     if (!secim.ok) {

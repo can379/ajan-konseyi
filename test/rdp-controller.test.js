@@ -296,3 +296,47 @@ test("oturum kapanisi pencerenin KAYBOLMASIYLA dogrulanir", () => {
   assert.match(kaynak, /oturumPenceresi\(windows, hedef\)\.ok/, "pencere hala acik mi diye bakilmali");
   assert.ok(!/key: "delete", cmd: true/.test(kaynak), "yanlis kisayol kalmamali");
 });
+
+// ---- TAKILMIS OTURUM KURTARMA ----
+// Canli vaka: kullanici "ANNE adında kayıtlı cihaz yok" hatası gördü.
+// Sebep hedef degildi: ekranda takilmis oturumlar ve "Your session was
+// disconnected" uyarilari cihaz listesini goruntulemiyordu.
+
+test("baglanti kesildi uyarisi taninir ve Close dugmesi bulunur", async () => {
+  const { oturumUyarisi } = await import("../src/rdpController.js");
+  const u = oturumUyarisi(
+    ["Your session was disconnected", "You have been disconnected because another connection was made to the remote PC.", "Error code: 0x5"],
+    [{ name: "Close", x: 437, y: 608 }]);
+  assert.ok(u, "uyari taninmali");
+  assert.deepEqual(u.kapat, { name: "Close", x: 437, y: 608 }, "Close dugmesi AX'ten gelmeli");
+  assert.equal(oturumUyarisi(["Saved Devices"], []), null, "siradan ekran uyari sayilmamali");
+});
+
+test("hazirlik: uyariyi kapatir, oturum penceresini kapatir, pencereyi geri getirir", async () => {
+  const cagrilar = [];
+  const kopru = { async request(x) { cagrilar.push(x); return { ok: true }; } };
+  const c = new RdpController("/tmp/ajan-rdp-test", { computerBridge: kopru });
+  let tur = 0;
+  c.listele = async () => {
+    tur += 1;
+    if (tur === 1) return { devices: [], windows: [], texts: ["Your session was disconnected", "Error code: 0x5"], buttons: [{ name: "Close", x: 10, y: 20 }] };
+    if (tur === 2) return { devices: [], windows: [{ title: "WOOY" }], texts: [], buttons: [] };
+    if (tur === 3) return { devices: [], windows: [], texts: [], buttons: [] };
+    return { devices: CIHAZLAR, windows: [{ title: "Windows App" }], texts: [], buttons: [] };
+  };
+  const sonuc = await c.cihazListesiniHazirla({ deneme: 6 });
+  assert.equal(sonuc.ok, true, "liste sonunda gelmeli");
+  assert.equal(sonuc.devices.length, CIHAZLAR.length);
+  assert.match(sonuc.gunluk.join(" "), /uyarısı kapatıldı/);
+  assert.match(sonuc.gunluk.join(" "), /oturum penceresi kapatıldı/);
+  assert.match(sonuc.gunluk.join(" "), /reopen/);
+  // Uyari Close dugmesinin KENDI konumuna tiklanmali (tahmin degil).
+  assert.deepEqual(cagrilar.find((x) => x.action === "click").payload, { x: 10, y: 20 });
+});
+
+test("baglanti oncesi ekran hazirlanir (yoksa hedef 'bulunamadi' sanilir)", () => {
+  const kaynak = oku("src/rdpController.js");
+  assert.match(kaynak, /const hazirlik = await this\.cihazListesiniHazirla\(\)/, "baglan once hazirlamali");
+  assert.match(kaynak, /kullanici bunu "ANNE adinda kayitli cihaz yok" diye gordu/, "canli vaka not edilmis olmali");
+  assert.match(kaynak, /"open -a" YETMIYOR/, "reopen gerekcesi yazili olmali");
+});
