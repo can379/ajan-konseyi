@@ -1859,9 +1859,6 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .bolum-menu button.secili b::after{content:" ✓";color:var(--ok)}
 
 /* Komut kutusu */
-.ops-komut{display:flex;gap:8px;margin-bottom:12px}
-.ops-komut input{flex:1;height:42px;border-radius:12px;font-size:13.5px;padding:0 14px}
-.ops-komut button{height:42px;padding:0 20px;border-radius:12px;font-weight:650}
 .ops-komut-sonuc{margin-bottom:14px;padding:11px 14px;border-radius:11px;background:#0f1211;border:1px solid var(--border);font-size:13px}
 .ops-komut-sonuc[hidden]{display:none}
 .ops-komut-tamam b{display:block;margin-bottom:4px}
@@ -2004,10 +2001,15 @@ button.ops-acil.etkin { background: rgba(255,90,90,.18); border-color: rgba(255,
   background:transparent;box-shadow:none;font-size:12.5px;font-weight:600;color:var(--text)}
 .ops-komut-uye select:focus{border:0;box-shadow:none}
 #ops-komut{flex:1;min-width:0;height:44px;font-size:14px;border-radius:11px}
-.ops-komut-gonder{flex:none;padding:0 20px;height:44px;border:none;border-radius:11px;
-  background:var(--grad);color:#fff;font-weight:700;font-size:13.5px;
-  box-shadow:0 4px 16px rgba(99,102,241,.35);transition:transform .12s,filter .12s}
-.ops-komut-gonder:hover{transform:translateY(-1px);filter:brightness(1.08)}
+/* Gonder: temanin birincil dugme dili acik zemin + KOYU yazi. Onceden
+   var(--grad) + beyaz yazi yazilmisti; bu temada --grad krem renge
+   ezildigi icin beyaz uzerine beyaz cikiyor ve dugme okunmuyordu. */
+.ops-komut-gonder{flex:none;padding:0 22px;height:44px;border:none;border-radius:11px;
+  background:#eeeee8;color:#1b1c19;font-weight:700;font-size:13.5px;letter-spacing:-.01em;
+  box-shadow:none;transition:background .13s,transform .13s}
+.ops-komut-gonder:hover{background:#ffffff;transform:translateY(-1px)}
+.ops-komut-gonder:active{transform:none;background:#e2e2da}
+.ops-komut-gonder:disabled{opacity:.5;cursor:default;transform:none;background:#eeeee8}
 .ops-komut-alt{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 #ops-not{flex:1;min-width:220px;height:32px;font-size:12px;border-radius:10px}
 .ops-komut-dugmeler{display:flex;gap:6px;flex:none}

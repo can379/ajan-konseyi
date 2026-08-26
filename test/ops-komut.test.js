@@ -48,3 +48,13 @@ test("uye yorumu liste disina cikamaz ve dusuk guvende reddedilir", async () => 
   assert.match(istem, /WOOY/);
   assert.ok(!/ZEYNEP/.test(istem));
 });
+
+test("komut yorumu kosusu kendiliginden yeniden baslatilmaz", async () => {
+  const fs = await import("node:fs");
+  const server = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  // Yorum kosusu gecicidir. Uygulama o sirada kapanirsa 'kaldigi yerden
+  // devam' onu normal konsey kosusu sanip koordinatoru calistiriyor ve
+  // bos yere uye tuketiyordu (canli goruldu, durduruldu).
+  const blok = server.slice(server.indexOf("Komut yorumu:"), server.indexOf("Komut yorumu:") + 700);
+  assert.match(blok, /run\.autoResume = false/, "yorum koşusu autoResume kapalı olmalı");
+});

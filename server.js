@@ -861,9 +861,15 @@ const server = http.createServer(async (req, res) => {
           try {
             const run = store.createRun({ kind: "ops", request: `Komut yorumu: ${metin.slice(0, 60)}`,
               mode: "auto", agents: [secilen.id], projectId: null, projectDir: null, attachments: [] });
+            // Yorum kosusu GECICIDIR: tek bir soru sorulur, cevap alinir,
+            // biter. Uygulama bu sirada kapanirsa "kaldigi yerden devam"
+            // onu normal bir konsey kosusu sanip koordinatoru calistiriyor
+            // ve bos yere uye tuketiyordu (canli goruldu).
+            run.autoResume = false;
             const yanit = await orch.callMember(run, secilen,
               yorumIstemi(metin, { cihazlar, isTurleri }),
               { isolated: true, label: "komut yorumu", timeoutMs: 60_000 });
+            run.status = "idle";
             const dogru = yorumDogrula(jsonAyikla(String(yanit?.text || "")), { cihazlar, isTurleri });
             if (dogru.ok) {
               cozum = komutCoz(`${dogru.magaza} ${metin}`, { uyeler, cihazlar });
