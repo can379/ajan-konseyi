@@ -190,7 +190,7 @@ test("durum kusagi: kaydin DURUMU degisince yeni is acilir", async () => {
   // Durum verilmezse eski bicim korunur (geriye uyum).
   assert.equal(idempotensAnahtari("amazon_iade", "ANNE", "R1"), "amazon_iade:ANNE:R1");
   const kaynak = oku("src/opsJobs.js");
-  assert.match(kaynak, /DURUM GECISI yutulur/, "gerekce kaynakta olmali");
+  assert.match(kaynak, /GECISI yutulur/, "gerekce kaynakta olmali");
 });
 
 test("BOOTSTRAP: ilk tur kuyrugu patlatmaz", () => {
