@@ -787,7 +787,10 @@ const server = http.createServer(async (req, res) => {
 
     // Faz durumu ve is turu acma/kapatma.
     if (req.method === "GET" && p === "/api/rdp/faz") {
-      return json(res, 200, opsFaz.durum());
+      // Arayuz risk rozetlerini buradan alir: tek kaynak OYUN_KITABI.
+      const turlar = Object.fromEntries(Object.entries(OYUN_KITABI)
+        .map(([k, v]) => [k, { ad: v.ad, risk: v.risk }]));
+      return json(res, 200, { ...opsFaz.durum(), turlar });
     }
     if (req.method === "POST" && p === "/api/rdp/faz") {
       const body = await readBody(req);

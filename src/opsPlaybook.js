@@ -150,6 +150,32 @@ export const OYUN_KITABI = Object.freeze({
     not: "Kullanici karari: 'sadece okunmamis mesajlarla ilgilen, baktiktan sonra geri okunmadi yap'. Sebep: kullanicinin kendi is akisi bozulmasin — okunmamis kutusu onun calisma listesi.",
   },
 
+  // Kuyrukta acilabilen HER is turunun burada bir girisi olmali: yurutucu
+  // OYUN_KITABI[isTuru] bulamazsa isi "tanimsiz is turu" diye olduruyor.
+  // stok_yok_mesaji ACILIS_SIRASI'nda vardi ama burada yoktu — o turde is
+  // acilir acilmaz kalici hataya dusuyordu.
+  stok_yok_mesaji: {
+    ad: "Stok yok iptal mesajı",
+    risk: RISK.POLITIKA,
+    tetik: "Siparisin urunu Amazon'da tedarik edilemiyor; aliciya durum mesaji gerekli",
+    onKosul: [
+      "Stokta olmadigi Amazon tarafindan DOGRULANMIS olmali (yalniz panel notu yetmez)",
+      "Ayni aliciya ayni siparis icin daha once bu mesaj gonderilmemis olmali",
+    ],
+    adimlar: [
+      "Amazon'da urunun gercekten tedarik edilemedigini dogrula (stok/fiyat ekrani)",
+      "Aliciya nazik, KISA durum mesaji TASLAGI hazirla: gecikme/iptal secenegi sun",
+      "Taslak mesaj filtresi kurallarina uymali: harici baglanti, telefon, puan isteme YOK",
+      "Gonderim Risk 2: faz acik degilse taslak kullaniciya sunulur",
+    ],
+    dur: [
+      "Alici zaten dava/iade acmissa bu is degil, ebay_dava/amazon_iade isidir",
+      "Iptal ISLEMI yapilmaz — yalniz mesaj; iptal karari kullanicinindir",
+    ],
+    dogrula: "Taslak hazirlandi; gonderildiyse mesajin gonderildigi ekrandan okundu",
+    not: "Gonderilen her mesaj mesajFiltresi'nden gecer (opsGuvenlik).",
+  },
+
   oturum: {
     ad: "Oturum sağlığı",
     risk: RISK.OKUMA,

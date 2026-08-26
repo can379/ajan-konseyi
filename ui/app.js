@@ -1637,6 +1637,27 @@ window.addEventListener("blur",()=>{openQuotaProvider="";document.querySelectorA
 // Eski proje araçları `showModal` adını kullanıyor. Tek modal uygulamasına
 // yönlendirerek proje ayarları, hafıza ve kontrol noktalarının gerçek UI'da
 // güvenle açılmasını sağla.
+
+// window.prompt Electron'da DESTEKLENMEZ — prompt kullanan her dugme
+// (yeniden adlandir, etiketler, devret, hafiza...) sessizce oluydu.
+// Bu kutu ayni isi modal ile yapar.
+function istemKutusu(baslik, varsayilan = "") {
+  return new Promise((cozul) => {
+    openModal(`<div class="m-head"><h2>${esc(baslik)}</h2><button data-modal-close>×</button></div>
+      <form id="istem-form"><input id="istem-girdi" value="${esc(varsayilan ?? "")}" autocomplete="off">
+      <div class="m-foot"><button type="button" class="btn-ghost" data-modal-close>Vazgeç</button>
+      <button type="submit" class="btn-gradient">Tamam</button></div></form>`);
+    const girdi = $("istem-girdi");
+    girdi.focus(); girdi.select();
+    let bitti = false;
+    const bitir = (deger) => { if (!bitti) { bitti = true; closeModal(); cozul(deger); } };
+    $("istem-form").addEventListener("submit", (e) => { e.preventDefault(); bitir(girdi.value); });
+    $("modal-overlay").addEventListener("click", (e) => {
+      if (e.target.closest("[data-modal-close]") || e.target.id === "modal-overlay") bitir(null);
+    }, { once: false });
+  });
+}
+
 function showModal(html) {
   openModal(html);
 }
@@ -1724,11 +1745,11 @@ document.addEventListener("click", async (e) => {
   }
   const runMenuAction=closest("[data-run-menu]");
   if(runMenuAction){const menu=$("run-context-menu"),id=menu.dataset.runId,run=state.runs[id];menu.hidden=true;if(!run)return;
-    if(runMenuAction.dataset.runMenu==="rename"){const title=prompt("Sohbet adı",run.title||run.request);if(title)await patchRun(id,{title});}
+    if(runMenuAction.dataset.runMenu==="rename"){const title=await istemKutusu("Sohbet adı",run.title||run.request);if(title)await patchRun(id,{title});}
     if(runMenuAction.dataset.runMenu==="pin")await patchRun(id,{pinned:!run.pinned});
     if(runMenuAction.dataset.runMenu==="archive")await patchRun(id,{archived:!run.archived});
-    if(runMenuAction.dataset.runMenu==="transfer"){const target=prompt("Hangi ajana veya konseye devredilsin?","konsey");if(target){const response=await fetch(`/api/runs/${id}/transfer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target,projectId:run.projectId})});const result=await response.json();if(result.runId){selectRun(result.runId);await fetchState();}}}
-    if(runMenuAction.dataset.runMenu==="tags"){const value=prompt("Etiketler (virgülle ayırın)",(run.tags||[]).join(", "));if(value!==null)await patchRun(id,{tags:value.split(",")});}
+    if(runMenuAction.dataset.runMenu==="transfer"){const target=await istemKutusu("Hangi ajana veya konseye devredilsin?","konsey");if(target){const response=await fetch(`/api/runs/${id}/transfer`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target,projectId:run.projectId})});const result=await response.json();if(result.runId){selectRun(result.runId);await fetchState();}}}
+    if(runMenuAction.dataset.runMenu==="tags"){const value=await istemKutusu("Etiketler (virgülle ayırın)",(run.tags||[]).join(", "));if(value!==null)await patchRun(id,{tags:value.split(",")});}
     if(runMenuAction.dataset.runMenu==="export"){const a=document.createElement("a");a.href=`/api/runs/${id}/export`;a.download=`${id}.json`;a.click();}
     if(runMenuAction.dataset.runMenu==="replay"){const events=[...(run.messages||[]).map(message=>({at:message.ts||message.createdAt,kind:message.kind||"message",title:message.fromLabel||message.from,detail:message.content,messageId:message.from==="kullanici"?message.id:null})),...(run.tasks||[]).flatMap(task=>[{at:task.startedAt,kind:"task",title:`Başladı · ${task.title}`,detail:task.assigneeName},{at:task.endedAt,kind:task.status,title:`Bitti · ${task.title}`,detail:task.status}]).filter(event=>event.at),...(run.tests||[]).map(test=>({at:test.ts,kind:test.ok?"done":"error",title:`Test ${test.ok?"geçti":"kaldı"}`,detail:test.command}))].sort((a,b)=>+new Date(a.at||0)-+new Date(b.at||0));openModal(`<div class="modal-title"><div><span class="section-kicker">OTURUM KAYDI</span><h2>${esc(run.title||run.request)}</h2><p>${events.length} kayıt · baştan sona çalışma izi</p></div><button data-modal-close>×</button></div><div class="replay-timeline">${events.map((event,index)=>`<article class="r-${esc(event.kind)}"><i></i><time>${event.at?esc(new Date(event.at).toLocaleTimeString("tr-TR")):""}</time><div><b>${esc(event.title||event.kind)}</b><p>${esc(String(event.detail||"").slice(0,500))}</p>${event.messageId?`<button data-replay-branch="${event.messageId}" data-replay-run="${id}">Buradan yeni dal aç</button>`:""}</div></article>`).join("")}</div>`);}
     if(runMenuAction.dataset.runMenu==="trash")await patchRun(id,{deletedAt:true});
@@ -1811,11 +1832,11 @@ document.addEventListener("click", async (e) => {
   // modallar
   const saveProjectSettings=closest("[data-save-project-settings]");if(saveProjectSettings){await fetch(`/api/projects/${saveProjectSettings.dataset.saveProjectSettings}/settings`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({instructions:$("project-instructions").value,skills:skillsFromText($("project-skills").value),devCommand:$("project-dev-command").value,artifactExport:$("project-artifact-export").checked})});closeModal();await fetchState();return;}
   const memorySave=closest("[data-memory-save]");if(memorySave){await fetch(`/api/projects/${memorySave.dataset.memorySave}/memory`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({content:$("project-memory-content").value})});closeModal();return;}
-  const memoryForget=closest("[data-memory-forget]");if(memoryForget){const query=prompt("Hafızadan çıkarılacak bilgi veya ifade");if(query){await fetch(`/api/projects/${memoryForget.dataset.memoryForget}/memory/forget`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query})});await openProjectMemory(memoryForget.dataset.memoryForget);}return;}
-  const memoryPin=closest("[data-memory-pin]");if(memoryPin){const text=prompt("Sabitlenecek önemli bilgi");if(text){await fetch(`/api/projects/${memoryPin.dataset.memoryPin}/memory/pin`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});await openProjectMemory(memoryPin.dataset.memoryPin);}return;}
-  const memoryFlag=closest("[data-memory-flag]");if(memoryFlag){const text=prompt("Eski veya çelişkili bilgi");if(text){await fetch(`/api/projects/${memoryFlag.dataset.memoryFlag}/memory/flag`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,flag:"çelişkili veya eski"})});await openProjectMemory(memoryFlag.dataset.memoryFlag);}return;}
-  const bulkChat=closest("[data-bulk-chat]");if(bulkChat){const ids=[...document.querySelectorAll("[data-manage-run]:checked")].map(x=>x.dataset.manageRun),action=bulkChat.dataset.bulkChat;if(!ids.length)return;let projectId=null;if(action==="move"){const name=prompt("Hedef proje adı");projectId=state.config.projects.find(p=>p.name===name)?.id;if(!projectId)return alert("Proje bulunamadı");}for(const id of ids)await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(action==="archive"?{archived:true}:action==="trash"?{deletedAt:true}:action==="restore"?{deletedAt:false}:{projectId})});closeModal();await fetchState();return;}
-  const createCheckpoint=closest("[data-create-checkpoint]");if(createCheckpoint){const name=prompt("Kontrol noktası adı","Çalışan sürüm");if(name){await fetch(`/api/projects/${createCheckpoint.dataset.createCheckpoint}/checkpoints`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});await openCheckpoints(createCheckpoint.dataset.createCheckpoint);}return;}
+  const memoryForget=closest("[data-memory-forget]");if(memoryForget){const query=await istemKutusu("Hafızadan çıkarılacak bilgi veya ifade");if(query){await fetch(`/api/projects/${memoryForget.dataset.memoryForget}/memory/forget`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query})});await openProjectMemory(memoryForget.dataset.memoryForget);}return;}
+  const memoryPin=closest("[data-memory-pin]");if(memoryPin){const text=await istemKutusu("Sabitlenecek önemli bilgi");if(text){await fetch(`/api/projects/${memoryPin.dataset.memoryPin}/memory/pin`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});await openProjectMemory(memoryPin.dataset.memoryPin);}return;}
+  const memoryFlag=closest("[data-memory-flag]");if(memoryFlag){const text=await istemKutusu("Eski veya çelişkili bilgi");if(text){await fetch(`/api/projects/${memoryFlag.dataset.memoryFlag}/memory/flag`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text,flag:"çelişkili veya eski"})});await openProjectMemory(memoryFlag.dataset.memoryFlag);}return;}
+  const bulkChat=closest("[data-bulk-chat]");if(bulkChat){const ids=[...document.querySelectorAll("[data-manage-run]:checked")].map(x=>x.dataset.manageRun),action=bulkChat.dataset.bulkChat;if(!ids.length)return;let projectId=null;if(action==="move"){const name=await istemKutusu("Hedef proje adı");projectId=state.config.projects.find(p=>p.name===name)?.id;if(!projectId)return alert("Proje bulunamadı");}for(const id of ids)await fetch(`/api/runs/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(action==="archive"?{archived:true}:action==="trash"?{deletedAt:true}:action==="restore"?{deletedAt:false}:{projectId})});closeModal();await fetchState();return;}
+  const createCheckpoint=closest("[data-create-checkpoint]");if(createCheckpoint){const name=await istemKutusu("Kontrol noktası adı","Çalışan sürüm");if(name){await fetch(`/api/projects/${createCheckpoint.dataset.createCheckpoint}/checkpoints`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});await openCheckpoints(createCheckpoint.dataset.createCheckpoint);}return;}
   const restoreCheckpoint=closest("[data-restore-checkpoint]");if(restoreCheckpoint){if(confirm("Proje dosyaları bu kontrol noktasındaki hâle döndürülsün mü?")){await fetch(`/api/projects/${restoreCheckpoint.dataset.projectId}/checkpoints/${restoreCheckpoint.dataset.restoreCheckpoint}/restore`,{method:"POST"});closeModal();}return;}
   if (closest("[data-modal-close]")) { closeModal(); return; }
   if (t.id === "modal-overlay") { closeModal(); return; }
@@ -1927,7 +1948,7 @@ function openTemplates() {
     <div class="m-foot"><button class="btn-ghost small" data-modal-close>Kapat</button><button class="btn-gradient small" id="save-workflow">Mevcut ayarları iş akışı olarak kaydet</button></div>`);
 }
 
-document.addEventListener("click",event=>{if(event.target.id!=="save-workflow")return;const name=prompt("İş akışının adı");if(!name)return;const item={name:`◇ ${name.trim()}`,mode:currentMode,text:$("f-request").value,testCommand:$("f-test").value,budget:{enabled:$("f-budget-enabled").checked,maxCalls:Number($("f-budget-calls").value),maxTokens:Number($("f-budget-tokens").value)},custom:true};const saved=JSON.parse(localStorage.getItem("ajan.workflows")||"[]");saved.push(item);localStorage.setItem("ajan.workflows",JSON.stringify(saved.slice(-30)));TEMPLATES.push(item);openTemplates();});
+document.addEventListener("click",async event=>{if(event.target.id!=="save-workflow")return;const name=await istemKutusu("İş akışının adı");if(!name)return;const item={name:`◇ ${name.trim()}`,mode:currentMode,text:$("f-request").value,testCommand:$("f-test").value,budget:{enabled:$("f-budget-enabled").checked,maxCalls:Number($("f-budget-calls").value),maxTokens:Number($("f-budget-tokens").value)},custom:true};const saved=JSON.parse(localStorage.getItem("ajan.workflows")||"[]");saved.push(item);localStorage.setItem("ajan.workflows",JSON.stringify(saved.slice(-30)));TEMPLATES.push(item);openTemplates();});
 
 // Üye/koordinatör ayarları değişince kaydet
 document.addEventListener("change", async (e) => {
@@ -1949,7 +1970,7 @@ document.addEventListener("change", async (e) => {
 
   // "Özel model yaz…" seçilirse metin iste
   if ((t.matches("[data-mmodel]") || t.matches("[data-cmodel]")) && t.value === "__custom") {
-    const custom = prompt("Model kimliği:");
+    const custom = await istemKutusu("Model kimliği:");
     if (custom === null) { render(); return; }
     t.value = custom.trim();
   }
@@ -2516,7 +2537,7 @@ $("ops-izleyici")?.addEventListener("click", async (e) => {
     } else if (eylem === "durdur") {
       await fetch("/api/rdp/watcher", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ durdur: true }) });
     } else {
-      const hesap = prompt("Hangi mağazanın paneli izlensin? (CanSellerAI'da seçili mağaza kullanılır)", $("ops-account")?.selectedOptions?.[0]?.textContent || "");
+      const hesap = await istemKutusu("Hangi mağazanın paneli izlensin? (CanSellerAI'da seçili mağaza kullanılır)", $("ops-account")?.selectedOptions?.[0]?.textContent || "");
       const r = await fetch("/api/rdp/watcher", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hesap }) });
       const j = await r.json();
       if (!j.ok) alert(j.mesaj || "İzleyici başlatılamadı — önce CanSellerAI'ya bağlanın.");
@@ -2524,23 +2545,115 @@ $("ops-izleyici")?.addEventListener("click", async (e) => {
   } finally { btn.disabled = false; renderOpsIzleyici(); renderOpsIsler(); }
 });
 
-$("ops-faz")?.addEventListener("click", async () => {
-  let d = { acikTurler: [] };
-  try { d = await (await fetch("/api/rdp/faz")).json(); } catch {}
-  const acik = new Set(d.acikTurler || []);
-  const secim = Object.entries(IS_TURU_ADI)
-    .map(([k, v], i) => `${i + 1}. ${acik.has(k) ? "✓" : "○"} ${v}`).join("\n");
-  const cevap = prompt(`Yürütülmesine izin verilen işler:\n\n${secim}\n\nAçmak/kapatmak için numara yazın (boş bırakırsanız değişmez):`);
-  if (!cevap) return;
-  const anahtarlar = Object.keys(IS_TURU_ADI);
-  const isTuru = anahtarlar[Number(cevap) - 1];
-  if (!isTuru) return;
-  const kapat = acik.has(isTuru);
-  if (!kapat && !confirm(`"${IS_TURU_ADI[isTuru]}" işleri YÜRÜTÜLEBİLİR hale gelecek.\nGeri alınamaz adımlarda yine onayınız istenecek.\n\nAçılsın mı?`)) return;
-  await fetch("/api/rdp/faz", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ isTuru, kapat }) });
-  renderOpsFaz();
+// ---- YETKILER PANELI ----
+// Onceki surum window.prompt() kullaniyordu; Electron prompt'u desteklemez,
+// dugme HIC acilmiyordu ("yetkilendirme bolumu nerede" — hakliydi, yoktu).
+// Panel ayrica politika dogrulamasini da icerir: konsey karari geregi bir
+// is turunun kapisi, politika metni insan tarafindan kayda gecmeden
+// ACILAMAZ — ama kaydedecek arayuz de yoktu, kullanici cikmaza giriyordu.
+const YETKI_RISK = {
+  0: ["R0", "yalnız okuma"], 1: ["R1", "taslak hazırlar"],
+  2: ["R2", "politikaya uyan işi yapar"], 3: ["R3", "son adımda onayınızı ister"],
+  4: ["R4", "her adımda onayınızı ister"],
+};
+
+async function yetkilerAc() {
+  let faz = { acikTurler: [], aciklama: "" }, guv = { politika: { kayitlar: {} } };
+  try { faz = await (await fetch("/api/rdp/faz")).json(); } catch {}
+  try { guv = await (await fetch("/api/rdp/guvenlik")).json(); } catch {}
+  const acik = new Set(faz.acikTurler || []);
+  const kayitlar = guv.politika?.kayitlar || {};
+
+  const satir = (tur) => {
+    const oyun = (faz.turlar || {})[tur] || {};
+    const [rKisa, rUzun] = YETKI_RISK[oyun.risk ?? 3] || YETKI_RISK[3];
+    const politikali = Boolean(kayitlar[tur]);
+    const turAcik = acik.has(tur);
+    // Riski genel faz sinirinin altinda kalan tur (or. R1 mesaj, Faz 1'de)
+    // ZATEN izinlidir; "Ac" gostermek yaniltici olur — kapatilamaz da
+    // (izin genel sinirdan geliyor, tur listesinden degil).
+    const fazdanAcik = !turAcik && (oyun.risk ?? 3) <= (faz.ustSinir ?? 1);
+    return `<div class="yetki-satir ${turAcik || fazdanAcik ? "acik" : ""}" data-yetki-tur="${esc(tur)}">
+      <div class="yetki-bilgi">
+        <b>${esc((faz.turlar || {})[tur]?.ad || IS_TURU_ADI[tur] || tur)}</b>
+        <small><span class="yetki-risk r${oyun.risk ?? 3}" title="${esc(rUzun)}">${rKisa}</span> ${esc(rUzun)}</small>
+        <small class="yetki-politika ${politikali ? "var" : ""}">${politikali
+          ? `✓ Politika kayıtlı: ${esc(kayitlar[tur].belge)} (${esc(kayitlar[tur].tarih)})`
+          : "Politika doğrulanmadı — açmadan önce ilgili kural metnini okuyup kaydetmelisiniz"}</small>
+      </div>
+      ${fazdanAcik
+        ? '<span class="yetki-fazdan">Açık · faz gereği</span>'
+        : `<button class="yetki-dugme ${turAcik ? "kapat" : "ac"}" data-yetki-eylem="${turAcik ? "kapat" : "ac"}">
+        ${turAcik ? "Kapat" : "Aç"}</button>`}
+    </div>
+    <form class="yetki-politika-form" data-politika-form="${esc(tur)}" hidden>
+      <p>Bu işin kural metnini SİZ okuyup kaydediyorsunuz — sistem kaynak uyduramaz.</p>
+      <input name="belge" placeholder="Belge başlığı — ör. Amazon Seller Code of Conduct" required>
+      <input name="baglanti" placeholder="Bağlantı — ör. https://sellercentral.amazon.com/..." required>
+      <input name="tarih" placeholder="Yürürlük/okuma tarihi — ör. 2026-08-26" required>
+      <div class="yetki-form-dugmeler">
+        <button type="button" class="btn-ghost small" data-politika-vazgec>Vazgeç</button>
+        <button type="submit" class="btn-gradient small">Kaydet ve aç</button>
+      </div>
+    </form>`;
+  };
+
+  showModal(`<div class="m-head"><h2>Yetkiler</h2><button data-modal-close>×</button></div>
+    <p class="yetki-aciklama">${esc(faz.aciklama || "")} Açık olmayan türlerde iş kuyruğa alınır ama yürütülmez.</p>
+    <div class="yetki-liste">${(Object.keys(faz.turlar || IS_TURU_ADI))
+      .filter((t) => (faz.turlar?.[t]?.risk ?? 3) > 0)   // R0 (oturum) zaten hep açık
+      .map(satir).join("")}</div>
+    <div id="yetki-hata" class="ops-err" hidden></div>`);
+}
+
+// Panel icindeki tiklamalar (modal icerigi dinamik oldugu icin delegasyon).
+document.addEventListener("click", async (e) => {
+  const dugme = e.target.closest("[data-yetki-eylem]");
+  const vazgec = e.target.closest("[data-politika-vazgec]");
+  if (vazgec) { vazgec.closest("form").hidden = true; return; }
+  if (!dugme) return;
+  const tur = dugme.closest("[data-yetki-tur]").dataset.yetkiTur;
+  const hataKutu = $("yetki-hata");
+  const goster = (m) => { if (hataKutu) { hataKutu.textContent = m; hataKutu.hidden = false; } };
+  if (dugme.dataset.yetkiEylem === "kapat") {
+    await fetch("/api/rdp/faz", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ isTuru: tur, kapat: true }) });
+    yetkilerAc(); renderOpsFaz(); renderOpsMetrik();
+    return;
+  }
+  // Acma: once dene; politika eksikse formu ac (sunucu kesin bilgidir,
+  // arayuzdeki kayit listesi eski olabilir).
+  const r = await fetch("/api/rdp/faz", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isTuru: tur }) });
+  if (r.ok) { yetkilerAc(); renderOpsFaz(); renderOpsMetrik(); return; }
+  const hata = (await r.json().catch(() => ({}))).error || "";
+  if (/politika/i.test(hata)) {
+    const form = document.querySelector(`[data-politika-form="${tur}"]`);
+    if (form) { form.hidden = false; form.querySelector("input")?.focus(); }
+  } else goster(hata || "Açılamadı.");
 });
+
+document.addEventListener("submit", async (e) => {
+  const form = e.target.closest("[data-politika-form]");
+  if (!form) return;
+  e.preventDefault();
+  const tur = form.dataset.politikaForm;
+  const veri = Object.fromEntries(new FormData(form).entries());
+  const p = await fetch("/api/rdp/politika", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isTuru: tur, ...veri }) });
+  if (!p.ok) {
+    const hata = (await p.json().catch(() => ({}))).error || "Kaydedilemedi.";
+    const kutu = $("yetki-hata"); if (kutu) { kutu.textContent = hata; kutu.hidden = false; }
+    return;
+  }
+  await fetch("/api/rdp/faz", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isTuru: tur }) });
+  yetkilerAc(); renderOpsFaz(); renderOpsMetrik();
+});
+
+$("ops-faz")?.addEventListener("click", yetkilerAc);
+// Yetki seridine tiklamak da paneli acar — "acin" denilen yer tiklanabilir olmali.
+$("ops-faz-durum")?.addEventListener("click", yetkilerAc);
 
 // Serbest metin komutu. Komut ONCE koda cozulur; anlasilmayan parca
 // uydurulmaz, kullaniciya sorulur.
@@ -2886,7 +2999,7 @@ async function micBaslat() {
 }
 $("btn-mic")?.addEventListener("click", () => { if (micState) micState.stop(); else micBaslat(); });
 
-$("task-schedule").addEventListener("click",async()=>{const request=prompt("Zamanlanacak görev");if(!request)return;const at=prompt("Başlangıç zamanı (YYYY-MM-DD HH:mm)",new Date(Date.now()+3600000).toISOString().slice(0,16).replace("T"," "));if(!at)return;const response=await fetch("/api/workspace/schedules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({request,at,projectId:activeProject()?.id||null})}),result=await response.json();if(!response.ok)return alert(result.error);alert(`Görev zamanlandı: ${new Date(result.at).toLocaleString("tr-TR")}`);await renderTaskCenter();});
+$("task-schedule").addEventListener("click",async()=>{const request=await istemKutusu("Zamanlanacak görev");if(!request)return;const at=await istemKutusu("Başlangıç zamanı (YYYY-MM-DD HH:mm)",new Date(Date.now()+3600000).toISOString().slice(0,16).replace("T"," "));if(!at)return;const response=await fetch("/api/workspace/schedules",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({request,at,projectId:activeProject()?.id||null})}),result=await response.json();if(!response.ok)return alert(result.error);alert(`Görev zamanlandı: ${new Date(result.at).toLocaleString("tr-TR")}`);await renderTaskCenter();});
 $("task-center-list").addEventListener("click",async e=>{const contractButton=e.target.closest("[data-task-contract]");if(contractButton)return openTaskContract(contractButton.dataset.taskContract);const b=e.target.closest("[data-task-action]");if(!b)return;const r=await fetch(`/api/workspace/tasks/${b.dataset.taskId}/${b.dataset.taskAction}`,{method:"POST"});if(!r.ok)alert((await r.json()).error);await renderTaskCenter();await fetchState();});
 $("modal-card").addEventListener("submit",async e=>{
   if(e.target.id==="skill-form"){
@@ -2915,8 +3028,8 @@ $("security-skills").addEventListener("change",async e=>{const input=e.target.cl
 $("security-skills").addEventListener("click",async e=>{const button=e.target.closest("[data-delete-skill]");if(!button||!confirm("Yetenek paketi silinsin mi?"))return;await fetch(`/api/workspace/skills/${button.dataset.deleteSkill}`,{method:"DELETE"});await renderSecurityCenter();});
 $("git-refresh").addEventListener("click",renderGitCenter);
 document.querySelectorAll("[data-git-diff]").forEach(button=>button.addEventListener("click",()=>{gitDiffMode=button.dataset.gitDiff;document.querySelectorAll("[data-git-diff]").forEach(x=>x.classList.toggle("active",x===button));renderGitCenter();}));
-$("git-run-test").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const command=prompt("Test komutu",project.testCommand||"npm test");if(!command)return;$("git-test-output").textContent=`$ ${command}\n\nÇalışıyor…`;const response=await fetch(`/api/projects/${project.id}/git/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command})}),result=await response.json();$("git-test-output").textContent=`$ ${command}\n\n${result.output||result.error||"Çıktı yok"}`;await renderTaskCenter();});
-$("git-commit").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const message=prompt("Commit mesajı");if(!message)return;const response=await fetch(`/api/projects/${project.id}/git/commit`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})}),result=await response.json();if(!response.ok)return alert(result.error);await renderGitCenter();});
+$("git-run-test").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const command=await istemKutusu("Test komutu",project.testCommand||"npm test");if(!command)return;$("git-test-output").textContent=`$ ${command}\n\nÇalışıyor…`;const response=await fetch(`/api/projects/${project.id}/git/test`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command})}),result=await response.json();$("git-test-output").textContent=`$ ${command}\n\n${result.output||result.error||"Çıktı yok"}`;await renderTaskCenter();});
+$("git-commit").addEventListener("click",async()=>{const project=activeProject();if(!project)return;const message=await istemKutusu("Commit mesajı");if(!message)return;const response=await fetch(`/api/projects/${project.id}/git/commit`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message})}),result=await response.json();if(!response.ok)return alert(result.error);await renderGitCenter();});
 let editorFile="";
 function editorProject(){return activeProject();}
 function renderEditorTree(items,depth=0){return(items||[]).map(x=>x.kind==="dir"?`<div class="editor-dir" style="padding-left:${depth*9}px"><small>${esc(x.name)}</small>${renderEditorTree(x.children,depth+1)}</div>`:`<button class="editor-file" style="padding-left:${7+depth*9}px" data-editor-file="${esc(x.path)}">${esc(x.name)}</button>`).join("");}
@@ -2924,7 +3037,7 @@ async function loadEditorTree(){const p=editorProject();$("editor-new").disabled
 async function openEditorFile(file){const p=editorProject(),data=await fetch(`/api/projects/${p.id}/files/read?path=${encodeURIComponent(file)}`).then(r=>r.json());if(data.error)return alert(data.error);editorFile=data.path;$("editor-path").textContent=data.path;$("editor-content").value=data.content;$("editor-save").disabled=false;}
 $("editor-tree").addEventListener("click",e=>{const b=e.target.closest("[data-editor-file]");if(b)openEditorFile(b.dataset.editorFile);});
 $("editor-save").addEventListener("click",async()=>{const p=editorProject();if(!p||!editorFile)return;const r=await fetch(`/api/projects/${p.id}/files/write`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:editorFile,content:$("editor-content").value})});if(!r.ok)alert((await r.json()).error);});
-$("editor-new").addEventListener("click",async()=>{const p=editorProject(),name=prompt("Yeni dosya yolu","src/yeni-dosya.js");if(!p||!name)return;const r=await fetch(`/api/projects/${p.id}/files/create`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:name,kind:"file"})});if(!r.ok)return alert((await r.json()).error);await loadEditorTree();openEditorFile(name);});
+$("editor-new").addEventListener("click",async()=>{const p=editorProject(),name=await istemKutusu("Yeni dosya yolu","src/yeni-dosya.js");if(!p||!name)return;const r=await fetch(`/api/projects/${p.id}/files/create`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:name,kind:"file"})});if(!r.ok)return alert((await r.json()).error);await loadEditorTree();openEditorFile(name);});
 $("editor-search").addEventListener("input",async e=>{const p=editorProject(),q=e.target.value.trim();if(!p)return;if(q.length<2)return loadEditorTree();const data=await fetch(`/api/projects/${p.id}/files/search?q=${encodeURIComponent(q)}`).then(r=>r.json());$("editor-tree").innerHTML=(data.results||[]).map(x=>`<button class="editor-file" data-editor-file="${esc(x.path)}">${esc(x.path)}</button>`).join("");});
 function openArtifact(filePath){const project=activeProject();if(!project)return alert("Önce dosyanın bağlı olduğu projeyi seçin.");const src=`/api/project-file?projectId=${encodeURIComponent(project.id)}&path=${encodeURIComponent(filePath)}`;$("preview-title").textContent=filePath.split("/").pop();$("preview-frame").src=src;$("preview-external").href=src;$("preview-empty").hidden=true;openToolPanel("preview");}
 $("preview-refresh").addEventListener("click",()=>{const frame=$("preview-frame");if(frame.src)frame.src=frame.src;});
@@ -3154,7 +3267,7 @@ function updateCmdPalette() {
   cmdPalette.querySelector(".cmd-item.active")?.scrollIntoView({ block: "nearest" });
 }
 
-function runCommandAction(command) {
+async function runCommandAction(command) {
   const eylem = command.eylem || "";
   if (eylem.startsWith("sekme:")) return openToolPanel(eylem.slice(6));
   if (eylem.startsWith("ayar:")) return openSettingsScreen(eylem.slice(5));
@@ -3177,7 +3290,7 @@ function runCommandAction(command) {
   const run = selectedRun ? state.runs[selectedRun] : null;
   if (!run) return alert("Önce bir sohbet seçin.");
   if (eylem === "yenidenAdlandir") {
-    const title = prompt("Yeni sohbet adı", run.title || "");
+    const title = await istemKutusu("Yeni sohbet adı", run.title || "");
     if (title) patchRun(run.id, { title }).then(fetchState);
     return;
   }
@@ -3189,7 +3302,7 @@ function runCommandAction(command) {
     return;
   }
   if (eylem === "devret") {
-    const target = prompt("Hangi ajana veya konseye devredilsin?", "konsey");
+    const target = await istemKutusu("Hangi ajana veya konseye devredilsin?", "konsey");
     if (target) fetch(`/api/runs/${run.id}/transfer`, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ target, projectId: run.projectId }) })
       .then((r) => r.json()).then((j) => { if (j.runId) { selectRun(j.runId); fetchState(); } });
@@ -3206,7 +3319,7 @@ async function runBackupCommand() {
   let dir = status.dir;
   if (!dir) {
     const oneri = status.googleDrive ? `${status.googleDrive}/AjanKonseyi-Yedek` : "~/Documents/AjanKonseyi-Yedek";
-    dir = prompt("Yedekler hangi klasöre aynalansın?\n(Google Drive masaüstü uygulaması kuruluysa onun klasörünü verin; dosyalar oradan buluta otomatik eşitlenir.)", oneri);
+    dir = await istemKutusu("Yedekler hangi klasöre aynalansın?\n(Google Drive masaüstü uygulaması kuruluysa onun klasörünü verin; dosyalar oradan buluta otomatik eşitlenir.)", oneri);
     if (!dir) return;
     const saved = await fetch("/api/backup/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ dir }) }).then((r) => r.json());
     if (saved.error) return alert(saved.error);
@@ -3377,7 +3490,7 @@ $("viewer-minus").addEventListener("click", () => setViewerScale(viewerScale - .
 $("media-viewer").addEventListener("click", (e) => { if (e.target.id === "media-viewer" || e.target.id === "viewer-stage") closeMedia(); });
 
 document.addEventListener("click", async (e) => {
-  const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=prompt(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
+  const diffLine=e.target.closest("[data-diff-file]");if(diffLine&&selectedRun){const body=await istemKutusu(`${diffLine.dataset.diffFile}:${diffLine.dataset.diffLine} için yorum`);if(body){await fetch(`/api/runs/${selectedRun}/diff-comments`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({file:diffLine.dataset.diffFile,line:Number(diffLine.dataset.diffLine),body})});await fetchState();}return;}
   const artifact=e.target.closest("[data-artifact-path]");if(artifact){e.preventDefault();openArtifact(artifact.dataset.artifactPath);return;}
   if(e.target.closest("[data-diff-review]")){openToolPanel("git");return;}
   if(e.target.closest("[data-diff-restore]")){const id=activeProjectId();if(id)openCheckpoints(id);else alert("Önce proje seçin.");return;}

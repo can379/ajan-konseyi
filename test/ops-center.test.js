@@ -160,3 +160,27 @@ test("sohbet bolumunde proje secimi gorunmez", () => {
   assert.match(app, /const projeliBolum = aktifBolum === "kod"/);
   assert.match(app, /\["btn-project", "tb-project", "btn-open-project-app"\]/);
 });
+
+// ---- Yetkiler paneli: Electron'da prompt yok ----
+test("yetkiler paneli gercek panel — window.prompt kullanilmaz", () => {
+  const app = oku("ui/app.js");
+  // Electron window.prompt'u desteklemez; prompt kullanan dugme sessizce
+  // oluydu ("yetkilendirme bolumu nerede" — yoktu).
+  assert.ok(!/(?<![\w.])prompt\(/.test(app), "çıplak prompt() çağrısı kalmamalı");
+  assert.match(app, /function istemKutusu/, "modal tabanlı girdi kutusu olmalı");
+  assert.match(app, /async function yetkilerAc/, "yetkiler paneli olmalı");
+  assert.match(app, /data-politika-form/, "panelde politika kayıt formu olmalı");
+  // Faz seridi de paneli acar — "açın" denilen yer tıklanabilir olmalı.
+  assert.match(app, /\$\("ops-faz-durum"\)\?\.addEventListener\("click", yetkilerAc\)/);
+});
+
+test("kuyruga girebilen her is turu oyun kitabinda tanimli", async () => {
+  const { OYUN_KITABI } = await import("../src/opsPlaybook.js");
+  const { niyetCoz } = await import("../src/opsKomut.js");
+  // opsKomut'un uretebildigi her tur OYUN_KITABI'nda olmali; yoksa is
+  // "tanimsiz is turu" diye kalici hataya dusuyor (stok_yok_mesaji dusmustu).
+  for (const ornek of ["iadeleri al", "siparişi geç", "dava aç", "mesajlara bak", "stokta yok mesajı", "oturum kontrol"]) {
+    const tur = niyetCoz(ornek);
+    if (tur) assert.ok(OYUN_KITABI[tur], `${tur} oyun kitabında tanımlı olmalı (örnek: "${ornek}")`);
+  }
+});
