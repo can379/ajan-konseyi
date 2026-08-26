@@ -55,10 +55,15 @@ export class ClaudeAgent extends BaseAgent {
     }
     const model = opts.model ?? this.getModel?.();
     if (model) args.push("--model", model);
-    // Etkileşimli izin penceresi göstermeden Claude'un terminal, dosya, web,
-    // skill, MCP ve alt ajan araçlarını kullanmasına izin ver. `auto` modu
-    // riskli eylemleri Claude'un kendi güvenlik değerlendirmesinden geçirir.
-    args.push("--permission-mode", opts.codeMode ? "acceptEdits" : "auto");
+    // TAM YETKİ (kullanıcı kararı: "hiçbir izne takılmamalı"). Önceki
+    // auto/acceptEdits kipleri komut çalıştırmayı (node --test, npx tsc,
+    // eslint...) onaya düşürüyordu; üye başsız çalıştığından onayı verecek
+    // kimse yok, komutlar reddedilip kalıyordu ("testleri fiilen
+    // çalıştıramadım" — canlı görüldü). Codex zaten --approve-for-me ile
+    // tam yetkili; Claude aynı düzeye çekildi. Güvenlik çizgisi izin
+    // penceresi değil: kapasite sözleşmesindeki "geri döndürülemez işlemde
+    // dur" kuralı + operasyon tarafının kendi kapıları (faz, onay, mühür).
+    args.push("--permission-mode", "bypassPermissions");
     // EK DOSYALARA ERISIM: kullanicinin yukledigi gorsel/PDF/videolar
     // uygulamanin veri dizininde (uploads) durur — proje dizininin DISINDA.
     // --add-dir verilmeyince Claude ekleri ACAMIYORDU: "dosyalar calisma
