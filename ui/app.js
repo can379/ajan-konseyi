@@ -2243,6 +2243,20 @@ async function opsDurumCiz() {
   $("ops-sayac-sunucu").textContent = opsSunucular.length || "—";
   $("ops-sayac-bulgu").textContent = toplamBulgu || "0";
   $("ops-sayac-tur").textContent = (durum.gecmis || []).length || "0";
+  // Kullanicinin GORMESI gereken iki sayi: onay bekleyen ve belirsiz isler.
+  // Belirsiz is = dis sistemde ne oldugu bilinmeyen is; sessiz kalirsa
+  // para etkisi gorunmez kalir.
+  fetch("/api/rdp/jobs").then((r) => r.json()).then((j) => {
+    const bekleyen = (j.isler || []).filter((i) => i.durum === "kullanici-bekliyor").length;
+    const belirsiz = j.uzlastirma || 0;
+    const uyari = $("ops-uyari-serit");
+    if (!uyari) return;
+    uyari.hidden = !(bekleyen || belirsiz);
+    uyari.innerHTML = [
+      belirsiz ? `<span class="ops-uyari belirsiz">⚠ ${belirsiz} iş BELİRSİZ — dış sistemde ne olduğu doğrulanmalı</span>` : "",
+      bekleyen ? `<span class="ops-uyari bekleyen">⏸ ${bekleyen} iş onayınızı bekliyor</span>` : "",
+    ].filter(Boolean).join("");
+  }).catch(() => {});
 
   // Onay bekleyen is: sunucu adresi sabitleme (sertifika penceresi).
   const onay = durum.bekleyenOnay;

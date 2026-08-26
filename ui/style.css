@@ -1852,3 +1852,10 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-komut-eksik b{color:#d8c79a}
 .ops-komut-eksik ul{margin:6px 0;padding-left:18px;color:var(--dim2)}
 .ops-komut-eksik small{color:var(--dim2);font-size:11.5px}
+
+/* Dikkat şeridi: onay bekleyen ve belirsiz işler */
+.ops-uyari-serit{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.ops-uyari-serit[hidden]{display:none}
+.ops-uyari{padding:8px 13px;border-radius:10px;font-size:12.5px;font-weight:600}
+.ops-uyari.belirsiz{background:#ff6b5e14;border:1px solid #ff6b5e44;color:#ff9c93}
+.ops-uyari.bekleyen{background:#f0b94914;border:1px solid #f0b94944;color:#d8c79a}
