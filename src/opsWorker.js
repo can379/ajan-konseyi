@@ -22,17 +22,29 @@ import { OYUN_KITABI, isYonergesi, RISK, FAZ1_UST_SINIR } from "./opsPlaybook.js
 
 // Faz ayari: kullanici acmadikca Faz 1 sinirinda kalir.
 export class FazAyari {
-  constructor(baslangic = FAZ1_UST_SINIR) { this.ustSinir = baslangic; }
+  constructor(baslangic = FAZ1_UST_SINIR) {
+    this.ustSinir = baslangic;
+    // IS TURU BAZINDA acma: genel siniri yukseltmeden TEK bir is turunu
+    // acabilmek gerekir. Kullanici "mesaj ac" dedi — siparis/iade/dava
+    // kapali kalmali. Genel siniri yukseltmek hepsini birden acardi.
+    this.acikTurler = new Set();
+  }
   ac(seviye) {
     const sayi = Number(seviye);
     if (!Number.isInteger(sayi) || sayi < 0 || sayi > 4) throw new Error("Geçersiz risk seviyesi (0-4)");
     this.ustSinir = sayi;
     return this.ustSinir;
   }
-  izinliMi(risk) { return Number(risk) <= this.ustSinir; }
+  turAc(isTuru) { this.acikTurler.add(String(isTuru)); return [...this.acikTurler]; }
+  turKapat(isTuru) { this.acikTurler.delete(String(isTuru)); return [...this.acikTurler]; }
+  izinliMi(risk, isTuru = null) {
+    if (isTuru && this.acikTurler.has(String(isTuru))) return true;
+    return Number(risk) <= this.ustSinir;
+  }
   durum() {
     return {
       ustSinir: this.ustSinir,
+      acikTurler: [...this.acikTurler],
       aciklama: this.ustSinir <= RISK.TASLAK
         ? "Faz 1: yalnız gözlem ve taslak. Sipariş, iade ve mesaj işlemleri kapalı."
         : this.ustSinir === RISK.POLITIKA
@@ -63,14 +75,14 @@ export class OpsWorker {
   siradakiIs() {
     return this.jobs.liste().find((i) =>
       [IS_DURUM.KUYRUKTA, IS_DURUM.YENIDEN_DENENEBILIR].includes(i.durum)
-      && this.faz.izinliMi(i.risk)) || null;
+      && this.faz.izinliMi(i.risk, i.isTuru)) || null;
   }
 
   // Faz kapisi kapaliysa is yurutulmez; neden yurutulmedigi kayda gecer.
   async yurut(isId, { sahip = "worker-1" } = {}) {
     const is = this.jobs.bul(isId);
     if (!is) return { ok: false, mesaj: "İş bulunamadı" };
-    if (!this.faz.izinliMi(is.risk)) {
+    if (!this.faz.izinliMi(is.risk, is.isTuru)) {
       this.jobs.kullaniciBekle(is.id,
         `Risk ${is.risk} iş, açık faz sınırının (${this.faz.ustSinir}) üstünde — yürütülmedi`);
       return { ok: false, kapali: true, mesaj: this.faz.durum().aciklama };

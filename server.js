@@ -8,6 +8,7 @@ import { CanSellerAI, temizleKayit } from "./src/cansellerai.js";
 import { RdpController } from "./src/rdpController.js";
 import { OpsRun } from "./src/opsRun.js";
 import { OpsJobs } from "./src/opsJobs.js";
+import { OpsWorker, FazAyari } from "./src/opsWorker.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -46,6 +47,10 @@ const orch = new Orchestrator(store, DATA_ROOT, config);
 const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge });
 const opsJobs = new OpsJobs();
 const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs });
+// Faz kapisi: varsayilan Faz 1. Kullanici tek tek is turu acabilir; genel
+// siniri yukseltmek hepsini birden acardi, bu yuzden tur bazli kapi var.
+const opsFaz = new FazAyari();
+const opsWorker = new OpsWorker({ jobs: opsJobs, controller: rdp, orchestrator: orch, store, config, faz: opsFaz });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");
   if(status.configured)members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});
@@ -769,6 +774,22 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { turlar });
     }
 
+    // Faz durumu ve is turu acma/kapatma.
+    if (req.method === "GET" && p === "/api/rdp/faz") {
+      return json(res, 200, opsFaz.durum());
+    }
+    if (req.method === "POST" && p === "/api/rdp/faz") {
+      const body = await readBody(req);
+      try {
+        if (body.isTuru) {
+          if (body.kapat) opsFaz.turKapat(body.isTuru);
+          else opsFaz.turAc(body.isTuru);
+        } else if (body.ustSinir !== undefined) {
+          opsFaz.ac(body.ustSinir);
+        }
+        return json(res, 200, opsFaz.durum());
+      } catch (error) { return json(res, 400, { error: String(error.message || error) }); }
+    }
     if (req.method === "GET" && p === "/api/rdp/jobs") {
       return json(res, 200, { isler: opsJobs.liste(), uzlastirma: opsJobs.uzlastirmaBekleyenler().length });
     }

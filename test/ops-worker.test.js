@@ -100,3 +100,51 @@ test("cerceve ve kapilar kaynakta belgeli", () => {
   assert.match(kaynak, /ONAYSIZ SAYILIR \(guvenli varsayilan\)/);
   assert.match(kaynak, /kanitsiz "tamam" demek yasak/);
 });
+
+// ---- IS TURU BAZINDA KAPI ----
+// Kullanici "mesaj ac" dedi: genel siniri yukseltmek digerlerini de acardi.
+
+test("tek is turu acilir, digerleri kapali kalir", async () => {
+  const f = new FazAyari();
+  f.turAc("ebay_mesaj");
+  assert.equal(f.izinliMi(RISK.TASLAK, "ebay_mesaj"), true, "mesaj acik olmali");
+  assert.equal(f.izinliMi(RISK.ONAY, "amazon_siparis"), false, "siparis kapali kalmali");
+  assert.equal(f.izinliMi(RISK.ONAY, "amazon_iade"), false, "iade kapali kalmali");
+  assert.equal(f.izinliMi(RISK.HER_SEFERINDE, "ebay_dava"), false, "dava kapali kalmali");
+  assert.deepEqual(f.durum().acikTurler, ["ebay_mesaj"]);
+  f.turKapat("ebay_mesaj");
+  assert.equal(f.izinliMi(RISK.POLITIKA, "ebay_mesaj"), false, "kapatilinca yine kapali");
+});
+
+test("acik is turu genel sinirin ustunde olsa bile yurutulur", async () => {
+  const jobs = new OpsJobs();
+  const f = new FazAyari();              // genel sinir 1
+  f.turAc("amazon_iade");                // ama iade acikca acildi
+  const { is } = jobs.ekle({ isTuru: "amazon_iade", hesap: "ANNE", varlikId: "R-9", risk: RISK.ONAY });
+  const w = new OpsWorker({ jobs, controller: {}, orchestrator: {}, store: {}, config: {}, faz: f });
+  const sonuc = await w.yurut(is.id);
+  assert.notEqual(sonuc.kapali, true, "acik turde faz kapisi engellememeli");
+  // Yine de onay kapisi devrede: onayIste yok -> beklemede.
+  assert.equal(jobs.bul(is.id).durum, IS_DURUM.KULLANICI_BEKLIYOR);
+});
+
+test("mesaj isi YALNIZ okunmamislarla ilgilenir ve geri okunmadi yapar", async () => {
+  const { OYUN_KITABI } = await import("../src/opsPlaybook.js");
+  const oyun = OYUN_KITABI.ebay_mesaj;
+  assert.match(oyun.tetik, /OKUNMAMIS/, "yalniz okunmamis mesajlar");
+  const adimlar = oyun.adimlar.join(" | ");
+  assert.match(adimlar, /YALNIZ okunmamis \(kalin\/isaretli\) mesajlari listele/);
+  assert.match(adimlar, /GERI OKUNMADI YAP.*Mark as unread/s, "geri okunmadi yapilmali");
+  assert.match(adimlar, /Okunmadi durumuna dondugunu EKRANDAN dogrula/, "dogrulama sart");
+  assert.ok(oyun.dur.some((d) => /Mark as unread' secenegi bulunamazsa DUR/.test(d)),
+    "isaretleyemezse mesaji okunmus birakmamali");
+  assert.match(oyun.dogrula, /okunmadi durumuna geri donmus/);
+  assert.match(oyun.not, /kullanicinin kendi is akisi bozulmasin/, "gerekce yazili olmali");
+});
+
+test("operasyon ekrani kenar cubugundan ACILIR (dinleyici bagli)", () => {
+  const app = oku("ui/app.js");
+  assert.match(app, /\$\('btn-ops'\)\?\.addEventListener\('click', \(\) => \{ showMainView\('ops'\)/,
+    "dugme tiklaninca ekran acilmali");
+  assert.match(app, /Dinleyici eklenmemisti/, "sebep koda not dusulmus olmali");
+});

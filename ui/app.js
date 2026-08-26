@@ -1923,6 +1923,9 @@ $("btn-new").addEventListener("click", async () => {
   selectRun(null); showMainView("chat"); autoCloseSidebar(); render(); $("f-request").focus();
 });
 $('btn-image-studio').addEventListener('click', () => { showMainView('images'); autoCloseSidebar(); });
+// Dinleyici eklenmemisti: dugme duruyordu ama tiklayinca hicbir sey olmuyordu
+// (kullanici bildirdi: "operasyon merkezi tiklayinca acilmiyor").
+$('btn-ops')?.addEventListener('click', () => { showMainView('ops'); autoCloseSidebar(); });
 $('image-prompt').addEventListener('input', (e) => { $('image-prompt-count').textContent = `${e.target.value.length} karakter`; });
 $('image-agent-options').addEventListener('change', updateImageStudioSummary);
 function configureStudioEngine(){
@@ -2135,6 +2138,7 @@ async function renderOpsEkran() {
     else { clearInterval(opsTimer); opsTimer = null; }
   }, 3000);
   opsUyeleriDoldur();
+  renderOpsFaz();
   renderOpsIsler();
   renderOpsRuns();
   renderOpsHub();
@@ -2278,6 +2282,40 @@ async function renderOpsIsler() {
       + (veri.uzlastirma ? `<div class="ops-uzlastirma">⚠ ${veri.uzlastirma} iş belirsiz durumda — dış sistemde ne olduğu okunmadan tekrar denenmeyecek.</div>` : "")
     : '<div class="muted" style="padding:14px">Kuyrukta iş yok.</div>';
 }
+
+// Yetkiler: hangi is turu yurutulebilir? Genel faz sinirini yukseltmeden
+// TEK is turu acilabilir (kullanici "mesaj ac" dedi, digerleri kapali kalsin).
+const IS_TURU_ADI = { ebay_mesaj: "Alıcı mesajları (okunmamış)", stok_yok_mesaji: "Stok yok iptal mesajı",
+  amazon_siparis: "Amazon siparişi geçme", amazon_iade: "Amazon iadesi alma", ebay_dava: "eBay davası" };
+
+async function renderOpsFaz() {
+  const el = $("ops-faz-durum");
+  if (!el) return;
+  let d = { ustSinir: 1, acikTurler: [], aciklama: "" };
+  try { d = await (await fetch("/api/rdp/faz")).json(); } catch { /* uc yoksa varsayilan gorunur */ }
+  const acik = (d.acikTurler || []).map((t) => IS_TURU_ADI[t] || t);
+  el.innerHTML = `<span class="ops-faz-etiket">Yetki</span>
+    <span class="ops-faz-metin">${esc(d.aciklama || "")}</span>
+    ${acik.length ? `<span class="ops-faz-acik">Açık: ${acik.map(esc).join(", ")}</span>` : ""}`;
+}
+
+$("ops-faz")?.addEventListener("click", async () => {
+  let d = { acikTurler: [] };
+  try { d = await (await fetch("/api/rdp/faz")).json(); } catch {}
+  const acik = new Set(d.acikTurler || []);
+  const secim = Object.entries(IS_TURU_ADI)
+    .map(([k, v], i) => `${i + 1}. ${acik.has(k) ? "✓" : "○"} ${v}`).join("\n");
+  const cevap = prompt(`Yürütülmesine izin verilen işler:\n\n${secim}\n\nAçmak/kapatmak için numara yazın (boş bırakırsanız değişmez):`);
+  if (!cevap) return;
+  const anahtarlar = Object.keys(IS_TURU_ADI);
+  const isTuru = anahtarlar[Number(cevap) - 1];
+  if (!isTuru) return;
+  const kapat = acik.has(isTuru);
+  if (!kapat && !confirm(`"${IS_TURU_ADI[isTuru]}" işleri YÜRÜTÜLEBİLİR hale gelecek.\nGeri alınamaz adımlarda yine onayınız istenecek.\n\nAçılsın mı?`)) return;
+  await fetch("/api/rdp/faz", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isTuru, kapat }) });
+  renderOpsFaz();
+});
 
 $("ops-devices")?.addEventListener("click", () => opsCihazTara());
 $("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });

@@ -1806,3 +1806,10 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-is.durum-kullanici-bekliyor{border-color:#f0b94944}
 .ops-is.durum-kullanici-bekliyor .ops-is-durum{color:#d8c79a}
 .ops-uzlastirma{margin-top:8px;padding:9px 12px;border-radius:9px;background:#ff6b5e12;border:1px solid #ff6b5e33;color:#ff9c93;font-size:12px}
+
+/* Yetki durumu şeridi */
+.ops-faz-durum{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;
+  padding:9px 13px;border-radius:10px;background:#0f1211;border:1px solid var(--border);font-size:12px}
+.ops-faz-etiket{padding:2px 8px;border-radius:999px;background:#2a2e2b;color:var(--dim2);font-size:10.5px;letter-spacing:.03em}
+.ops-faz-metin{color:var(--dim2)}
+.ops-faz-acik{margin-left:auto;color:#2bc9b8}

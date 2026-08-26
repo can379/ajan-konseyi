@@ -127,14 +127,27 @@ export const OYUN_KITABI = Object.freeze({
   ebay_mesaj: {
     ad: "eBay alıcı mesajı",
     risk: RISK.TASLAK,
-    tetik: "Okunmamis alici mesaji veya yanit bekleyen yazisma",
-    adimlar: [
-      "Mesaji ve ilgili siparisi oku",
-      "Yanit TASLAGI hazirla (gonderme)",
-      "Para/iade sozu iceren taslaklarda gerekli kaydi (iade yapildi mi?) once dogrula",
+    tetik: "OKUNMAMIS alici mesaji (yalniz okunmamislar ele alinir)",
+    onKosul: [
+      "Mesaj OKUNMAMIS olmali — okunmus mesajlara dokunulmaz",
+      "Mesajin ilgili siparisi belirlenebilmeli",
     ],
-    dur: ["Gonderme islemi Faz 1'de kapali; taslak kullaniciya sunulur"],
-    dogrula: "Taslak kullaniciya gosterildi",
+    adimlar: [
+      "eBay Mesajlar kutusunda YALNIZ okunmamis (kalin/isaretli) mesajlari listele",
+      "Bir okunmamis mesaji ac ve icerigini oku",
+      "Ilgili siparisi ve gecmisi oku (yalniz okuma)",
+      "Yanit TASLAGI hazirla — GONDERME",
+      "Para/iade sozu iceren taslaklarda ilgili kaydi (iade gercekten yapildi mi?) once dogrula",
+      "MESAJI GERI OKUNMADI YAP: mesaji sec ve 'Mark as unread' uygula",
+      "Okunmadi durumuna dondugunu EKRANDAN dogrula (kalin/isaretli hale geri donmeli)",
+    ],
+    dur: [
+      "Gonderme islemi kapali; taslak kullaniciya sunulur",
+      "Mesaj okunmus goruntuleniyorsa dokunma, atla",
+      "'Mark as unread' secenegi bulunamazsa DUR ve kullaniciya bildir — mesaji okunmus birakma",
+    ],
+    dogrula: "Taslak hazir VE mesaj okunmadi durumuna geri donmus olmali",
+    not: "Kullanici karari: 'sadece okunmamis mesajlarla ilgilen, baktiktan sonra geri okunmadi yap'. Sebep: kullanicinin kendi is akisi bozulmasin — okunmamis kutusu onun calisma listesi.",
   },
 
   oturum: {
