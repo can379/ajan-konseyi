@@ -22,8 +22,15 @@ export class Store extends EventEmitter {
   loadRuns() {
     for (const dir of fs.readdirSync(this.runsDir)) {
       const file = path.join(this.runsDir, dir, "state.json");
+      let recoveredKind = false;
       try {
         const run = JSON.parse(fs.readFileSync(file, "utf8"));
+        // Gecis: gozlem turlari once "chat" olarak kaydedilmisti ve sohbet
+        // listesini dolduruyordu (kullanici bildirdi). Kendi turune tasi.
+        if (run.kind === "chat" && /^Gözlem turu:/.test(String(run.request || ""))) {
+          run.kind = "ops";
+          recoveredKind = true;
+        }
         let recovered = false;
         if (run.status === "running") {
           if (run.kind === "chat") {
@@ -72,7 +79,7 @@ export class Store extends EventEmitter {
           fs.renameSync(temp, file);
           recovered = false;
         }
-        if (recovered) {
+        if (recovered || recoveredKind) {
           const temp = file + ".tmp";
           fs.writeFileSync(temp, JSON.stringify(run, null, 2));
           fs.renameSync(temp, file);

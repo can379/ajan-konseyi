@@ -229,3 +229,31 @@ test("gezinme once YER IMI, adres ancak kesin kimlik varken", async () => {
   assert.equal(ADRES_KALIPLARI.ebay_iade, "https://www.ebay.com/rt/ReturnDetails?returnId=<IADE_NO>");
   assert.equal(ADRES_KALIPLARI.ebay_siparis, "https://www.ebay.com/sh/ord/details?orderid=<SIPARIS_NO>");
 });
+
+test("eski gozlem turlari acilista kendi turune tasinir (sohbet listesini doldurmasin)", async () => {
+  const fsm = await import("node:fs");
+  const os = await import("node:os");
+  const pathm = await import("node:path");
+  const { Store } = await import("../src/store.js");
+  const dir = fsm.mkdtempSync(pathm.join(os.tmpdir(), "ops-goc-"));
+  const runDir = pathm.join(dir, "runs", "run-eski");
+  fsm.mkdirSync(runDir, { recursive: true });
+  fsm.writeFileSync(pathm.join(runDir, "state.json"), JSON.stringify({
+    id: "run-eski", kind: "chat", status: "idle",
+    request: "Gözlem turu: ANNE", title: "🖥 Gözlem · ANNE",
+    createdAt: "2026-08-25T20:00:00Z", messages: [],
+  }));
+  const store = new Store(dir);
+  assert.equal(store.getRun("run-eski").kind, "ops", "gozlem turu sohbet olarak kalmamali");
+  // Diske de yazilmali; her acilista tekrar tasinmasin.
+  const diskten = JSON.parse(fsm.readFileSync(pathm.join(runDir, "state.json"), "utf8"));
+  assert.equal(diskten.kind, "ops");
+  // Gercek sohbet dokunulmaz.
+  const runDir2 = pathm.join(dir, "runs", "run-sohbet");
+  fsm.mkdirSync(runDir2, { recursive: true });
+  fsm.writeFileSync(pathm.join(runDir2, "state.json"), JSON.stringify({
+    id: "run-sohbet", kind: "chat", status: "idle", request: "Normal soru", createdAt: "2026-08-25T20:00:00Z", messages: [],
+  }));
+  assert.equal(new Store(dir).getRun("run-sohbet").kind, "chat");
+  fsm.rmSync(dir, { recursive: true, force: true });
+});

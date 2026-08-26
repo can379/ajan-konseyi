@@ -524,7 +524,7 @@ function renderConversations() {
   if (!el) return;
   const query = conversationSearch.trim().toLocaleLowerCase("tr-TR");
   const runs = Object.values(state.runs)
-    .filter((run) => run.kind === "chat" && !run.projectId && !run.deletedAt && (showArchivedChats||!run.archived) && (!query || runSearchText(run).includes(query)))
+    .filter((run) => run.kind === "chat" && !/^Gözlem turu:/.test(String(run.request || "")) && !run.projectId && !run.deletedAt && (showArchivedChats||!run.archived) && (!query || runSearchText(run).includes(query)))
     .sort((a, b) => runOrderCompare(a, b));
   el.innerHTML = runs.length ? runs.map((run) => `<div draggable="true" class="run-item conversation-item ${run.id === selectedRun ? "selected" : ""} ${run.pinned?"pinned":""} ${run.archived?"archived":""} ${run.status==="running"?"working":""}" data-run="${esc(run.id)}" title="${esc(run.title || run.request)}">
     <div class="r-title">${esc(run.title || run.request || "Yeni sohbet")}</div>
