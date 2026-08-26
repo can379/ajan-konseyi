@@ -257,3 +257,42 @@ test("eski gozlem turlari acilista kendi turune tasinir (sohbet listesini doldur
   assert.equal(new Store(dir).getRun("run-sohbet").kind, "chat");
   fsm.rmSync(dir, { recursive: true, force: true });
 });
+
+// ---- KONSEY KARARI (run-b7d754dd) ----
+
+test("iade ve dava RDP yolunda: Post-Order decommission bulgusu", async () => {
+  const { YOL_MATRISI } = await import("../src/opsPlaybook.js");
+  assert.equal(YOL_MATRISI.amazon_iade.yol, "rdp");
+  assert.equal(YOL_MATRISI.ebay_dava.yol, "rdp");
+  assert.match(YOL_MATRISI.ebay_dava.neden, /decommission/,
+    "karar gerekcesi (Post-Order kapaniyor) yazili olmali");
+  // Post-Order'dan bagimsiz dogrulanan uc: mesaj API ile.
+  assert.equal(YOL_MATRISI.stok_yok_mesaji.yol, "api");
+  assert.match(YOL_MATRISI.stok_yok_mesaji.eylem, /AddMemberMessageAAQToPartner/);
+  assert.match(YOL_MATRISI.stok_yok_mesaji.eylem, /75 cagri/, "kota siniri kayitli olmali");
+  // Siparis melez: karar kuyruktan, eylem ekranda.
+  assert.equal(YOL_MATRISI.amazon_siparis.yol, "melez");
+});
+
+test("acilis sirasi en az zararlidan baslar ve olcut ister", async () => {
+  const { ACILIS_SIRASI, acilabilirIsTuru } = await import("../src/opsPlaybook.js");
+  assert.deepEqual(ACILIS_SIRASI.map((a) => a.isTuru),
+    ["stok_yok_mesaji", "amazon_siparis", "amazon_iade", "ebay_dava"]);
+  // Her adimin gecis olcutu olmali — "hissettim" ile bir sonrakine gecilmez.
+  for (const adim of ACILIS_SIRASI) assert.ok(adim.olcut && adim.olcut.length > 20, `${adim.isTuru} olcutu olmali`);
+  assert.match(ACILIS_SIRASI[1].kosul, /DUSUK TUTARLI/, "siparis dusuk tutarla baslamali");
+  assert.match(ACILIS_SIRASI[1].olcut, /21 gunluk uzlastirma/, "uzlastirma on kosul olmali");
+  // Faz 1'de ilk adim bile kapali (risk 2 > sinir 1).
+  assert.equal(acilabilirIsTuru(1).kapali, true);
+  assert.equal(acilabilirIsTuru(2).isTuru, "stok_yok_mesaji");
+});
+
+test("sessiz basarisizlik guard'lari tanimli", async () => {
+  const { GUARDLAR } = await import("../src/opsPlaybook.js");
+  const kurallar = GUARDLAR.map((g) => g.kural).join(" | ");
+  assert.match(kurallar, /refund != beklenen -> DUR/, "kismi iade sessizce gecmemeli");
+  assert.match(kurallar, /shipping_fee != 0 -> DUR/, "ucretli kargo sessizce gecmemeli");
+  assert.match(kurallar, /sayfaAsin != istenenAsin -> DUR/, "varyant yalani yakalanmali");
+  assert.match(kurallar, /UNKNOWN != OUT/, "belirsizde tekrar olmamali");
+  assert.match(kurallar, /ilan no \+ alıcı birlikte/, "dava eslesmesi cift alanli olmali");
+});

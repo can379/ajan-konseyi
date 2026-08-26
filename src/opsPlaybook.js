@@ -370,3 +370,85 @@ export function sunucuBul(esleme, magaza) {
   }
   return { ok: false, message: `"${magaza}" mağazası için sunucu eşlemesi tanımlı değil; bağlantı açılmadı.` };
 }
+
+// ---- KONSEY KARARI (run-b7d754dd, bes uyenin ortak karari) ----
+//
+// "Dort isin tamami, dayanikli durum makinesi omurgasi uzerine kurulacak;
+//  yurutme yolu VARSAYILAN OLARAK RDP-UI olacak, yalniz hesap bazli probe OK
+//  donen eBay uclari API'ye tasinacak ve acilis sirasi
+//  mesaj -> dusuk tutarli siparis -> iade -> dava olacak."
+//
+// BELIRLEYICI BULGU (Uye 4, kanonik kaynakla): eBay Post-Order API'nin
+// Ocak-Mart 2026 decommission dalgalari iade ve dava yazma uclarini
+// (Mark Return Shipped, Issue Case Refund, Update Shipment Tracking)
+// kapsiyor. Bu yuzden IADE ve DAVA eBay bacagi API'ye GUVENEMEZ — RDP.
+// Post-Order'dan bagimsiz uc uc ayakta: getOrders, createShippingFulfillment,
+// AddMemberMessageAAQToPartner (90 gun penceresi, 60 sn'de 75 cagri).
+
+export const YOL_MATRISI = Object.freeze({
+  amazon_siparis: {
+    yol: "melez",
+    karar: "CanSellerAI kuyrugu (ASIN, varyant, tavan fiyat, adres)",
+    eylem: "RDP-Amazon (satin alma)",
+    neden: "easync API ile deniyor ve basarisiz; kalan vakalar UI'ye ozgu (varyant, stok, fiyat)",
+    geriDusus: "Ekranda 2 kez basarisiz -> manual_review, insan sirasi",
+  },
+  stok_yok_mesaji: {
+    yol: "api",
+    karar: "CanSellerAI mesaj kuyrugu",
+    eylem: "eBay AddMemberMessageAAQToPartner (DOGRULANDI: 90 gun penceresi, 60 sn'de 75 cagri)",
+    neden: "Metin uretimi ve gonderimi deterministik; ekranda yapmanin kazanci yok",
+    geriDusus: "API hatasi -> RDP-eBay, mesaj govdesi kuyruktan kopyalanir",
+  },
+  amazon_iade: {
+    yol: "rdp",
+    karar: "CanSellerAI iade kaydi",
+    eylem: "RDP-Amazon iade sihirbazi (9 adim) + etiket/QR",
+    neden: "Amazon iade sihirbazinin API'si yok; eBay bacagi Post-Order decommission kapsaminda",
+    geriDusus: "Etiket alinamadi -> is BELIRSIZ, uzlastirma",
+  },
+  ebay_dava: {
+    yol: "rdp",
+    karar: "CanSellerAI kanit paketi (PDF + hash)",
+    eylem: "RDP-eBay dava ekrani; gonderim kullanici onayiyla",
+    neden: "Post-Order dava yazma uclari decommission kapsaminda",
+    geriDusus: "Gonderim dogrulanamadi -> BELIRSIZ",
+  },
+});
+
+// Acilis sirasi: en az zararlidan en riskliye. Bir sonraki is turu ancak
+// oncekinin OLCUTU saglaninca acilir.
+export const ACILIS_SIRASI = Object.freeze([
+  { sira: 1, isTuru: "stok_yok_mesaji", risk: 2,
+    olcut: "20 mesaj gonderildi, hicbiri yanlis siparise gitmedi, sikayet yok" },
+  { sira: 2, isTuru: "amazon_siparis", risk: 3, kosul: "yalniz DUSUK TUTARLI siparisler",
+    olcut: "10 siparis, cift siparis yok, adres eslesmesi %100, 21 gunluk uzlastirma temiz" },
+  { sira: 3, isTuru: "amazon_iade", risk: 3,
+    olcut: "10 iade, hepsi orijinal karta ve ucretsiz kargoyla, etiket/QR eBay'e ulasti" },
+  { sira: 4, isTuru: "ebay_dava", risk: 4,
+    olcut: "kanit paketi insan incelemesinden gecti; gonderim her seferinde onayli" },
+]);
+
+// Sessiz basarisizlik guard'lari (kirmizi takim bulgusu): bunlar devre kesici
+// degil KIMLIK-ESLESME kontrolleridir; eslesme yoksa is durur.
+export const GUARDLAR = Object.freeze([
+  { ad: "İade tutarı beklenenden farklı", kural: "refund != beklenen -> DUR",
+    neden: "Replacement tuzağı ve kısmi iade sessizce para kaybettirir" },
+  { ad: "Kargo ücreti sıfır değil", kural: "shipping_fee != 0 -> DUR",
+    neden: "Ücretli yöntem baştan seçili gelebiliyor (-$7.99)" },
+  { ad: "Sayfa ASIN'i istenenden farklı", kural: "sayfaAsin != istenenAsin -> DUR",
+    neden: "Amazon varyant yönlendirmesi sahte 'stokta var' üretir" },
+  { ad: "Sonuç okunamadı", kural: "UNKNOWN != OUT — tekrar YOK, uzlaştır",
+    neden: "Çift sipariş ve çift iade tam buradan doğar" },
+  { ad: "Alıcı/sipariş eşleşmesi", kural: "ilan no + alıcı birlikte eşleşmeli",
+    neden: "Başka müşterinin siparişi yanlış davaya bağlanır" },
+]);
+
+// Acilis sirasina gore: su an hangi is turu acilabilir?
+export function acilabilirIsTuru(ustSinir, tamamlananOlcutler = []) {
+  for (const adim of ACILIS_SIRASI) {
+    if (tamamlananOlcutler.includes(adim.isTuru)) continue;
+    return adim.risk <= ustSinir ? adim : { ...adim, kapali: true };
+  }
+  return null;
+}
