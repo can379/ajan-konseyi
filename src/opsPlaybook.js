@@ -183,6 +183,17 @@ export function isYonergesi(isTuru, { fazUstSinir = FAZ1_UST_SINIR } = {}) {
   ].filter(Boolean).join("\n");
 }
 
+// Varsayilan esleme KIMLIK eslemesidir: CanSellerAI'daki magaza adlari ile
+// Windows App cihaz adlari ayni (kullanici dogruladi: "tum sunucular zaten
+// kendi adini kullaniyor"). Kayitli cihaz listesinden uretilir; listede
+// olmayan bir magaza (or. baskasina ait "zeynep") eslesmez ve baglanti
+// acilmaz.
+export function varsayilanEsleme(cihazlar = []) {
+  const esleme = {};
+  for (const c of cihazlar) if (c?.name) esleme[c.name] = c.name;
+  return esleme;
+}
+
 // Magaza (CanSellerAI hesabi) -> uzak sunucu (Windows App cihaz adi) eslemesi.
 // Bilinmeyen magaza icin TAHMIN YAPILMAZ: yanlis sunucuya baglanmak, hic
 // baglanmamaktan kotudur.

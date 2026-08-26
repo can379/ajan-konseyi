@@ -48,6 +48,24 @@ Yalnız şu JSON'u döndür:
 
 Görmediğin şeyi yazma. Ekran boşsa veya masaüstü henüz yüklenmediyse bulgular boş kalsın ve bunu not düş.`;
 
+const PLAN_ISTEMI = `Sana "%HEDEF%" sunucusunun ekran görüntüsü ve tespit edilen bir sorun verildi.
+
+TESPİT: %BULGU%
+
+%YONERGE%
+
+GÖREVİN: Bu sorunu yukarıdaki prosedüre göre NASIL çözeceğini yaz. HİÇBİR ŞEY YAPMA — bu bir plan turudur, kullanıcı senin nasıl çalıştığını görmek istiyor.
+
+Yalnız şu JSON'u döndür:
+{"yapilabilir": true|false,
+ "eksik_bilgi": ["prosedürün ön koşullarından ekranda göremediklerin"],
+ "adimlar": [{"no": 1, "ne": "somut adım", "nerede": "hangi ekran/sayfa", "dogrulama": "sonucu nasıl doğrularım"}],
+ "durma_noktalari": ["bu işte nerede durup sana sorardım"],
+ "tahmini_sure": "kısa tahmin",
+ "risk_notu": "para/geri alınamaz etki varsa tek cümle"}
+
+Ekranda göremediğin bir ön koşul varsa uydurma: "eksik_bilgi" listesine yaz ve yapilabilir=false ver.`;
+
 function jsonAyikla(metin) {
   const ham = String(metin || "");
   const blok = ham.match(/\{[\s\S]*\}/);
@@ -195,6 +213,25 @@ export class OpsRun {
         content: this._raporMetni(hedef, rapor),
         attachments: gozlem.screenshotPath ? [{ name: "gozlem.png", path: gozlem.screenshotPath, kind: "image", mime: "image/png" }] : [] });
 
+      // 9b) PLAN TURU: siniflanan her bulgu icin "bunu nasil cozerdim" —
+      // uygulamadan. Kullanici Faz 1'de ajanin NASIL calistigini gormek
+      // istiyor; plan bunu gosterir, oyun kitabina bagli oldugu icin de
+      // dogaclama degil gercek prosedurdur.
+      const planlananlar = this.controller.durum(hedef)?.findings?.filter((b) => b.isTuru) || [];
+      for (const bulgu of planlananlar.slice(-3)) {
+        durdurulduMu();
+        const yonerge = isYonergesi(bulgu.isTuru);
+        const plan = await this._uyeyeSor(run, uye,
+          PLAN_ISTEMI.replace("%HEDEF%", hedef)
+            .replace("%BULGU%", `${bulgu.isAdi || bulgu.tur}: ${bulgu.ozet}`)
+            .replace("%YONERGE%", yonerge || ""),
+          gozlem.screenshotPath);
+        bulgu.plan = plan.json || { ham: plan.metin.slice(0, 1500) };
+        this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
+          content: this._planMetni(hedef, bulgu) });
+      }
+      this.store.updateRun(run);
+
       // 10) Oturumu kapat ve cihaz listesine donuldugunu dogrula.
       const kapanis = await this.controller.kapat(hedef);
       bilgi(kapanis.connection_state === "bitti"
@@ -207,6 +244,21 @@ export class OpsRun {
       this.store.addMessage(run, { from: "sistem", kind: "error", content: `Gözlem durdu: ${mesaj}` });
       return this._bitir(run, hedef, "hata", mesaj);
     }
+  }
+
+  // Plan kullaniciya OKUNUR bicimde sunulur: ne yapardi, nerede dururdu.
+  _planMetni(hedef, bulgu) {
+    const p = bulgu.plan || {};
+    if (p.ham) return `**${hedef} · ${bulgu.isAdi || bulgu.tur} — plan**\n${p.ham}`;
+    const adimlar = (p.adimlar || []).map((a) => `${a.no}. ${a.ne}${a.nerede ? ` _(${a.nerede})_` : ""}${a.dogrulama ? `\n   ↳ doğrulama: ${a.dogrulama}` : ""}`).join("\n");
+    const risk = bulgu.risk != null ? ` · risk ${bulgu.risk}` : "";
+    return `**${hedef} · ${bulgu.isAdi || bulgu.tur} — nasıl çözerdim${risk}**\n\n`
+      + `${bulgu.ozet}\n\n`
+      + (p.yapilabilir === false ? `⚠ Şu an yapılamaz — eksik bilgi:\n${(p.eksik_bilgi || []).map((x) => `- ${x}`).join("\n")}\n\n` : "")
+      + (adimlar ? `Adımlar:\n${adimlar}\n\n` : "")
+      + ((p.durma_noktalari || []).length ? `Nerede sana sorardım:\n${p.durma_noktalari.map((x) => `- ${x}`).join("\n")}\n\n` : "")
+      + (p.risk_notu ? `Risk: ${p.risk_notu}\n\n` : "")
+      + `_Plan turu — hiçbir işlem yapılmadı._`;
   }
 
   _raporMetni(hedef, rapor) {

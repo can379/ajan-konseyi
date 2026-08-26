@@ -126,3 +126,24 @@ test("gozlem bulgulari is turu ve risk ile isaretlenir", () => {
   assert.match(ops, /risk <= FAZ1_UST_SINIR \? "yapilabilir" : "onay-bekliyor"/,
     "faz siniri bulguya islenmeli");
 });
+
+// ---- Plan turu: kullanici ajanin NASIL calistigini gorur ----
+test("siniflanan bulgu icin plan uretilir, uygulanmaz", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /PLAN_ISTEMI/, "plan istemi olmali");
+  assert.match(ops, /HİÇBİR ŞEY YAPMA — bu bir plan turudur/, "plan turunda islem yok");
+  assert.match(ops, /isYonergesi\(bulgu\.isTuru\)/, "plan oyun kitabina bagli olmali (dogaclama degil)");
+  assert.match(ops, /_planMetni/, "plan kullaniciya okunur sunulmali");
+  assert.match(ops, /Nerede sana sorardım/, "durma noktalari kullaniciya gosterilmeli");
+  assert.match(ops, /Plan turu — hiçbir işlem yapılmadı/);
+});
+
+test("varsayilan esleme kimlik eslemesidir; listede olmayan magaza eslesmez", async () => {
+  const { varsayilanEsleme, sunucuBul } = await import("../src/opsPlaybook.js");
+  const cihazlar = [{ name: "ANNE" }, { name: "CanSelim" }, { name: "Sihhat" }, { name: "WOOY" }];
+  const esleme = varsayilanEsleme(cihazlar);
+  assert.deepEqual(esleme, { ANNE: "ANNE", CanSelim: "CanSelim", Sihhat: "Sihhat", WOOY: "WOOY" });
+  assert.equal(sunucuBul(esleme, "ANNE").sunucu, "ANNE");
+  // Kullanicinin olmayan magazasi ("zeynep" baskasina ait) eslesmemeli.
+  assert.equal(sunucuBul(esleme, "zeynep").ok, false);
+});
