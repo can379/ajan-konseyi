@@ -20,6 +20,7 @@
 // 11 ancak bundan sonra siradaki sunucuya gec
 
 import { oturumPenceresi } from "./rdpController.js";
+import { isTuruBul, isYonergesi, OYUN_KITABI, FAZ1_UST_SINIR } from "./opsPlaybook.js";
 
 const KIMLIK_ISTEMI = `Sana bir uzak masaüstü oturumunun ekran görüntüsü verildi.
 
@@ -176,7 +177,20 @@ export class OpsRun {
       const gozlem = await bilgisayar.request({ action: "screenshot", payload: {} });
       this.controller._kaydet(hedef, { last_screenshot: gozlem.screenshotPath, current_step: "ekran okunuyor" });
       const rapor = await this._uyeyeSor(run, uye, GOZLEM_ISTEMI.replace("%HEDEF%", hedef), gozlem.screenshotPath);
-      for (const bulgu of rapor.json?.bulgular || []) this.controller.bulguEkle(hedef, bulgu);
+      // Her bulguyu bir IS TURUNE bagla: boylece "ne yapilmali" sorusu
+      // ajanin dogaclamasina degil, CanSellerAI'daki gercek prosedure baglanir.
+      for (const bulgu of rapor.json?.bulgular || []) {
+        const isTuru = isTuruBul(bulgu);
+        const oyun = isTuru ? OYUN_KITABI[isTuru] : null;
+        this.controller.bulguEkle(hedef, {
+          ...bulgu,
+          isTuru: isTuru || null,
+          isAdi: oyun?.ad || null,
+          risk: oyun ? oyun.risk : null,
+          // Faz 1'de risk 2+ isler YAPILMAZ; hazirlanir ve onaya birakilir.
+          durum: oyun ? (oyun.risk <= FAZ1_UST_SINIR ? "yapilabilir" : "onay-bekliyor") : "siniflanmadi",
+        });
+      }
       this.store.addMessage(run, { from: uye.id, fromLabel: uye.name, provider: uye.provider, kind: "message",
         content: this._raporMetni(hedef, rapor),
         attachments: gozlem.screenshotPath ? [{ name: "gozlem.png", path: gozlem.screenshotPath, kind: "image", mime: "image/png" }] : [] });
