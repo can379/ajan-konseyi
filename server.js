@@ -9,6 +9,7 @@ import { RdpController } from "./src/rdpController.js";
 import { OpsRun } from "./src/opsRun.js";
 import { OpsJobs } from "./src/opsJobs.js";
 import { OpsWorker, FazAyari } from "./src/opsWorker.js";
+import { OpsWatcher } from "./src/opsWatcher.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -51,6 +52,7 @@ const opsJobs = new OpsJobs();
 const opsFaz = new FazAyari();
 const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs, faz: opsFaz });
 const opsWorker = new OpsWorker({ jobs: opsJobs, controller: rdp, orchestrator: orch, store, config, faz: opsFaz });
+const opsWatcher = new OpsWatcher({ canseller, jobs: opsJobs, store, faz: opsFaz });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");
   if(status.configured)members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});
@@ -789,6 +791,20 @@ const server = http.createServer(async (req, res) => {
         }
         return json(res, 200, opsFaz.durum());
       } catch (error) { return json(res, 400, { error: String(error.message || error) }); }
+    }
+    // Canli izleyici: CanSellerAI panelini yoklar, yeni kayitlari ise cevirir.
+    if (req.method === "GET" && p === "/api/rdp/watcher") {
+      return json(res, 200, opsWatcher.durum());
+    }
+    if (req.method === "POST" && p === "/api/rdp/watcher") {
+      const body = await readBody(req);
+      if (body.durdur) return json(res, 200, { ...opsWatcher.durdur(), ...opsWatcher.durum() });
+      const sonuc = opsWatcher.baslat(body.hesap || null);
+      return json(res, sonuc.ok ? 200 : 400, { ...sonuc, ...opsWatcher.durum() });
+    }
+    if (req.method === "POST" && p === "/api/rdp/watcher/yokla") {
+      try { return json(res, 200, await opsWatcher.yokla()); }
+      catch (error) { return json(res, 502, { error: String(error.message || error) }); }
     }
     if (req.method === "GET" && p === "/api/rdp/jobs") {
       return json(res, 200, { isler: opsJobs.liste(), uzlastirma: opsJobs.uzlastirmaBekleyenler().length });
