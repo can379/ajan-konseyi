@@ -32,14 +32,21 @@ test("canli kayitlar ISE donusur, ayni kayit TEKRAR donusmez", async () => {
   const jobs = new OpsJobs();
   const w = new OpsWatcher({ canseller: SAHTE_PANEL, jobs, store: null });
   w.hesap = "ANNE";
+  // BOOTSTRAP: ilk tur yalniz taban cikarir, is ACMAZ (kuyruk patlamasin).
   const ilk = await w.yokla();
-  assert.equal(ilk.yeni, 3, "uc kayit da ise donmeli");
+  assert.equal(ilk.yeni, 0, "ilk tur mevcut kayitlari ise donusturmemeli");
+  assert.equal(w.gorulen.size, 3, "ama hepsi izlemeye alinmali");
+  // Ikinci turda ayni kayitlar YINE is acmaz (gercekten yeni degiller).
   const ikinci = await w.yokla();
-  assert.equal(ikinci.yeni, 0, "ayni kayitlar ikinci kez ise donmemeli");
-  const turler = jobs.liste().map((i) => i.isTuru).sort();
-  assert.deepEqual(turler, ["amazon_iade", "amazon_siparis", "ebay_dava"]);
-  // Dava riski en yuksek olmali (her seferinde onay).
-  assert.equal(jobs.liste().find((i) => i.isTuru === "ebay_dava").risk, 4);
+  assert.equal(ikinci.yeni, 0, "ayni kayitlar ise donmemeli");
+  // GERCEKTEN yeni bir kayit gelirse is acilir.
+  const jobsOnce = jobs.liste().length;
+  w.canseller = { connected: () => true, overview: async () => ({
+    returns: { items: [{ return_id: "YENI-1", acik: true, urunAdi: "Yeni iade" }] }, cases: null, work: null }) };
+  const ucuncu = await w.yokla();
+  assert.equal(ucuncu.yeni, 1, "bootstrap sonrasi yeni kayit ise donmeli");
+  assert.equal(jobs.liste().length, jobsOnce + 1);
+  assert.ok(jobs.liste().length >= 1, "yeni kayit ise donmeli");
 });
 
 test("OLGUNLASMA penceresi: yeni kayit hemen yurutulmez", async () => {
@@ -108,8 +115,8 @@ test("zeynep HARIC tum hesaplar taranir", async () => {
   const adlar = r.sonuclar.map((s) => s.hesap);
   assert.deepEqual(adlar, ["ANNE", "CanSelim", "WOOY"]);
   assert.ok(!adlar.includes("zeynep"), "zeynep hesabina HIC gecilmemeli");
-  // Isler dogru magazaya yazilmali (idempotens anahtari hesap iceriyor).
-  assert.deepEqual(jobs.liste().map((i) => i.hesap).sort(), ["ANNE", "CanSelim", "WOOY"]);
+  // Ilk tur bootstrap oldugu icin is acilmaz; hepsi izlemeye girer.
+  assert.equal(w.gorulen.size, 3, "uc magazanin kaydi da izlenmeli");
 });
 
 test("bir magaza hata verirse digerleri taranmaya devam eder", async () => {
@@ -160,4 +167,34 @@ test("oturum diske 0600 ile yazilir, parola YAZILMAZ", async () => {
   c2.cikis();
   assert.ok(!fsm.existsSync(dosya), "cikista oturum dosyasi silinmeli");
   fsm.rmSync(dir, { recursive: true, force: true });
+});
+
+test("cok hesapli izlemede baska magazanin izi SILINMEZ", async () => {
+  const jobs = new OpsJobs();
+  const panel = cokHesapPanel();
+  const w = new OpsWatcher({ canseller: panel, jobs, store: null });
+  await w.tumunuYokla();
+  assert.equal(w.gorulen.size, 3, "uc magazanin kaydi da izlenmeli");
+  // Ikinci tur: ayni kayitlar hala izlenmeli, "yeni" sayilmamali.
+  const r = await w.tumunuYokla();
+  assert.equal(r.yeni, 0, "ayni kayitlar tekrar is acmamali");
+  assert.equal(w.gorulen.size, 3, "izler korunmali");
+});
+
+test("durum kusagi: kaydin DURUMU degisince yeni is acilir", async () => {
+  const { idempotensAnahtari } = await import("../src/opsJobs.js");
+  // Ayni iade, farkli durum -> AYRI anahtar (gecis yutulmasin).
+  assert.notEqual(
+    idempotensAnahtari("amazon_iade", "ANNE", "R1", "acik"),
+    idempotensAnahtari("amazon_iade", "ANNE", "R1", "etiket-bekliyor"));
+  // Durum verilmezse eski bicim korunur (geriye uyum).
+  assert.equal(idempotensAnahtari("amazon_iade", "ANNE", "R1"), "amazon_iade:ANNE:R1");
+  const kaynak = oku("src/opsJobs.js");
+  assert.match(kaynak, /DURUM GECISI yutulur/, "gerekce kaynakta olmali");
+});
+
+test("BOOTSTRAP: ilk tur kuyrugu patlatmaz", () => {
+  const kaynak = oku("src/opsWatcher.js");
+  assert.match(kaynak, /ilk acilista yuzlerce MEVCUT kayit birden/, "gerekce yazili olmali");
+  assert.match(kaynak, /if \(this\.ilkTur\) continue;/, "ilk tur is acmamali");
 });

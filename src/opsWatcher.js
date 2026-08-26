@@ -36,6 +36,7 @@ export function kayitlariCikar(tur, veri) {
         ozet: `${k.urunAdi || k.item_title || "ürün"} · ${k.sebepAdi || k.reason || "sebep yok"}`
           + (k.kalanGun != null ? ` · ${k.kalanGun} gün kaldı` : ""),
         onem: (k.kalanGun != null && k.kalanGun <= 2) ? "yuksek" : "orta",
+        durum: String(k.aksiyonHam || k.seller_action || k.status || "").slice(0, 40),
         ham: { ebayOrderId: k.order_id || k.ebay_order_id || null, amazonOrderId: k.amazonOrderId || null },
       };
     }
@@ -46,6 +47,7 @@ export function kayitlariCikar(tur, veri) {
         acik: !/closed|kapali/i.test(String(k.status || k.durum || "")),
         ozet: `${k.type || k.tur || "talep"} · ${k.item_title || k.urunAdi || ""}`,
         onem: "yuksek",
+        durum: String(k.status || k.durum || "").slice(0, 40),
         ham: { ebayOrderId: k.order_id || null, aliciId: k.buyer || null },
       };
     }
@@ -78,6 +80,10 @@ export class OpsWatcher {
     this.sonYoklama = null;
     this.sonHata = null;
     this.hesap = null;          // hangi magazanin verisi izleniyor
+    // BOOTSTRAP (konsey bulgusu): ilk acilista yuzlerce MEVCUT kayit birden
+    // ise donusup kuyrugu patlatmasin. Ilk tur yalniz "gorulen" olarak
+    // isaretler; is acmaz. Sonraki turlarda gercekten YENI olanlar islenir.
+    this.ilkTur = true;
   }
 
   durum() {
@@ -175,10 +181,12 @@ export class OpsWatcher {
       const anahtar = `${kayit.isTuru}:${this.hesap || "?"}:${kayit.varlikId}`;
       if (!this.gorulen.has(anahtar)) {
         this.gorulen.set(anahtar, simdi);
+        if (this.ilkTur) continue;   // ilk tur: yalniz taban cikarilir, is acilmaz
         // Gorur gormez KUYRUGA: kaydi kacirmamak icin. Yurutme olgunlasma
         // suresi dolunca yapilir (asagidaki olgunMu).
         const sonuc = this.jobs.ekle({
           isTuru: kayit.isTuru, hesap: this.hesap || "?", varlikId: kayit.varlikId,
+          durum: kayit.durum || "",
           risk: kayit.isTuru === "ebay_dava" ? 4 : 3,
           veri: { ozet: kayit.ozet, onem: kayit.onem, kaynak: "canlı izleyici", ham: kayit.ham },
         });
@@ -186,9 +194,17 @@ export class OpsWatcher {
       }
     }
     // Kapanmis kayitlarin izini birak (bellekte sonsuz birikmesin).
+    // DIKKAT: yalniz BU HESABIN kayitlari budanir. Cok hesapli izlemede
+    // hepsini budamak, diger magazalarin izini silip ayni kayitlari
+    // "yeni" sanmaya yol aciyordu (test yakaladi).
+    const onEk = `${this.hesap || "?"}:`;
     const acikAnahtarlar = new Set(kayitlar.map((k) => `${k.isTuru}:${this.hesap || "?"}:${k.varlikId}`));
-    for (const anahtar of [...this.gorulen.keys()]) if (!acikAnahtarlar.has(anahtar)) this.gorulen.delete(anahtar);
+    for (const anahtar of [...this.gorulen.keys()]) {
+      const buHesap = anahtar.split(":").slice(1, 2)[0] === (this.hesap || "?");
+      if (buHesap && !acikAnahtarlar.has(anahtar)) this.gorulen.delete(anahtar);
+    }
 
+    if (this.ilkTur) this.ilkTur = false;
     if (yeni.length && this.store) {
       this.store.emit("event", { type: "ops_yeni_is", adet: yeni.length, hesap: this.hesap });
     }

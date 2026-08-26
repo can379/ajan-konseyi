@@ -51,7 +51,7 @@
         <div id="conversation-list" aria-live="polite"></div>
       </section>
       <button id="btn-image-studio" class="side-nav-item"><span><svg><use href="#i-image"/></svg></span> Görsel Oluştur</button>
-      <button id="btn-ops" class="side-nav-item"><span><svg><use href="#i-panel"/></svg></span> Operasyon Merkezi</button>
+      <button id="btn-ops" class="side-nav-item"><span><svg><use href="#i-panel"/></svg></span> Mağaza Operasyonu</button>
     </nav>
 
     <div class="side-section grow project-history-section">
@@ -131,6 +131,17 @@
   <main id="main">
     <div id="topbar">
       <button id="btn-sidebar" class="icon-btn top-icon sidebar-icon" title="Kenar çubuğu"><svg><use href="#i-panel"/></svg></button>
+      <div class="bolum-secici">
+        <button id="btn-bolum" class="bolum-dugme" aria-expanded="false" aria-haspopup="menu">
+          <span id="bolum-ad">Sohbet</span><span class="bolum-ok">⌄</span>
+        </button>
+        <div id="bolum-menu" class="bolum-menu" role="menu" hidden>
+          <button role="menuitem" data-bolum="chat"><b>Sohbet</b><small>Konsey ile konuş, soru sor</small></button>
+          <button role="menuitem" data-bolum="kod"><b>Proje kodlama</b><small>Projelerde geliştir, test et, yayınla</small></button>
+          <button role="menuitem" data-bolum="images"><b>Görsel</b><small>Görsel üret ve düzenle</small></button>
+          <button role="menuitem" data-bolum="ops"><b>Mağaza Operasyonu</b><small>eBay/Amazon iade, dava, sipariş</small></button>
+        </div>
+      </div>
       <div id="tb-project" class="pill">Proje seçilmedi</div>
       <div class="project-app-wrap">
         <button id="btn-open-project-app" class="icon-btn" title="Projeyi uygulamada aç" aria-expanded="false">⌄</button>
@@ -160,7 +171,7 @@
       <header class="ops-hero">
         <div class="ops-hero-metin">
           <span class="ops-rozet">Faz 1 · yalnız gözlem</span>
-          <h1 id="ops-screen-title">Operasyon Merkezi</h1>
+          <h1 id="ops-screen-title">Mağaza Operasyonu</h1>
           <p>Mağaza sunucularına bağlanır, iade · dava · sipariş sorunlarını bulur, çözüm planını çıkarır. Para etkileyen hiçbir işlem yapılmaz.</p>
         </div>
         <div class="ops-hero-sayac">
@@ -184,6 +195,12 @@
         </div>
       </div>
 
+      <form id="ops-komut-form" class="ops-komut">
+        <input id="ops-komut" type="text" autocomplete="off" maxlength="500"
+          placeholder="Ne yapmamı istersin? ör. Codex'e WOOY mağazasına gir, geçilemeyen siparişleri geç">
+        <button type="submit">Gönder</button>
+      </form>
+      <div id="ops-komut-sonuc" class="ops-komut-sonuc" hidden></div>
       <div id="ops-faz-durum" class="ops-faz-durum"></div>
       <div id="ops-izleyici" class="ops-izleyici"></div>
       <section id="ops-approval" class="ops-approval" hidden></section>
@@ -218,7 +235,6 @@
             <input name="password" type="password" placeholder="Parola" autocomplete="current-password" required>
             <button type="submit">Bağlan</button>
           </form>
-          <form id="ops-key-form"><input name="serviceKey" placeholder="Servis anahtarı" autocomplete="off" required><button type="submit">Anahtarı kullan</button></form>
           <div id="ops-status" class="ops-status"></div>
           <div id="ops-account-row" class="ops-account-row" hidden><label>Mağaza <select id="ops-account"></select></label><span id="ops-meta" class="ops-meta"></span><button id="ops-refresh" class="btn-ghost small">Yenile</button></div>
           <div id="ops-groups"></div>

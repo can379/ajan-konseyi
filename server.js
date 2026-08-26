@@ -10,6 +10,7 @@ import { OpsRun } from "./src/opsRun.js";
 import { OpsJobs } from "./src/opsJobs.js";
 import { OpsWorker, FazAyari } from "./src/opsWorker.js";
 import { OpsWatcher } from "./src/opsWatcher.js";
+import { komutCoz } from "./src/opsKomut.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -806,6 +807,30 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && p === "/api/rdp/watcher/yokla") {
       try { return json(res, 200, opsWatcher.hesap ? await opsWatcher.yokla() : await opsWatcher.tumunuYokla()); }
       catch (error) { return json(res, 502, { error: String(error.message || error) }); }
+    }
+    // Serbest metin komutu: "WOOY'a gir gecilmeyen siparisleri gec" gibi.
+    if (req.method === "POST" && p === "/api/rdp/komut") {
+      const body = await readBody(req);
+      const metin = String(body.metin || "").trim();
+      if (!metin) return json(res, 400, { error: "Komut boş" });
+      let cihazlar = [];
+      try { cihazlar = (await rdp.listele()).devices; } catch { /* liste yoksa magaza cozulemez */ }
+      const uyeler = (config.data.members || []).filter((m) => m.enabled);
+      const cozum = komutCoz(metin, { uyeler, cihazlar });
+      if (!cozum.ok) return json(res, 200, { ...cozum, calistirildi: false });
+      // Cozulen komut ISE donusur; faz kapisi ve onay kurallari aynen gecerli.
+      const varlik = cozum.kimlik || `komut-${Date.now()}`;
+      const ekle = opsJobs.ekle({ isTuru: cozum.isTuru, hesap: cozum.magaza, varlikId: varlik,
+        risk: cozum.risk, veri: { ozet: cozum.ham, kaynak: "kullanıcı komutu", uye: cozum.uye } });
+      // Yurutulebilir mi? Faz kapisi kapaliysa is kuyrukta bekler.
+      const izinli = opsFaz.izinliMi(cozum.risk, cozum.isTuru);
+      if (ekle.ok && izinli && !opsRun.aktif) {
+        opsRun.gozlemle(cozum.magaza, { memberId: cozum.uye?.id || body.memberId || null, not: metin })
+          .catch(() => {});
+      }
+      return json(res, 200, { ...cozum, calistirildi: Boolean(ekle.ok && izinli && !opsRun.aktif),
+        yinelenen: Boolean(ekle.yinelenen), isId: ekle.is?.id || null,
+        kapali: !izinli, kapaliMesaj: izinli ? null : `"${cozum.isAdi}" işleri şu an kapalı — Yetkiler'den açın.` });
     }
     if (req.method === "GET" && p === "/api/rdp/jobs") {
       return json(res, 200, { isler: opsJobs.liste(), uzlastirma: opsJobs.uzlastirmaBekleyenler().length });

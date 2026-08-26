@@ -56,10 +56,15 @@ export const KANIT_SOZLESMESI = Object.freeze({
 
 // Idempotens anahtari: ayni is ikinci kez KUYRUGA GIRMEZ.
 // Bicim: <isTuru>:<hesap>:<varlikId>
-export function idempotensAnahtari(isTuru, hesap, varlikId) {
+// DURUM KUSAGI (konsey bulgusu): anahtara durum eklenmezse kaydin DURUM
+// GECISI yutulur. Ornek: iade "acik" iken is acilir; sonra "etiket bekliyor"a
+// gecer ama ayni anahtar zaten var oldugu icin yeni is ACILMAZ ve gecis
+// kacar. Durum kusagiyla her anlamli gecis kendi isini alir.
+export function idempotensAnahtari(isTuru, hesap, varlikId, durum = "") {
   const parca = [isTuru, hesap, varlikId].map((x) => String(x || "").trim()).filter(Boolean);
   if (parca.length !== 3) throw new Error("Idempotens anahtarı için iş türü, hesap ve varlık kimliği şart");
-  return parca.join(":");
+  const kusak = String(durum || "").trim();
+  return kusak ? `${parca.join(":")}:${kusak}` : parca.join(":");
 }
 
 // Kanit dogrulama: eksik alan veya bicim hatasi varsa is TAMAM olamaz.
@@ -97,8 +102,8 @@ export class OpsJobs {
   bul(id) { return this.isler.get(id) || null; }
 
   // Is ekleme: ayni idempotens anahtariyla ikinci is ACILMAZ.
-  ekle({ isTuru, hesap, varlikId, risk = 3, veri = {} }) {
-    const anahtar = idempotensAnahtari(isTuru, hesap, varlikId);
+  ekle({ isTuru, hesap, varlikId, risk = 3, veri = {}, durum = "" }) {
+    const anahtar = idempotensAnahtari(isTuru, hesap, varlikId, durum);
     const mevcutId = this.anahtarlar.get(anahtar);
     if (mevcutId) {
       const mevcut = this.isler.get(mevcutId);

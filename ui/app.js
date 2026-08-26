@@ -118,6 +118,18 @@ function renderImageBatchStatus() {
   box.querySelectorAll('[data-flow-import]').forEach((button)=>button.onclick=async()=>{const result=await window.desktopAPI?.selectFlowVideo?.(button.dataset.flowImport);if(result?.error){$('image-studio-error').textContent=result.error;$('image-studio-error').hidden=false;}else if(!result?.canceled){await fetchState();renderImageBatchStatus();}});
 }
 
+// Bolum secici (sol ust) — Codex'teki gibi tek yerden bolum degistirme.
+const BOLUM_ADI = { chat: "Sohbet", kod: "Proje kodlama", images: "Görsel", ops: "Mağaza Operasyonu" };
+
+function bolumSecildi(bolum) {
+  const ad = $("bolum-ad");
+  if (ad) ad.textContent = BOLUM_ADI[bolum] || BOLUM_ADI.chat;
+  document.querySelectorAll("#bolum-menu [data-bolum]").forEach((b) =>
+    b.classList.toggle("secili", b.dataset.bolum === bolum));
+  $("bolum-menu").hidden = true;
+  $("btn-bolum")?.setAttribute("aria-expanded", "false");
+}
+
 function showMainView(view) {
   activeMainView = view;
   const studio = view === "images";
@@ -133,6 +145,7 @@ function showMainView(view) {
   $("btn-ops")?.classList.toggle("active", ops);
   if (studio) renderImageStudio();
   if (ops) renderOpsEkran();
+  bolumSecildi(view === "images" ? "images" : view === "ops" ? "ops" : (activeProjectId() ? "kod" : "chat"));
 }
 
 
@@ -1926,6 +1939,29 @@ $('btn-image-studio').addEventListener('click', () => { showMainView('images'); 
 // Dinleyici eklenmemisti: dugme duruyordu ama tiklayinca hicbir sey olmuyordu
 // (kullanici bildirdi: "operasyon merkezi tiklayinca acilmiyor").
 $('btn-ops')?.addEventListener('click', () => { showMainView('ops'); autoCloseSidebar(); });
+
+// Bolum menusu: sol ustten bolum degistirme.
+$("btn-bolum")?.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const menu = $("bolum-menu");
+  menu.hidden = !menu.hidden;
+  $("btn-bolum").setAttribute("aria-expanded", String(!menu.hidden));
+});
+$("bolum-menu")?.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-bolum]");
+  if (!btn) return;
+  const bolum = btn.dataset.bolum;
+  if (bolum === "kod") {
+    // Proje kodlama: sohbet gorunumu + proje secili olmali.
+    showMainView("chat");
+    if (!activeProjectId()) $("btn-pick-folder")?.click();
+  } else showMainView(bolum);
+  bolumSecildi(bolum);
+});
+document.addEventListener("click", () => {
+  const menu = $("bolum-menu");
+  if (menu && !menu.hidden) { menu.hidden = true; $("btn-bolum")?.setAttribute("aria-expanded", "false"); }
+});
 $('image-prompt').addEventListener('input', (e) => { $('image-prompt-count').textContent = `${e.target.value.length} karakter`; });
 $('image-agent-options').addEventListener('change', updateImageStudioSummary);
 function configureStudioEngine(){
@@ -2356,6 +2392,39 @@ $("ops-faz")?.addEventListener("click", async () => {
   renderOpsFaz();
 });
 
+// Serbest metin komutu. Komut ONCE koda cozulur; anlasilmayan parca
+// uydurulmaz, kullaniciya sorulur.
+$("ops-komut-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const alan = $("ops-komut");
+  const metin = alan.value.trim();
+  if (!metin) return;
+  const kutu = $("ops-komut-sonuc");
+  kutu.hidden = false;
+  kutu.innerHTML = '<div class="muted">Komut çözülüyor…</div>';
+  const btn = e.target.querySelector("button"); btn.disabled = true;
+  try {
+    const r = await (await fetch("/api/rdp/komut", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metin, memberId: $("ops-uye")?.value || null }) })).json();
+    if (r.error) { kutu.innerHTML = `<div class="ops-err">${esc(r.error)}</div>`; return; }
+    if (!r.ok) {
+      kutu.innerHTML = `<div class="ops-komut-eksik"><b>Anlamadım</b>
+        <ul>${(r.eksik || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+        <small>Örnek: "WOOY mağazasına gir, geçilemeyen siparişleri geç" · "ANNE iadelerini al" · "CanSelim okunmamış mesajlara bak"</small></div>`;
+      return;
+    }
+    kutu.innerHTML = `<div class="ops-komut-tamam">
+      <b>${esc(r.ozet)}</b>
+      <div>${r.calistirildi ? "▶ Başlatıldı — aşağıdan izleyebilirsin."
+        : r.yinelenen ? "↺ Bu iş zaten kuyrukta; ikinci kez açılmadı."
+        : r.kapali ? `⏸ ${esc(r.kapaliMesaj)} İş kuyruğa alındı.`
+        : "⏸ Şu an başka bir tur çalışıyor; iş kuyruğa alındı."}</div></div>`;
+    alan.value = "";
+    opsDurumCiz(); renderOpsIsler();
+  } finally { btn.disabled = false; }
+});
+
 $("ops-devices")?.addEventListener("click", () => opsCihazTara());
 $("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });
 $("ops-server-list")?.addEventListener("click", async (e) => {
@@ -2457,15 +2526,6 @@ $("ops-login-form")?.addEventListener("submit", async (e) => {
     if (!r.ok) return alert(j.error || "Bağlanılamadı");
     await renderOpsHub();
   } finally { btn.disabled = false; }
-});
-$("ops-key-form")?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const d = Object.fromEntries(new FormData(e.target));
-  const r = await fetch("/api/ops/connect", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ serviceKey: d.serviceKey }) });
-  e.target.reset();
-  if (!r.ok) return alert((await r.json()).error || "Anahtar kabul edilmedi");
-  await renderOpsHub();
 });
 $("ops-disconnect")?.addEventListener("click", async () => { await fetch("/api/ops/disconnect", { method: "POST" }); await renderOpsHub(); });
 $("ops-refresh")?.addEventListener("click", () => opsYukle());
