@@ -64,7 +64,9 @@ export function kayitlariCikar(tur, veri) {
 }
 
 export class OpsWatcher {
-  constructor({ canseller, jobs, store, faz = null, ayar = {} }) {
+  constructor({ canseller, jobs, store, faz = null, ayar = {}, haric = ["zeynep"] }) {
+    // Kullanici: "zeynep hesabi haric" — o magaza kendisine ait degil.
+    this.haric = haric;
     this.canseller = canseller;
     this.jobs = jobs;
     this.store = store;
@@ -85,6 +87,8 @@ export class OpsWatcher {
       sonYoklama: this.sonYoklama,
       sonHata: this.sonHata,
       izlenen: this.gorulen.size,
+      haric: this.haric,
+      sonTur: this.sonTur || null,
       ayar: this.ayar,
     };
   }
@@ -94,8 +98,10 @@ export class OpsWatcher {
     if (!this.canseller?.connected?.()) return { ok: false, mesaj: "CanSellerAI bağlantısı yok" };
     this.hesap = hesap || null;
     this.calisiyor = true;
-    this.zamanlayici = setInterval(() => this.yokla().catch(() => {}), this.ayar.yoklamaMs);
-    this.yokla().catch(() => {});
+    // Tek hesap verilmediyse TUM hesaplar (haric olanlar disinda) taranir.
+    const tur = () => (this.hesap ? this.yokla() : this.tumunuYokla());
+    this.zamanlayici = setInterval(() => tur().catch(() => {}), this.ayar.yoklamaMs);
+    tur().catch(() => {});
     return { ok: true };
   }
 
@@ -104,6 +110,48 @@ export class OpsWatcher {
     if (this.zamanlayici) clearInterval(this.zamanlayici);
     this.zamanlayici = null;
     return { ok: true };
+  }
+
+  // ---- COK HESAPLI IZLEME ----
+  // Kullanici: "zeynep hesabi haric tum hesaplari takip etsin".
+  // Admin oturumu tum magazalari gorur; izleyici sirayla her magazaya gecip
+  // (accounts/switch) panelini okur. Haric tutulan hesaplara HIC gecilmez.
+  async hesaplariGetir() {
+    const ham = await this.canseller.accounts();
+    const liste = Array.isArray(ham) ? ham : (ham?.accounts || ham?.items || []);
+    return liste
+      .map((h) => ({ id: h.id, ad: String(h.name || h.login || h.id) }))
+      .filter((h) => h.id != null && !this.haricMi(h.ad));
+  }
+
+  haricMi(ad) {
+    const sade = String(ad || "").trim().toLocaleLowerCase("tr-TR");
+    return (this.haric || []).some((x) => String(x).trim().toLocaleLowerCase("tr-TR") === sade);
+  }
+
+  // Tum hesaplari sirayla yokla. Bir hesap hata verirse digerleri yine
+  // taranir — tek magazanin sorunu butun izlemeyi durdurmaz.
+  async tumunuYokla() {
+    if (!this.canseller?.connected?.()) { this.sonHata = "CanSellerAI oturumu düştü"; return { ok: false, hata: this.sonHata }; }
+    let hesaplar;
+    try { hesaplar = await this.hesaplariGetir(); }
+    catch (hata) { this.sonHata = `Hesap listesi okunamadı: ${String(hata.message || hata)}`; return { ok: false, hata: this.sonHata }; }
+    const sonuclar = [];
+    for (const hesap of hesaplar) {
+      try {
+        await this.canseller.switchAccount(hesap.id);
+        this.hesap = hesap.ad;
+        const r = await this.yokla();
+        sonuclar.push({ hesap: hesap.ad, ...r });
+      } catch (hata) {
+        sonuclar.push({ hesap: hesap.ad, ok: false, hata: String(hata.message || hata) });
+      }
+    }
+    this.sonYoklama = new Date().toISOString();
+    this.sonTur = sonuclar;
+    const yeniToplam = sonuclar.reduce((t, s) => t + (s.yeni || 0), 0);
+    if (yeniToplam && this.store) this.store.emit("event", { type: "ops_yeni_is", adet: yeniToplam });
+    return { ok: true, hesaplar: sonuclar.length, yeni: yeniToplam, sonuclar };
   }
 
   // Bir tur yoklama: panelden oku, YENI kayitlari ise cevir.

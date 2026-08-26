@@ -42,7 +42,8 @@ const BRIDGE_TOKEN = process.env.AJAN_BROWSER_BRIDGE_TOKEN || "";
 fs.mkdirSync(DATA_ROOT, { recursive: true });
 const store = new Store(DATA_ROOT);
 const speech = new SpeechToText(DATA_ROOT);
-const canseller = new CanSellerAI();
+const canseller = new CanSellerAI({ dataRoot: DATA_ROOT });
+canseller.oturumuYukle();   // "cansellerai sitesinde surekli var olsun" — oturum yeniden baslatmada kaybolmaz
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
 const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge });
@@ -803,7 +804,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, sonuc.ok ? 200 : 400, { ...sonuc, ...opsWatcher.durum() });
     }
     if (req.method === "POST" && p === "/api/rdp/watcher/yokla") {
-      try { return json(res, 200, await opsWatcher.yokla()); }
+      try { return json(res, 200, opsWatcher.hesap ? await opsWatcher.yokla() : await opsWatcher.tumunuYokla()); }
       catch (error) { return json(res, 502, { error: String(error.message || error) }); }
     }
     if (req.method === "GET" && p === "/api/rdp/jobs") {

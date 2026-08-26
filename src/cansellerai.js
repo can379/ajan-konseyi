@@ -16,6 +16,9 @@
 // - Izin verilen yol listesi (READ_ALLOWLIST) disina cikilamaz; yazma
 //   yontemleri (POST/PUT/DELETE) bu sinifta hic uygulanmamistir.
 
+import fs from "node:fs";
+import path from "node:path";
+
 const VARSAYILAN_TABAN = "https://cansellerai.com";
 
 // Faz 1'de dokunulabilecek TEK okuma kumesi. Yeni uc eklemek bilincli bir
@@ -48,7 +51,8 @@ export function temizleKayit(kayit, derinlik = 0) {
 }
 
 export class CanSellerAI {
-  constructor({ baseUrl = VARSAYILAN_TABAN, fetchImpl = fetch } = {}) {
+  constructor({ baseUrl = VARSAYILAN_TABAN, fetchImpl = fetch, dataRoot = null } = {}) {
+    this.dataRoot = dataRoot;
     this.baseUrl = String(baseUrl).replace(/\/+$/, "");
     this.fetchImpl = fetchImpl;
     this.cookie = null;        // HttpOnly hub oturumu — yalniz bellekte
@@ -98,10 +102,49 @@ export class CanSellerAI {
     }
     this.cookie = kurabiye.join("; ");
     this.lastError = null;
+    this.oturumuKaydet();
     return { ok: true };
   }
 
-  cikis() { this.cookie = null; this.activeAccountId = null; }
+  cikis() { this.oturumuSil(); this.activeAccountId = null; }
+
+  // ---- OTURUM KALICILIGI ----
+  // Kullanici: "cansellerai sitesinde surekli var olsun yazilim". Uygulama
+  // yeniden baslayinca oturumun kaybolmamasi gerekir.
+  //
+  // Cerez diske 0600 izniyle yazilir (yalniz kullanicinin kendisi okur) ve
+  // HICBIR api ucundan geri verilmez. PAROLA YAZILMAZ — bu yuzden oturum
+  // duserse kendiliginden yeniden giris YAPILAMAZ; kullaniciya bildirilir.
+  // Bu bilincli bir tercih: parolayi saklamak, calinabilecek bir sey
+  // saklamaktir; dusen oturumu bir kez elle acmak bundan ucuzdur.
+  _oturumDosyasi() { return path.join(this.dataRoot || "", "canseller-oturum.json"); }
+
+  oturumuKaydet() {
+    if (!this.dataRoot || !this.cookie) return false;
+    try {
+      fs.mkdirSync(this.dataRoot, { recursive: true });
+      fs.writeFileSync(this._oturumDosyasi(),
+        JSON.stringify({ cookie: this.cookie, at: new Date().toISOString(), baseUrl: this.baseUrl }),
+        { mode: 0o600 });
+      return true;
+    } catch { return false; }
+  }
+
+  oturumuYukle() {
+    if (!this.dataRoot) return false;
+    try {
+      const kayit = JSON.parse(fs.readFileSync(this._oturumDosyasi(), "utf8"));
+      if (!kayit?.cookie) return false;
+      this.cookie = kayit.cookie;
+      this.oturumTarihi = kayit.at || null;
+      return true;
+    } catch { return false; }
+  }
+
+  oturumuSil() {
+    try { fs.unlinkSync(this._oturumDosyasi()); } catch {}
+    this.cookie = null;
+  }
 
   async _get(yol) {
     if (!READ_ALLOWLIST.includes(yol)) throw new Error(`İzin verilmeyen yol: ${yol}`);
@@ -130,7 +173,7 @@ export class CanSellerAI {
     if (!yanit.ok) throw new Error(`Mağaza seçilemedi (${yanit.status})`);
     const yeni = (yanit.headers.getSetCookie?.() || [])
       .map((s) => String(s).split(";")[0]).filter((s) => /^cansellerai_hub=/.test(s));
-    if (yeni.length) this.cookie = yeni.join("; ");
+    if (yeni.length) { this.cookie = yeni.join("; "); this.oturumuKaydet(); }
     this.activeAccountId = hesapId;
     return { ok: true };
   }

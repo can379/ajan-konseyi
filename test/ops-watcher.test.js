@@ -83,3 +83,81 @@ test("olgunlasma gerekcesi kaynakta belgeli", () => {
   assert.match(kaynak, /yarim veriyle islem baslatmak/i, "erken mudahale riski yazili olmali");
   assert.match(kaynak, /gorur gormez KUYRUGA alinir/i, "kayit kacirilmamali");
 });
+
+// ---- COK HESAPLI IZLEME (kullanici: zeynep haric tum hesaplar) ----
+
+function cokHesapPanel() {
+  let secili = null;
+  return {
+    secili: () => secili,
+    connected: () => true,
+    accounts: async () => [{ id: 1, name: "ANNE" }, { id: 2, name: "CanSelim" },
+      { id: 3, name: "zeynep" }, { id: 4, name: "WOOY" }],
+    switchAccount: async (id) => { secili = id; return { ok: true }; },
+    overview: async () => ({ returns: { items: [{ return_id: "R" + secili, acik: true, urunAdi: "Ürün" }] },
+      cases: null, work: null }),
+  };
+}
+
+test("zeynep HARIC tum hesaplar taranir", async () => {
+  const jobs = new OpsJobs();
+  const panel = cokHesapPanel();
+  const w = new OpsWatcher({ canseller: panel, jobs, store: null });
+  const r = await w.tumunuYokla();
+  assert.equal(r.hesaplar, 3, "dort hesaptan zeynep dislanmali");
+  const adlar = r.sonuclar.map((s) => s.hesap);
+  assert.deepEqual(adlar, ["ANNE", "CanSelim", "WOOY"]);
+  assert.ok(!adlar.includes("zeynep"), "zeynep hesabina HIC gecilmemeli");
+  // Isler dogru magazaya yazilmali (idempotens anahtari hesap iceriyor).
+  assert.deepEqual(jobs.liste().map((i) => i.hesap).sort(), ["ANNE", "CanSelim", "WOOY"]);
+});
+
+test("bir magaza hata verirse digerleri taranmaya devam eder", async () => {
+  const jobs = new OpsJobs();
+  const panel = cokHesapPanel();
+  panel.switchAccount = async (id) => { if (id === 2) throw new Error("panel kapalı"); return { ok: true }; };
+  const w = new OpsWatcher({ canseller: panel, jobs, store: null });
+  const r = await w.tumunuYokla();
+  assert.equal(r.hesaplar, 3, "hatali magaza da sonuclarda gorunmeli");
+  const hatali = r.sonuclar.find((s) => s.hesap === "CanSelim");
+  assert.equal(hatali.ok, false);
+  assert.match(hatali.hata, /panel kapalı/);
+  assert.ok(r.sonuclar.filter((s) => s.ok !== false).length >= 2, "digerleri taranmali");
+});
+
+test("haric listesi buyuk/kucuk harf ve bosluga takilmaz", () => {
+  const w = new OpsWatcher({ canseller: {}, jobs: new OpsJobs(), store: null, haric: ["zeynep"] });
+  assert.equal(w.haricMi("zeynep"), true);
+  assert.equal(w.haricMi("  ZEYNEP "), true);
+  assert.equal(w.haricMi("Zeynep"), true);
+  assert.equal(w.haricMi("zeynep2"), false, "benzer ad haric sayilmamali");
+  assert.equal(w.haricMi("ANNE"), false);
+});
+
+// ---- OTURUM KALICILIGI ----
+
+test("oturum diske 0600 ile yazilir, parola YAZILMAZ", async () => {
+  const fsm = await import("node:fs");
+  const os = await import("node:os");
+  const pathm = await import("node:path");
+  const { CanSellerAI } = await import("../src/cansellerai.js");
+  const dir = fsm.mkdtempSync(pathm.join(os.tmpdir(), "ops-oturum-"));
+  const c = new CanSellerAI({ dataRoot: dir, fetchImpl: async () => ({
+    ok: true, status: 200, headers: { getSetCookie: () => ["cansellerai_hub=GIZLI; HttpOnly"] }, json: async () => ({}) }) });
+  await c.login("admin", "PAROLA123");
+  const dosya = pathm.join(dir, "canseller-oturum.json");
+  assert.ok(fsm.existsSync(dosya), "oturum diske yazilmali");
+  const izin = (fsm.statSync(dosya).mode & 0o777).toString(8);
+  assert.equal(izin, "600", "yalniz kullanici okuyabilmeli");
+  const icerik = fsm.readFileSync(dosya, "utf8");
+  assert.ok(!icerik.includes("PAROLA123"), "PAROLA diske YAZILMAMALI");
+  // Yeniden baslatma benzetimi: yeni ornek oturumu geri yukler.
+  const c2 = new CanSellerAI({ dataRoot: dir });
+  assert.equal(c2.connected(), false, "yuklemeden once bagli olmamali");
+  c2.oturumuYukle();
+  assert.equal(c2.connected(), true, "uygulama yeniden baslayinca oturum surmeli");
+  // Cikis dosyayi da siler.
+  c2.cikis();
+  assert.ok(!fsm.existsSync(dosya), "cikista oturum dosyasi silinmeli");
+  fsm.rmSync(dir, { recursive: true, force: true });
+});
