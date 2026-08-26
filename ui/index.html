@@ -37,7 +37,18 @@
   <!-- ================= SOL KENAR ÇUBUĞU ================= -->
   <aside id="sidebar">
     <div class="side-head">
-      <div class="brand"><span class="logo"><svg><use href="#i-spark"/></svg></span> Ajan Konseyi</div>
+      <div class="bolum-secici">
+        <button id="btn-bolum" class="bolum-dugme" aria-expanded="false" aria-haspopup="menu">
+          <span class="logo" aria-hidden="true"><svg><use href="#i-spark"/></svg></span>
+          <span id="bolum-ad">Sohbet</span><span class="bolum-ok" aria-hidden="true">⌄</span>
+        </button>
+        <div id="bolum-menu" class="bolum-menu" role="menu" hidden>
+          <button role="menuitem" data-bolum="chat"><b>Sohbet</b><small>Konsey ile konuş, soru sor</small></button>
+          <button role="menuitem" data-bolum="kod"><b>Proje kodlama</b><small>Projelerde geliştir, test et, yayınla</small></button>
+          <button role="menuitem" data-bolum="images"><b>Görsel</b><small>Görsel üret ve düzenle</small></button>
+          <button role="menuitem" data-bolum="ops"><b>Mağaza Operasyonu</b><small>eBay/Amazon iade, dava, sipariş</small></button>
+        </div>
+      </div>
       <button id="btn-side-close" class="icon-btn" title="Kenar çubuğunu gizle">«</button>
     </div>
 
@@ -50,8 +61,6 @@
         </label>
         <div id="conversation-list" aria-live="polite"></div>
       </section>
-      <button id="btn-image-studio" class="side-nav-item"><span><svg><use href="#i-image"/></svg></span> Görsel Oluştur</button>
-      <button id="btn-ops" class="side-nav-item"><span><svg><use href="#i-panel"/></svg></span> Mağaza Operasyonu</button>
     </nav>
 
     <div id="side-projeler" class="side-section grow project-history-section">
@@ -131,17 +140,6 @@
   <main id="main">
     <div id="topbar">
       <button id="btn-sidebar" class="icon-btn top-icon sidebar-icon" title="Kenar çubuğu"><svg><use href="#i-panel"/></svg></button>
-      <div class="bolum-secici">
-        <button id="btn-bolum" class="bolum-dugme" aria-expanded="false" aria-haspopup="menu">
-          <span id="bolum-ad">Sohbet</span><span class="bolum-ok">⌄</span>
-        </button>
-        <div id="bolum-menu" class="bolum-menu" role="menu" hidden>
-          <button role="menuitem" data-bolum="chat"><b>Sohbet</b><small>Konsey ile konuş, soru sor</small></button>
-          <button role="menuitem" data-bolum="kod"><b>Proje kodlama</b><small>Projelerde geliştir, test et, yayınla</small></button>
-          <button role="menuitem" data-bolum="images"><b>Görsel</b><small>Görsel üret ve düzenle</small></button>
-          <button role="menuitem" data-bolum="ops"><b>Mağaza Operasyonu</b><small>eBay/Amazon iade, dava, sipariş</small></button>
-        </div>
-      </div>
       <div id="tb-project" class="pill">Proje seçilmedi</div>
       <div class="project-app-wrap">
         <button id="btn-open-project-app" class="icon-btn" title="Projeyi uygulamada aç" aria-expanded="false">⌄</button>

@@ -167,7 +167,9 @@ function showMainView(view) {
   if (opsEkran) opsEkran.hidden = !ops;
   $("workspace").hidden = studio || ops;
   $("composer-wrap").hidden = studio || ops;
-  $("btn-image-studio").classList.toggle("active", studio);
+  // Bu dugmeler kenar cubugundan kaldirildi (bolum anahtari onlarin yerini
+  // aldi); eski surumlerde duruyor olabilir diye korumali erisiliyor.
+  $("btn-image-studio")?.classList.toggle("active", studio);
   $("btn-ops")?.classList.toggle("active", ops);
   if (studio) renderImageStudio();
   if (ops) renderOpsEkran();
@@ -1965,7 +1967,7 @@ $("btn-new").addEventListener("click", async () => {
   }
   selectRun(null); showMainView("chat"); autoCloseSidebar(); render(); $("f-request").focus();
 });
-$('btn-image-studio').addEventListener('click', () => { showMainView('images'); autoCloseSidebar(); });
+$('btn-image-studio')?.addEventListener('click', () => { showMainView('images'); autoCloseSidebar(); });
 // Dinleyici eklenmemisti: dugme duruyordu ama tiklayinca hicbir sey olmuyordu
 // (kullanici bildirdi: "operasyon merkezi tiklayinca acilmiyor").
 $('btn-ops')?.addEventListener('click', () => { showMainView('ops'); autoCloseSidebar(); });
@@ -1975,6 +1977,13 @@ $("btn-bolum")?.addEventListener("click", (e) => {
   e.stopPropagation();
   const menu = $("bolum-menu");
   menu.hidden = !menu.hidden;
+  if (!menu.hidden) {
+    // Fixed konum: dugmenin hemen altina hizala. Kenar cubugu tasmasi
+    // menuyu kesiyordu, bu yuzden akistan cikariliyor.
+    const r = $("btn-bolum").getBoundingClientRect();
+    menu.style.top = `${Math.round(r.bottom + 6)}px`;
+    menu.style.left = `${Math.round(r.left)}px`;
+  }
   $("btn-bolum").setAttribute("aria-expanded", String(!menu.hidden));
 });
 $("bolum-menu")?.addEventListener("click", (e) => {

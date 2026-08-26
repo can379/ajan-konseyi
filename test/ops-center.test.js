@@ -78,7 +78,10 @@ test("operasyon KENDI ANA EKRANI; parola formda birakilmaz", () => {
   // Kullanici: "operasyon bolumunun yeri cok sacma" — arac panelinden cikip
   // sohbetle ayni duzeyde bir ana ekran oldu.
   assert.match(html, /id="ops-screen"/, "ana ekran olmali");
-  assert.match(html, /id="btn-ops"/, "kenar cubugunda girisi olmali");
+  // Giris artik sol ustteki BOLUM ANAHTARINDA (Codex'teki gibi). Kenar
+  // cubugundaki ayri dugme kaldirildi: kullanici "goz yoran kalabalik" dedi.
+  assert.match(html, /data-bolum="ops"/, "bölüm anahtarında girişi olmalı");
+  assert.ok(!/id="btn-ops"/.test(html), "kenar çubuğunda ayrı düğme kalmamalı");
   assert.ok(!/data-tool-tab="ops"/.test(html), "arac sekmesi kalmamali");
   assert.ok(!/id="tool-ops"/.test(html), "arac paneli surumu kalmamali");
   assert.match(html, /parolanız kaydedilmez/i, "kullaniciya sinir acikca soylenmeli");
