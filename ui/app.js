@@ -2107,7 +2107,8 @@ async function renderOpsRuns() {
         <span class="ops-run-sayi">${t.bulgu} bulgu · ${t.adim} adım</span>
         <time>${esc(new Date(t.createdAt).toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }))}</time>
       </button>`).join("")
-    : '<div class="muted">Henüz gözlem turu yok.</div>';
+    : opsBos("🗂", "Henüz gözlem turu yok",
+        "Tamamlanan turlar zaman çizelgesi, kanıt görüntüleri ve planlarıyla burada durur.");
 }
 
 async function opsTurAc(id) {
@@ -2178,9 +2179,12 @@ async function renderOpsEkran() {
   renderOpsIzleyici();
   renderOpsIsler();
   renderOpsRuns();
-  renderOpsHub();
-  renderOpsMetrik();
-  renderOpsGuvenlik();
+  // Her bolum kendi hatasini yutar: birinde eleman eksik olunca gerisi
+  // cizilmeden kaliyordu (ops-connect id yerine class oldugu icin
+  // renderOpsHub patliyor ve metrik seridi hic gorunmuyordu).
+  for (const ciz of [renderOpsHub, renderOpsMetrik, renderOpsGuvenlik]) {
+    Promise.resolve().then(ciz).catch((hata) => console.warn("ops bölümü çizilemedi:", hata));
+  }
 }
 
 // Gozlemlenebilirlik seridi: "bu sistem iyi calisiyor mu?" sorusunun
@@ -2190,13 +2194,14 @@ async function renderOpsMetrik() {
   const kutu = $("ops-metrik");
   if (!kutu) return;
   let m;
-  try { m = await api("/api/rdp/metrik"); } catch { kutu.innerHTML = ""; return; }
+  try { m = await (await fetch("/api/rdp/metrik")).json(); }
+  catch { kutu.innerHTML = ""; return; }
   const ky = m.kuzeyYildizi || {};
   kutu.innerHTML = `
     <div class="ops-metrik-yildiz" title="${esc(ky.aciklama || "")}">
-      <b>${esc(ky.metin || "—")}</b>
-      <span>${esc(ky.ad || "")}</span>
-      <small>${ky.payda ? `${ky.pay}/${ky.payda} iş` : "henüz iş denenmedi"}</small>
+      <span class="ops-metrik-etiket">${esc(ky.ad || "")}</span>
+      <b${ky.deger == null ? ' class="bos"' : ""}>${ky.deger == null ? "—" : esc(ky.metin)}</b>
+      <small>${ky.payda ? `${ky.pay}/${ky.payda} iş kanıtla bitti` : "henüz iş denenmedi"}</small>
     </div>
     <div class="ops-metrik-satirlar">
       ${(m.satirlar || []).map((r) => `
@@ -2213,7 +2218,7 @@ async function renderOpsGuvenlik() {
   const dugme = $("ops-acil");
   if (!serit) return;
   let g;
-  try { g = await api("/api/rdp/guvenlik"); } catch { return; }
+  try { g = await (await fetch("/api/rdp/guvenlik")).json(); } catch { return; }
   const kapali = (g.kesiciler || []).filter((k) => k.kapali);
   const parcalar = [];
   if (g.acilDurdurma?.aktif) parcalar.push(`<b>Acil durdurma etkin</b> — ${esc(g.acilDurdurma.sebep || "")}. Hiçbir iş yürütülmüyor.`);
@@ -2249,7 +2254,7 @@ function opsUyeleriDoldur() {
 
 async function opsCihazTara() {
   const host = $("ops-server-list");
-  host.innerHTML = '<div class="muted">Windows App okunuyor…</div>';
+  host.innerHTML = opsBos("⏳", "Sunucular okunuyor…", "Windows App'in kayıtlı cihaz listesi taranıyor.");
   try {
     const veri = await (await fetch("/api/rdp/devices")).json();
     if (veri.error) throw new Error(veri.error);
@@ -2259,6 +2264,13 @@ async function opsCihazTara() {
     return;
   }
   opsDurumCiz();
+}
+
+// Bos bolum kutusu: ciplak metin yerine ne bekledigini soyleyen bir kart.
+// Sayfa bosken yarim kalmis gibi gorunuyordu.
+function opsBos(ikon, baslik, aciklama) {
+  return `<div class="ops-bos"><span class="ops-bos-ikon">${ikon}</span>
+    <div><b>${esc(baslik)}</b>${esc(aciklama)}</div></div>`;
 }
 
 async function opsDurumCiz() {
@@ -2285,7 +2297,8 @@ async function opsDurumCiz() {
       </div>
       <button data-ops-observe="${esc(d.name)}" ${durum.aktif ? "disabled" : ""}>${calisiyor ? "sürüyor…" : "Gözlemle"}</button>
     </article>`;
-  }).join("") : '<div class="muted" style="padding:20px">Sunucu bulunamadı. Windows App açık mı? "Sunucuları tara"ya basın.</div>';
+  }).join("") : opsBos("🖥", "Sunucu bulunamadı",
+      "Windows App açık mı? Kayıtlı cihazlar okunamadı — “Sunucuları tara”ya basın.");
   // Ust sayaclar
   const toplamBulgu = (durum.sunucular || []).reduce((t, s) => t + (s.findings || []).length, 0);
   $("ops-sayac-sunucu").textContent = opsSunucular.length || "—";
@@ -2330,14 +2343,16 @@ async function opsDurumCiz() {
         <a href="#" data-ops-run="${esc(durum.aktif.runId)}">sohbette izle →</a></div>`
     : (durum.gecmis?.length
       ? `<div class="muted">Şu an kontrol edilen sunucu yok. Son tur: <b>${esc(durum.gecmis.at(-1).target)}</b> · ${esc(durum.gecmis.at(-1).sonuc)}</div>`
-      : '<div class="muted">Henüz gözlem yapılmadı.</div>');
+      : opsBos("👀", "Henüz gözlem yapılmadı",
+          "Bir sunucu kartındaki “Gözlemle”ye basın ya da yukarıya doğrudan komut yazın."));
 
   const bulgular = (durum.sunucular || []).flatMap((s) => (s.findings || []).map((b) => ({ ...b, sunucu: s.target_device, ekran: s.last_screenshot })));
   $("ops-findings-list").innerHTML = bulgular.length
     ? bulgular.slice(-40).reverse().map((b) => `<div class="ops-finding onem-${esc(b.onem || "dusuk")}">
         <code>${esc(b.sunucu)}</code><div><b>${esc(b.tur || "kayıt")}</b><small>${esc(b.ozet || "")}</small></div>
         <time>${b.at ? esc(new Date(b.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })) : ""}</time></div>`).join("")
-    : '<div class="muted">Bulgu yok.</div>';
+    : opsBos("🔎", "Henüz bulgu yok",
+        "Bir sunucuya bağlanıp gözlem turu başlatın; iade, dava ve sipariş sorunları burada listelenir.");
 }
 
 $("ops-approval")?.addEventListener("click", async (e) => {
@@ -2379,7 +2394,8 @@ async function renderOpsIsler() {
         <span class="ops-is-durum">${esc(IS_ETIKET[i.durum] || i.durum)}</span>
       </div>`).join("")
       + (veri.uzlastirma ? `<div class="ops-uzlastirma">⚠ ${veri.uzlastirma} iş belirsiz durumda — dış sistemde ne olduğu okunmadan tekrar denenmeyecek.</div>` : "")
-    : '<div class="muted" style="padding:14px">Kuyrukta iş yok.</div>';
+    : opsBos("📋", "Kuyrukta iş yok",
+        "Bulunan her sorun burada tek bir işe dönüşür. Aynı iş ikinci kez açılmaz.");
 }
 
 // Yetkiler: hangi is turu yurutulebilir? Genel faz sinirini yukseltmeden

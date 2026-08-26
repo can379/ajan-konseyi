@@ -1859,3 +1859,37 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-uyari{padding:8px 13px;border-radius:10px;font-size:12.5px;font-weight:600}
 .ops-uyari.belirsiz{background:#ff6b5e14;border:1px solid #ff6b5e44;color:#ff9c93}
 .ops-uyari.bekleyen{background:#f0b94914;border:1px solid #f0b94944;color:#d8c79a}
+
+/* Operasyon: gozlemlenebilirlik seridi ve acil durdurma (konsey karari) */
+.ops-metrik { display: flex; gap: 14px; align-items: stretch; margin: 12px 0; flex-wrap: wrap; }
+.ops-metrik-yildiz { display: flex; flex-direction: column; justify-content: center;
+  padding: 14px 18px; border-radius: 14px; min-width: 190px;
+  background: linear-gradient(140deg, rgba(90,150,255,.16), rgba(90,150,255,.04));
+  border: 1px solid rgba(120,160,255,.25); }
+.ops-metrik-etiket{font-size:11px;letter-spacing:.04em;text-transform:uppercase;opacity:.7}
+.ops-metrik-yildiz b{font-size:34px;font-weight:800;line-height:1.05;margin:4px 0 2px;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.ops-metrik-yildiz b.bos{opacity:.35}
+.ops-metrik-yildiz small{font-size:11.5px;opacity:.65}
+.ops-metrik-satirlar { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px; flex: 1; min-width: 260px; }
+.ops-metrik-satir { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,.035);
+  border: 1px solid rgba(255,255,255,.06); font-size: 12px; }
+.ops-metrik-satir b { font-size: 14px; }
+.ops-metrik-satir.uyari { border-color: rgba(255,180,80,.4); background: rgba(255,180,80,.09); }
+.ops-acil-serit { margin: 10px 0; padding: 11px 14px; border-radius: 12px; font-size: 13px;
+  background: rgba(255,90,90,.1); border: 1px solid rgba(255,90,90,.35); }
+.ops-acil-serit div + div { margin-top: 6px; }
+button.ops-acil.etkin { background: rgba(255,90,90,.18); border-color: rgba(255,90,90,.5); }
+
+/* Bos bolumler: ciplak metin yerine acikca "burasi henuz bos" kutusu.
+   Bosken sayfa yarim kalmis gibi gorunuyordu; kutu hem hizayi korur hem
+   kullaniciya ne bekledigini soyler. */
+.ops-bos{display:flex;align-items:center;gap:10px;padding:16px 18px;border-radius:14px;
+  border:1px dashed var(--border);background:linear-gradient(160deg,#14181733,#0f131233);
+  color:var(--dim2);font-size:12.5px;line-height:1.5}
+.ops-bos b{display:block;color:var(--fg);font-size:13px;font-weight:600;margin-bottom:2px}
+.ops-bos-ikon{font-size:18px;opacity:.55;flex:none}
+/* Bos metrik/serit kutulari hic cizilmesin — bos cerceve birakmasinlar. */
+.ops-metrik:empty,.ops-faz-durum:empty,.ops-izleyici:empty,.ops-komut-sonuc:empty{display:none}
