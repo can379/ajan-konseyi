@@ -2135,6 +2135,7 @@ async function renderOpsEkran() {
     else { clearInterval(opsTimer); opsTimer = null; }
   }, 3000);
   opsUyeleriDoldur();
+  renderOpsIsler();
   renderOpsRuns();
   renderOpsHub();
 }
@@ -2251,6 +2252,33 @@ $("ops-approval")?.addEventListener("click", async (e) => {
   $("ops-approval").hidden = true;
   opsDurumCiz();
 });
+// Is kuyrugu: her sorun tek is. "belirsiz" isler ayri vurgulanir — bunlar
+// otomatik tekrarlanmaz, once dis sistemde ne oldugu okunmalidir.
+const IS_ETIKET = { kuyrukta: "kuyrukta", kiralandi: "kiralandı", calisiyor: "çalışıyor",
+  "sayfa-bekliyor": "sayfa bekliyor", "kullanici-bekliyor": "onay bekliyor", dogrulaniyor: "doğrulanıyor",
+  tamam: "tamam", "yeniden-denenebilir": "yeniden denenecek", "kalici-hata": "kalıcı hata",
+  belirsiz: "BELİRSİZ — uzlaştırma", iptal: "iptal" };
+
+async function renderOpsIsler() {
+  const host = $("ops-job-list");
+  if (!host) return;
+  let veri = { isler: [] };
+  try { veri = await (await fetch("/api/rdp/jobs")).json(); } catch { /* uc yoksa bolum bos kalir */ }
+  host.innerHTML = veri.isler?.length
+    ? veri.isler.slice(0, 40).map((i) => `<div class="ops-is durum-${esc(i.durum)}">
+        <span class="ops-is-tur">${esc(i.isTuru.replace(/_/g, " "))}</span>
+        <div class="ops-is-orta">
+          <b>${esc(i.hesap)} · ${esc(i.varlikId)}</b>
+          <small>${esc(String(i.veri?.ozet || "").slice(0, 110))}</small>
+          ${i.hata ? `<small class="ops-is-hata">${esc(i.hata)}</small>` : ""}
+        </div>
+        <span class="ops-is-risk r${i.risk}">risk ${i.risk}</span>
+        <span class="ops-is-durum">${esc(IS_ETIKET[i.durum] || i.durum)}</span>
+      </div>`).join("")
+      + (veri.uzlastirma ? `<div class="ops-uzlastirma">⚠ ${veri.uzlastirma} iş belirsiz durumda — dış sistemde ne olduğu okunmadan tekrar denenmeyecek.</div>` : "")
+    : '<div class="muted" style="padding:14px">Kuyrukta iş yok.</div>';
+}
+
 $("ops-devices")?.addEventListener("click", () => opsCihazTara());
 $("ops-stop")?.addEventListener("click", async () => { await fetch("/api/rdp/stop", { method: "POST" }); opsDurumCiz(); });
 $("ops-server-list")?.addEventListener("click", async (e) => {
@@ -2336,6 +2364,7 @@ async function opsYukle() {
       </section>`).join("") : '<div class="muted" style="padding:18px">Açık iş görünmüyor.</div>');
   host._gruplar = gruplar;
   renderOpsRuns();
+  renderOpsIsler();
   $("ops-meta").textContent = `${new Date(opsVeri.at).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" })} itibarıyla`;
 }
 

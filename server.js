@@ -7,6 +7,7 @@ import { SpeechToText } from "./src/speech.js";
 import { CanSellerAI, temizleKayit } from "./src/cansellerai.js";
 import { RdpController } from "./src/rdpController.js";
 import { OpsRun } from "./src/opsRun.js";
+import { OpsJobs } from "./src/opsJobs.js";
 import { Orchestrator } from "./src/orchestrator.js";
 import { Config, ROLES } from "./src/config.js";
 import { copyCheckpoint } from "./src/checkpoints.js";
@@ -43,7 +44,8 @@ const canseller = new CanSellerAI();
 const config = new Config(DATA_ROOT);
 const orch = new Orchestrator(store, DATA_ROOT, config);
 const rdp = new RdpController(DATA_ROOT, { computerBridge: orch.computerBridge });
-const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config });
+const opsJobs = new OpsJobs();
+const opsRun = new OpsRun({ controller: rdp, orchestrator: orch, store, config, jobs: opsJobs });
 openRouterStatus().then((status)=>{
   let members=config.data.members.filter(member=>member.provider!=="openrouter");
   if(status.configured)members.push({id:"m-ox-alpha",name:"Ox Alpha",provider:"openrouter",role:"arastirmaci",model:"stealth/ox-alpha",effort:"",enabled:true});
@@ -767,6 +769,9 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { turlar });
     }
 
+    if (req.method === "GET" && p === "/api/rdp/jobs") {
+      return json(res, 200, { isler: opsJobs.liste(), uzlastirma: opsJobs.uzlastirmaBekleyenler().length });
+    }
     if (req.method === "GET" && p === "/api/rdp/state") {
       return json(res, 200, opsRun.durum());
     }

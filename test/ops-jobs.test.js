@@ -124,3 +124,35 @@ test("konseyin iki temel karari kaynakta belgeli", () => {
   assert.match(kaynak, /Dugmeye bastim' basari degildir/, "kanit sozlesmesi yazili olmali");
   assert.match(kaynak, /IKINCI DENEME YAPILMAZ/, "belirsizde tekrar yasagi yazili olmali");
 });
+
+// ---- Bulgu -> is donusumu ----
+
+test("kimliksiz bulgu ise donusturulmez (idempotens anahtari sart)", async () => {
+  const { OpsRun } = await import("../src/opsRun.js");
+  const o = Object.create(OpsRun.prototype);
+  // eBay siparis numarasi
+  assert.equal(o._varlikKimligi({ ozet: "25-15054-69020 numaralı sipariş bekliyor" }), "25-15054-69020");
+  // Amazon siparis numarasi
+  assert.equal(o._varlikKimligi({ ozet: "113-9029894-9385831 iade edilecek" }), "113-9029894-9385831");
+  // Iade numarasi
+  assert.equal(o._varlikKimligi({ ozet: "Return ID 5327577132 açık" }), "5327577132");
+  // Kimliksiz bulgu -> null (is acilmaz)
+  assert.equal(o._varlikKimligi({ ozet: "eBay kutusunda 5 okunmamış mesaj var" }), null);
+});
+
+test("bulgular ise donusurken faz siniri uygulanir", () => {
+  const ops = oku("src/opsRun.js");
+  assert.match(ops, /this\.jobs\.ekle\(/, "bulgu ise donusmeli");
+  assert.match(ops, /risk \d+ iş onay olmadan yürütülmez|risk \$\{bulgu\.risk\} iş onay olmadan yürütülmez/,
+    "risk 2+ isler onay bekliyor olmali");
+  assert.match(ops, /ikinci kez açılmadı/, "yinelenen is kullaniciya bildirilmeli");
+  assert.match(ops, /if \(!bulgu\.isTuru \|\| bulgu\.isKimlik\) continue/, "ayni bulgu tekrar ise donusmemeli");
+});
+
+test("arayuz belirsiz isleri ayri vurgular", () => {
+  const app = oku("ui/app.js");
+  assert.match(app, /BELİRSİZ — uzlaştırma/, "belirsiz durum ayirt edilmeli");
+  assert.match(app, /dış sistemde ne olduğu okunmadan tekrar denenmeyecek/,
+    "kullaniciya tekrar yasagi soylenmeli");
+  assert.match(oku("ui/index.html"), /aynı iş ikinci kez açılmaz/, "kural ekranda yazili olmali");
+});

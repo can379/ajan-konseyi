@@ -1787,3 +1787,22 @@ details.step-row>summary:hover{background:#1d2220;border-radius:7px}
 .ops-kart button:disabled{opacity:.45}
 
 .ops-current:empty{display:none}
+
+/* İş kuyruğu */
+#ops-job-list{display:grid;gap:5px}
+.ops-is{display:grid;grid-template-columns:auto 1fr auto auto;gap:12px;align-items:center;
+  padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface2);font-size:12.5px}
+.ops-is-tur{color:var(--dim2);font-size:11px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+.ops-is-orta{min-width:0}
+.ops-is-orta small{display:block;color:var(--dim2);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ops-is-hata{color:var(--err) !important}
+.ops-is-risk{font-size:10.5px;padding:2px 7px;border-radius:999px;background:#2a2e2b;color:var(--dim2)}
+.ops-is-risk.r3,.ops-is-risk.r4{background:#ff6b5e1a;color:#ff6b5e}
+.ops-is-durum{font-size:11px;color:var(--dim2);white-space:nowrap}
+.ops-is.durum-tamam{border-color:#2bc9b833}
+.ops-is.durum-tamam .ops-is-durum{color:var(--ok)}
+.ops-is.durum-belirsiz{border-color:#ff6b5e66;background:#ff6b5e0d}
+.ops-is.durum-belirsiz .ops-is-durum{color:var(--err);font-weight:700}
+.ops-is.durum-kullanici-bekliyor{border-color:#f0b94944}
+.ops-is.durum-kullanici-bekliyor .ops-is-durum{color:#d8c79a}
+.ops-uzlastirma{margin-top:8px;padding:9px 12px;border-radius:9px;background:#ff6b5e12;border:1px solid #ff6b5e33;color:#ff9c93;font-size:12px}

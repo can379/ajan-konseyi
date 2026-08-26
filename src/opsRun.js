@@ -92,7 +92,8 @@ function jsonAyikla(metin) {
 }
 
 export class OpsRun {
-  constructor({ controller, orchestrator, store, config }) {
+  constructor({ controller, orchestrator, store, config, jobs = null }) {
+    this.jobs = jobs;
     this.controller = controller;
     this.orch = orchestrator;
     this.store = store;
@@ -268,6 +269,29 @@ export class OpsRun {
       }
       this.store.updateRun(run);
 
+      // 9c) Bulgular ISE donusur (kuyruk). Idempotens anahtari sayesinde ayni
+      // sorun icin ikinci is ACILMAZ — cift siparis/cift iade buradan onlenir.
+      // Faz siniri: risk 2+ isler "kullanici bekliyor" olarak acilir, otomatik
+      // yurutulmez.
+      if (this.jobs) {
+        for (const bulgu of this.controller.durum(hedef)?.findings || []) {
+          if (!bulgu.isTuru || bulgu.isKimlik) continue;
+          const varlik = this._varlikKimligi(bulgu);
+          if (!varlik) continue;   // kimliksiz bulgu ise donusturulemez
+          const sonuc = this.jobs.ekle({
+            isTuru: bulgu.isTuru, hesap: hedef, varlikId: varlik,
+            risk: bulgu.risk ?? 3,
+            veri: { ozet: bulgu.ozet, onem: bulgu.onem, plan: bulgu.plan || null, tur: run.id },
+          });
+          bulgu.isKimlik = sonuc.is?.id || null;
+          if (sonuc.ok && (bulgu.risk ?? 3) > FAZ1_UST_SINIR) {
+            this.jobs.kullaniciBekle(sonuc.is.id, `Faz 1: risk ${bulgu.risk} iş onay olmadan yürütülmez`);
+          }
+          if (sonuc.yinelenen) bilgi(`↺ Bu iş zaten kuyrukta (${sonuc.is.durum}); ikinci kez açılmadı.`);
+        }
+        this.store.updateRun(run);
+      }
+
       // 10) Oturumu kapat ve cihaz listesine donuldugunu dogrula.
       const kapanis = await this.controller.kapat(hedef);
       bilgi(kapanis.connection_state === "bitti"
@@ -335,6 +359,18 @@ export class OpsRun {
       toplanan.push(`${adim.hedef || adim.eylem}: ${adim.beklenen || ""}`);
     }
     return { toplanan, sonEkran };
+  }
+
+  // Bulgudan VARLIK KIMLIGI cikar (siparis no, iade no, dava no). Kimlik
+  // yoksa is ACILMAZ: idempotens anahtari olmadan cift islem onlenemez.
+  _varlikKimligi(bulgu) {
+    const metin = `${bulgu?.ozet || ""} ${JSON.stringify(bulgu?.plan || {})}`;
+    // eBay siparis: 12-34567-89012 · Amazon siparis: 123-1234567-1234567
+    const amazon = metin.match(/\b\d{3}-\d{7}-\d{7}\b/)?.[0];
+    const ebay = metin.match(/\b\d{2}-\d{5}-\d{5}\b/)?.[0];
+    const iade = metin.match(/[Rr]eturn\s*ID\s*:?\s*(\d{6,})/)?.[1] || metin.match(/\biade\s*(?:no|numarası)\s*:?\s*(\d{6,})/i)?.[1];
+    const dava = metin.match(/\b(?:case|dava)\s*(?:id|no)?\s*:?\s*([\w-]{6,})/i)?.[1];
+    return ebay || amazon || iade || dava || null;
   }
 
   // Yer imi konumu: uzak masaustu icerigi yerel AX agacinda GORUNMEZ
