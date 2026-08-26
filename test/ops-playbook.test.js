@@ -329,3 +329,20 @@ test("tur sonunda TAM OZET verilir ve yapilamayanlar da yazilir", () => {
   assert.match(ops, /\*\*Yapamadıklarım\*\*/, "yapilamayanlar ayri bolum olmali");
   assert.match(ops, /tur özeti/, "ozet kullaniciya dusmeli");
 });
+
+// ---- SISTEM BILGISI (CanSellerAI / eBay / Amazon) ----
+test("ajan sistem gerceklerini biliyor", async () => {
+  const { SISTEM_BILGISI, isYonergesi } = await import("../src/opsPlaybook.js");
+  const hepsi = JSON.stringify(SISTEM_BILGISI);
+  // Bu projede pahaliya mal olmus somut gercekler.
+  assert.match(hepsi, /Only N left in stock/, "Amazon adedinin nereden okunacagi");
+  assert.match(hepsi, /BOL STOK/, "amazon_qty null'un anlami");
+  assert.match(hepsi, /kardes varyanta yonlendirir/, "varyant tuzagi");
+  assert.match(hepsi, /AddFixedPriceItem KULLANILMAZ/, "kota havuzu kurali");
+  assert.match(hepsi, /legacy/, "ilan numarasi bicimi");
+  assert.match(hepsi, /Post-Order.*kapandi/, "kapali API");
+  assert.match(hepsi, /price_multiplier/, "fiyat formulu");
+  assert.match(hepsi, /CAPTCHA ASLA cozulmez/, "guvenlik siniri");
+  // Yonergeye gercekten giriyor mu?
+  assert.match(isYonergesi("amazon_iade"), /SİSTEM BİLGİSİ \(CanSellerAI \/ eBay \/ Amazon\)/);
+});
