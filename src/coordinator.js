@@ -5,21 +5,30 @@ import { providerAllowed } from "./providerPolicy.js";
 // "beyin". Hangi yapay zekânın (claude/codex/antigravity) koordinatör olacağına
 // KULLANICI karar verir; seçilen sağlayıcının CLI'ı abonelik oturumuyla kullanılır.
 export class Coordinator {
-  constructor(store, providers, getCfg) {
+  constructor(store, providers, getCfg, getRouterCfg = null) {
     this.store = store;
     this.providers = providers;   // {claude, codex, antigravity} adaptörleri
     this.getCfg = getCfg;         // () => config.data.coordinator
+    // ROUTER AYRI BIR ROLDUR ve koordinatorden ONCE calisir. Yonlendirme kisa
+    // ve ucuz bir istir; agir koordinator modelini her mesaj icin harcamak
+    // anlamsiz. Kullanici router'in hangi saglayici/model olacagini secer
+    // (varsayilan Antigravity).
+    this.getRouterCfg = getRouterCfg; // () => config.data.router
   }
 
-  agentFor(ctx = {}) {
-    const cfg = this.getCfg?.() || {};
+  cfgFor(rol) {
+    return (rol === "router" ? this.getRouterCfg?.() : this.getCfg?.()) || {};
+  }
+
+  agentFor(ctx = {}, rol = "koordinator") {
+    const cfg = this.cfgFor(rol);
     const available = Object.entries(this.providers)
       .filter(([provider, agent]) => providerAllowed(ctx, provider) && agent?.isAvailable?.())
       .map(([, agent]) => agent);
     const configured = providerAllowed(ctx, cfg.provider) ? this.providers[cfg.provider] : null;
     if (configured?.isAvailable?.()) return configured;
     if (available.length) return available[0];
-    throw new Error("Koordinatör için izinli ve kullanılabilir sağlayıcı yok");
+    throw new Error(`${rol === "router" ? "Router" : "Koordinatör"} için izinli ve kullanılabilir sağlayıcı yok`);
   }
 
   // orkestratörün oturum/durdurma erişimi için
@@ -28,29 +37,38 @@ export class Coordinator {
   }
 
   coordKey(ctx) {
-    return (ctx?.runId || "global") + "#koord";
+    return (ctx?.runId || "global") + "#koordinator";
   }
 
   resetSession(runId) {
-    const key = (runId || "global") + "#koord";
-    for (const p of Object.values(this.providers)) p.sessions.delete(key);
+    // Iki rolun de oturumu temizlenir: router ve koordinator ayri anahtar
+    // kullaniyor, biri unutulursa eski baglam sizip kaliyor.
+    for (const key of [(runId || "global") + "#koord",
+                       (runId || "global") + "#koordinator",
+                       (runId || "global") + "#router"]) {
+      for (const p of Object.values(this.providers)) p.sessions.delete(key);
+    }
   }
 
   // ctx: {runId, stopCheck, onUsage} — koşuya özgü bağlam her çağrıda gelir;
   // örnek durumu tutulmaz, paralel koşular birbirini ezemez (konsey bulgusu #1).
-  async askJson(prompt, label, ctx = {}) {
-    const cfg = this.getCfg?.() || {};
+  async askJson(prompt, label, ctx = {}, rol = "koordinator") {
+    const cfg = this.cfgFor(rol);
+    const rolAd = rol === "router" ? "router" : "koordinator";
     const opts = {
       label,
-      sessionKey: this.coordKey(ctx),
+      // Router'in oturumu koordinatorden AYRI: iki rol birbirinin baglamini
+      // kirletmesin (router her mesajda kisa bir karar verir, koordinator
+      // uzun bir isi yurutur).
+      sessionKey: (ctx?.runId || "global") + "#" + rolAd,
       model: cfg.model || undefined,
       effort: cfg.effort || undefined,
       shouldStop: ctx.stopCheck || undefined,
       onUsage: ctx.onUsage || undefined,
     };
-    this.store.setAgentStatus("koordinator", "busy", label || "");
+    this.store.setAgentStatus(rolAd, "busy", label || "");
     try {
-      const agent = this.agentFor(ctx);
+      const agent = this.agentFor(ctx, rol);
       // AG KESINTISI koordinatoru oldurmesin (canli iki kez goruldu: uc
       // gorev bitmis, kapanis sentezi ENOTFOUND ile copmus). Iki durum var:
       // a) Gercek kesinti: agBekle baglanti donene kadar bekler.
@@ -68,21 +86,21 @@ export class Coordinator {
         return res;
       };
       let res = await gonder(prompt);
-      if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
+      if (!res.ok) throw new Error(`${rol === "router" ? "Router" : "Koordinatör"} çağrısı başarısız: ${res.error}`);
       let json = extractJson(res.text);
       if (!json) {
         res = await gonder(
           "Önceki yanıtın geçerli JSON içermiyordu. Aynı içeriği, açıklama olmadan YALNIZCA tek bir JSON nesnesi olarak tekrar ver."
         );
-        if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
+        if (!res.ok) throw new Error(`${rol === "router" ? "Router" : "Koordinatör"} çağrısı başarısız: ${res.error}`);
         json = extractJson(res.text);
       }
-      if (!json) throw new Error("Koordinatör geçerli JSON üretemedi: " + truncate(res.text, 300));
-      this.store.setAgentStatus("koordinator", "idle");
+      if (!json) throw new Error(`${rol === "router" ? "Router" : "Koordinatör"} geçerli JSON üretemedi: ` + truncate(res.text, 300));
+      this.store.setAgentStatus(rolAd, "idle");
       return json;
     } catch (err) {
       const stopped = ctx.stopCheck?.() === true;
-      this.store.setAgentStatus("koordinator", stopped ? "idle" : "error", stopped ? "" : String(err.message).slice(0, 80));
+      this.store.setAgentStatus(rolAd, stopped ? "idle" : "error", stopped ? "" : String(err.message).slice(0, 80));
       throw err;
     }
   }
@@ -131,7 +149,9 @@ MODEL KADEMESİ ("tier") — işin ağırlığına göre seç, gereğinden güç
 
 YALNIZCA şu şemada tek bir JSON nesnesi döndür:
 {"approach": "quick|pair|council", "member_id": "üye id'si", "reviewer_id": "pair icin denetci uye id'si", "mode": "discussion|split|code", "tier": "fast|balanced|strong", "reason": "tek cümle (Türkçe)"}`;
-    return this.askJson(prompt, "yönlendirme", ctx);
+    // Yonlendirme ROUTER rolunde calisir: koordinatorden ONCE ve onun agir
+    // modelini harcamadan.
+    return this.askJson(prompt, "yönlendirme", ctx, "router");
   }
 
   // ---- Planlama ----

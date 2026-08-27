@@ -692,6 +692,17 @@ function routerCiz() {
   if (!$("settings-screen")?.hidden) renderAgentConfig();
 }
 
+// Ayarlar kartindaki anahtar: ust seritteki dugmeyle AYNI ayari degistirir.
+document.addEventListener("change", async (e) => {
+  if (!e.target.matches?.("[data-router-acik]")) return;
+  const yeni = e.target.checked;
+  state.config.smartModels = yeni;
+  routerCiz();
+  await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ smartModels: yeni }) });
+  syncToggles();
+});
+
 $("btn-router")?.addEventListener("click", async () => {
   const yeni = !state.config.smartModels;
   state.config.smartModels = yeni;      // anında geri bildirim
@@ -1084,6 +1095,41 @@ function routerNotuHTML() {
   return `<small class="router-not">🔀 Router açık — model kademesini işin ağırlığına göre sistem seçiyor; buradaki seçim uygulanmaz.</small>`;
 }
 
+// ROUTER KARTI: koordinatorden ONCE calisan yonlendirici. Hangi yapay zeka
+// ve hangi model olacagi kullanicinin secimi (varsayilan Antigravity —
+// yonlendirme kisa ve ucuz bir is).
+function routerCardHTML() {
+  const r = state.config.router || { provider: "antigravity", model: "", effort: "sinirli" };
+  const st = state.agents.router || { status: "idle" };
+  const acik = !!state.config.smartModels;
+  return `
+    <div class="agent-card router-card ${acik ? "" : "pasif"}" data-router>
+      <div class="a-head">
+        <span class="agent-card-logo bg-router">🔀</span>
+        <span class="a-dot ${st.status}"></span>
+        <span class="a-name c-router">Router</span>
+        <span class="a-status">${acik ? (STATUS_TR[st.status] || st.status) : "kapalı"}</span>
+        <label class="switch" title="Router'ı aç/kapat">
+          <input type="checkbox" data-router-acik ${acik ? "checked" : ""}><span class="track"></span>
+        </label>
+      </div>
+      <div class="a-note">Koordinatörden <b>önce</b> çalışır: işin ağırlığını ölçer, hangi üyenin hangi model kademesiyle çalışacağına karar verir. Kapalıyken herkes kendi ayarlı modeliyle çalışır.</div>
+      <div class="a-field"><label>Router hangi yapay zekâ olsun?</label>
+        <select data-rprovider>
+          ${configurableProviders(r.provider).map((p) => `<option value="${p}" ${r.provider === p ? "selected" : ""}>${PROVIDER_LABELS[p]}</option>`).join("")}
+        </select>
+      </div>
+      <div class="a-row2">
+        <div class="a-field"><label>Model</label>
+          <select data-rmodel>${modelOptsFor(r.provider, r.model)}</select>
+        </div>
+        <div class="a-field"><label>Çaba</label>
+          <select data-reffort>${effortOptsFor(r.effort)}</select>
+        </div>
+      </div>
+    </div>`;
+}
+
 function coordinatorCardHTML() {
   // Koordinatorun kendi modeli router'dan ETKILENMEZ: router kademeyi
   // UYELER icin secer, koordinator her zaman kendi ayarli modeliyle calisir.
@@ -1117,6 +1163,7 @@ function renderAgentConfig() {
   const box = $("agent-config");
   if (box.contains(document.activeElement)) return;
   box.innerHTML =
+    routerCardHTML() +
     coordinatorCardHTML() +
     (state.config.members || []).map(memberCardHTML).join("") +
     `<button id="btn-add-member" class="btn-ghost small" style="width:100%">＋ Üye Ekle</button>`;
@@ -1142,10 +1189,19 @@ async function saveMembers(mutate) {
     model: coordCard.querySelector("[data-cmodel]").value,
     effort: coordCard.querySelector("[data-ceffort]").value,
   } : state.config.coordinator;
+  const routerCard = document.querySelector("#agent-config [data-router]");
+  const router = routerCard ? {
+    provider: routerCard.querySelector("[data-rprovider]").value,
+    model: routerCard.querySelector("[data-rmodel]").value,
+    effort: routerCard.querySelector("[data-reffort]").value,
+  } : state.config.router;
+  const smartModels = routerCard
+    ? routerCard.querySelector("[data-router-acik]").checked
+    : !!state.config.smartModels;
   if (mutate) mutate(members);
   await fetch("/api/config", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ members, coordinator }),
+    body: JSON.stringify({ members, coordinator, router, smartModels }),
   });
   fetchState();
 }
@@ -2000,6 +2056,13 @@ document.addEventListener("change", async (e) => {
   // Sağlayıcı değiştiğinde eski sağlayıcının model değerini kaydetme. Model
   // kataloğunu aynı anda yenileyerek Codex seçiliyken Claude modellerinin
   // görünmesi sorununu gider.
+  // Router saglayicisi AYRI dal: onceki surumde data-cprovider blogunun
+  // icine yazilmisti ve hic calismiyordu (Codex secilince Gemini modelleri
+  // listede kaliyordu — tarayicida olculdu).
+  if (t.matches("[data-rprovider]")) {
+    const routerModel = t.closest("[data-router]")?.querySelector("[data-rmodel]");
+    if (routerModel) routerModel.innerHTML = modelOptsFor(t.value, "");
+  }
   if (t.matches("[data-cprovider]")) {
     const model = t.closest("[data-coord]")?.querySelector("[data-cmodel]");
     if (model) model.innerHTML = modelOptsFor(t.value, "");

@@ -233,7 +233,9 @@ export class Orchestrator {
       openrouter: new OpenRouterAgent(store, rootDir, { keyProvider:readOpenRouterKey }),
     };
     this.agents = this.providers; // geriye dönük uyumluluk
-    this.coordinator = new Coordinator(store, this.providers, () => this.config.data.coordinator);
+    this.coordinator = new Coordinator(store, this.providers,
+      () => this.config.data.coordinator,
+      () => this.config.data.router);
     // Koordinator ag kesintisinde olmesin: hata tanima + bekleme kancasi.
     // ctx.runId'den kosu bulunur ki "ag bekleniyor" fazi arayuzde gorunsun.
     this.coordinator.agKanca = {

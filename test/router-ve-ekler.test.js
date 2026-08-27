@@ -93,3 +93,57 @@ test("router acikken model secim kutusunun yaninda uyari yazar", () => {
   assert.match(app, /renderAgentConfig\(\)/);
   assert.match(oku("ui/style.css"), /\.router-not\{/);
 });
+
+// ---- Router AYRI BIR ROL: koordinatorden once ve kendi modeliyle ----
+test("router varsayilani Antigravity ve degistirilebilir", async () => {
+  const { Config } = await import("../src/config.js");
+  const fs = await import("node:fs"); const os = await import("node:os"); const path = await import("node:path");
+  const kok = fs.mkdtempSync(path.join(os.tmpdir(), "ajan-router-"));
+  const c = new Config(kok);
+  // Yonlendirme kisa ve ucuz bir is; agir modeli her mesaj icin harcamak anlamsiz.
+  assert.equal(c.data.router.provider, "antigravity");
+  assert.equal(c.data.router.effort, "sinirli");
+  // Kullanici degistirebilir.
+  c.update({ router: { provider: "codex", model: "gpt-5.6-luna", effort: "orta" } });
+  assert.equal(c.data.router.provider, "codex");
+  assert.equal(c.data.router.model, "gpt-5.6-luna");
+  // Diske yazilir ve geri okunur.
+  assert.equal(new Config(kok).data.router.provider, "codex");
+  // Bilinmeyen saglayici varsayilana duser.
+  c.update({ router: { provider: "uydurma" } });
+  assert.equal(c.data.router.provider, "antigravity");
+});
+
+test("yonlendirme ROUTER rolunde calisir, koordinatorun modelini harcamaz", async () => {
+  const { Coordinator } = await import("../src/coordinator.js");
+  const cagrilar = [];
+  const sahteAjan = (ad) => ({
+    isAvailable: () => true, sessions: new Map(),
+    send: async (_p, o) => { cagrilar.push({ ad, model: o.model, sessionKey: o.sessionKey }); return { ok: true, text: '{"approach":"quick","member_id":"m1","tier":"fast"}' }; },
+  });
+  const k = new Coordinator(
+    { setAgentStatus() {}, agentStatus: {} },
+    { claude: sahteAjan("claude"), antigravity: sahteAjan("antigravity") },
+    () => ({ provider: "claude", model: "opus" }),         // koordinator
+    () => ({ provider: "antigravity", model: "gemini-3.7-flash-low" }), // router
+  );
+  await k.routeTurn({ request: "kısa soru", messages: [] }, "m1 | Üye | claude", { runId: "r1" });
+  assert.equal(cagrilar.length, 1);
+  assert.equal(cagrilar[0].ad, "antigravity", "yönlendirmeyi router yapmalı");
+  assert.equal(cagrilar[0].model, "gemini-3.7-flash-low", "router kendi modelini kullanmalı");
+  assert.match(cagrilar[0].sessionKey, /#router$/, "router oturumu koordinatörden ayrı olmalı");
+});
+
+test("arayuzde router karti koordinatorden ONCE gosterilir", () => {
+  const app = oku("ui/app.js");
+  assert.match(app, /function routerCardHTML/);
+  const i = app.indexOf("routerCardHTML() +");
+  const j = app.indexOf("coordinatorCardHTML() +", i);
+  assert.ok(i > -1 && j > i, "akış sırası: önce router, sonra koordinatör");
+  // Saglayici + model + caba secilebilir olmali.
+  assert.match(app, /data-rprovider/);
+  assert.match(app, /data-rmodel/);
+  assert.match(app, /data-reffort/);
+  // Kaydetme router'i da gonderir.
+  assert.match(app, /JSON\.stringify\(\{ members, coordinator, router, smartModels \}\)/);
+});

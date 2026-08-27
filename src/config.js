@@ -22,6 +22,11 @@ const DEFAULTS = {
   ],
   // Koordinatörün hangi yapay zekâ olacağına kullanıcı karar verir
   coordinator: { provider: "claude", model: "", effort: "" },
+  // ROUTER: koordinatorden ONCE calisan hafif yonlendirici. Isin agirligini
+  // olcup hangi uyenin hangi model kademesiyle calisacagina karar verir.
+  // Varsayilan Antigravity: yonlendirme kisa ve ucuz bir istir; agir modeli
+  // her mesaj icin harcamak anlamsiz. Kullanici degistirebilir.
+  router: { provider: "antigravity", model: "", effort: "sinirli" },
   projects: [],      // {id, name, path, createdAt}
   activeProject: null,
   smartModels: true,   // koordinatör alt görev zorluğuna göre model kademesi seçer
@@ -66,6 +71,7 @@ export class Config {
       }
       this.data.members = this.sanitizeMembers(this.data.members);
       this.data.coordinator = this.sanitizeCoordinator(this.data.coordinator);
+      this.data.router = this.sanitizeRouter(this.data.router);
       this.data.apiProviders = {
         openrouter: {
           configured: saved.apiProviders?.openrouter?.configured === true,
@@ -97,6 +103,15 @@ export class Config {
     }));
   }
 
+  // Router varsayilani koordinatorden AYRIDIR: yonlendirme ucuz olmali.
+  sanitizeRouter(r) {
+    return {
+      provider: PROVIDERS.includes(r?.provider) ? r.provider : "antigravity",
+      model: String(r?.model || "").slice(0, 80),
+      effort: ["", "sinirli", "orta", "yuksek", "cokyuksek", "ultra"].includes(r?.effort) ? r.effort : "sinirli",
+    };
+  }
+
   sanitizeCoordinator(c) {
     return {
       provider: PROVIDERS.includes(c?.provider) ? c.provider : "claude",
@@ -117,6 +132,9 @@ export class Config {
     }
     if (patch.coordinator) {
       this.data.coordinator = this.sanitizeCoordinator(patch.coordinator);
+    }
+    if (patch.router) {
+      this.data.router = this.sanitizeRouter(patch.router);
     }
     if ("activeProject" in patch) this.data.activeProject = patch.activeProject;
     // Zamanlanmis gorevler: her gun belirlenen saatte konseye istem gonderir.
