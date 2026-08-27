@@ -51,22 +51,16 @@ test("resume edilen oturumda da calisma dizini projeye baglanir", async () => {
   assert.equal(call.cwd, "/tmp/proje-b", "cwd surec seviyesinde verilmeli");
 });
 
-test("resume sandbox modu workspace-write kalir", async () => {
+// TAM YETKİ (kullanıcı kararı): taze ve devam oturumu aynı bayrağı kullanır;
+// onay penceresi/sandbox yok. Önceki on-request onay, başsız üyede komutu
+// kilitliyordu.
+test("resume tam yetki bayragiyla calisir, onay mekanizmasi kalmaz", async () => {
   const { agent, calls } = harness({ resume: true });
   await agent._invoke("selam", { sessionKey: "s1", cwd: "/tmp/proje-c" });
-  assert.match(calls[0].args.join(" "), /sandbox_mode="workspace-write"/);
-});
-
-// Taze oturum --approve-for-me kullanir. "exec resume" bu bayragi kabul
-// etmedigi icin config karsiligi verilmelidir; approval_policy="never" onay
-// isteyen komutlari reddeder ve resume edilen oturumu yeteneksiz birakir.
-test("resume onay politikasi taze oturumla ayni yetkiye sahiptir", async () => {
-  const { agent, calls } = harness({ resume: true });
-  await agent._invoke("selam", { sessionKey: "s1", cwd: "/tmp/proje-d" });
   const config = calls[0].args.join(" ");
-  assert.match(config, /approval_policy="on-request"/);
-  assert.match(config, /approvals_reviewer="auto_review"/);
-  assert.doesNotMatch(config, /approval_policy="never"/);
+  assert.match(config, /bypass-approvals-and-sandbox/);
+  assert.doesNotMatch(config, /approval_policy/);
+  assert.doesNotMatch(config, /approve-for-me/);
 });
 
 // Codex'in workspace-write kum havuzu ".git" altina yazmayi varsayilan olarak

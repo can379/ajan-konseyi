@@ -89,24 +89,23 @@ export class CodexAgent extends BaseAgent {
       common.push("-i", img);
     }
 
-    // Dikkat: "exec resume" alt komutu --sandbox ve -C bayraklarını KABUL ETMEZ;
-    // resume'da sandbox -c config anahtarıyla verilir, çalışma dizini oturumda kalır.
-    // --approve-for-me kendi workspace-write sandbox'ını kurar ve --sandbox ile
-    // birlikte kullanılamaz.
-    const freshArgs = ["--search", "exec", "--approve-for-me", ...common];
+    // TAM YETKİ (kullanıcı kararı: "hepsi tam yetki olsun"). Önceki kurulum
+    // taze oturumda --approve-for-me, devam oturumunda on-request onay
+    // kullanıyordu; ikisi de komutu otomatik incelemeye sokuyor ve inceleme
+    // reddedince üye "komut izni verilmedi" diye takılıyordu. Üye başsız
+    // çalışır — onay penceresine düşen her şey kayıptır. Claude ve
+    // Antigravity ile aynı düzeye çekildi; güvenlik çizgisi izin penceresi
+    // değil, kapasite sözleşmesi + operasyon kapılarıdır (faz, onay, mühür).
+    // Bayrağı "exec" hem de "exec resume" kabul ediyor (yardım çıktısıyla
+    // doğrulandı); -C'yi yalnız taze oturum alır, resume dizini oturumda kalır.
+    const YETKI = "--dangerously-bypass-approvals-and-sandbox";
+    const freshArgs = ["--search", "exec", YETKI, ...common];
     if (opts.cwd) freshArgs.push("-C", opts.cwd);
 
     const sess = opts.fresh ? null : this.getSession(opts);
     const useResume = !!sess;
     let args = useResume
-      ? ["--search", "exec", "resume", ...common,
-          // "exec resume" --approve-for-me bayragini kabul etmez; onun config
-          // karsiligi budur. approval_policy="never" ise onay isteyen her
-          // komutu REDDEDER ("rm -f style commands are not permitted" gibi),
-          // yani resume edilen oturum taze oturumdan daha yeteneksiz kalirdi.
-          "-c", 'approval_policy="on-request"', "-c", 'approvals_reviewer="auto_review"',
-          "-c", 'sandbox_mode="workspace-write"',
-          sess]
+      ? ["--search", "exec", "resume", YETKI, ...common, sess]
       : freshArgs;
 
     // Canlı akış: olaylar geldikçe kısmi çıktıyı yayınla
