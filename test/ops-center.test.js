@@ -184,3 +184,14 @@ test("kuyruga girebilen her is turu oyun kitabinda tanimli", async () => {
     if (tur) assert.ok(OYUN_KITABI[tur], `${tur} oyun kitabında tanımlı olmalı (örnek: "${ornek}")`);
   }
 });
+
+test("kapasite sozlesmesi paket teslim disiplinini icerir", () => {
+  const ork = oku("src/orchestrator.js");
+  // Kullanici kurali: mac uygulamasi zip verilmez; eski paket silinip
+  // gunceli /Applications'a kurulur (canli sikayet: klasor surum coplugune
+  // donmus, /Applications'taki uygulama 5 gun eski kalmisti).
+  assert.match(ork, /PAKET TESLİM DİSİPLİNİ/);
+  assert.match(ork, /ZIP olarak TESLİM ETME/);
+  assert.match(ork, /\/Applications içine kur/);
+  assert.match(ork, /eski paketlerini ve ara kalıntılarını/);
+});
