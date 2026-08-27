@@ -51,22 +51,28 @@ export class Coordinator {
     this.store.setAgentStatus("koordinator", "busy", label || "");
     try {
       const agent = this.agentFor(ctx);
-      let res = await agent.send(prompt, opts);
-      // AG KESINTISI koordinatoru de oldurmesin: gorev dongusundeki ag
-      // beklemesi buraya islemiyordu ve tur "Koordinatör çağrısı başarısız:
-      // ENOTFOUND" ile bitiyordu (canli goruldu — uc gorev bitmis, kapanis
-      // sentezi internet koptu diye copmus). Orkestradaki agBekle kancasi
-      // verilirse baglanti donene kadar beklenir ve AYNI cagri yinelenir.
-      if (!res.ok && this.agKanca?.hataMi?.(res.error)) {
-        const bekleme = await this.agKanca.bekle(ctx);
-        if (!bekleme?.durduruldu) res = await agent.send(prompt, opts);
-      }
+      // AG KESINTISI koordinatoru oldurmesin (canli iki kez goruldu: uc
+      // gorev bitmis, kapanis sentezi ENOTFOUND ile copmus). Iki durum var:
+      // a) Gercek kesinti: agBekle baglanti donene kadar bekler.
+      // b) DNS DALGASI: yoklama alanlari cozulurken API alan adi cozulmuyor.
+      //    "Cevrimicisin" diye pes etmek yanlis — kisa aralikla yeniden
+      //    denenir. Tek denemeyle yetinmek onceki surumun hatasiydi.
+      const gonder = async (metin) => {
+        let res = await agent.send(metin, opts);
+        for (let agDeneme = 1; !res.ok && this.agKanca?.hataMi?.(res.error) && agDeneme <= 5; agDeneme++) {
+          const bekleme = await this.agKanca.bekle(ctx);
+          if (bekleme?.durduruldu) break;
+          if (!bekleme?.offlineGoruldu) await new Promise((r) => setTimeout(r, 4000 * agDeneme));
+          res = await agent.send(metin, opts);
+        }
+        return res;
+      };
+      let res = await gonder(prompt);
       if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
       let json = extractJson(res.text);
       if (!json) {
-        res = await agent.send(
-          "Önceki yanıtın geçerli JSON içermiyordu. Aynı içeriği, açıklama olmadan YALNIZCA tek bir JSON nesnesi olarak tekrar ver.",
-          opts
+        res = await gonder(
+          "Önceki yanıtın geçerli JSON içermiyordu. Aynı içeriği, açıklama olmadan YALNIZCA tek bir JSON nesnesi olarak tekrar ver."
         );
         if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
         json = extractJson(res.text);

@@ -64,3 +64,37 @@ test("durdurulursa bekleme sonsuza kadar donmez", async () => {
     assert.equal(sonuc.durduruldu, true);
   } finally { global.setTimeout = eskiTimeout; }
 });
+
+test("failRun ag hatasinda turu gommez — bekler ve kaldigi yerden surdurur", async () => {
+  const o = orkestra();
+  const mesajlar = [];
+  let pipelineCagri = 0;
+  o.store = { addMessage: (_r, m) => mesajlar.push(m.content),
+    updateRun: (r, ek) => Object.assign(r, ek || {}) };
+  o.agBekle = async () => ({ offlineGoruldu: true });
+  o.runPipeline = async () => { pipelineCagri++; };
+  o.persistSessions = () => {};
+  const run = { stopRequested: false };
+  await o.failRun(run, new Error("API Error: Can't reach the API server (ENOTFOUND)"));
+  assert.equal(pipelineCagri, 1, "tur kaldığı yerden sürmeli");
+  assert.ok(mesajlar.some((m) => /bağlantı bekleniyor/i.test(m)));
+  assert.ok(!mesajlar.some((m) => /hatayla sonlandı/.test(m)), "ağ hatası ölüm ilanı değildir");
+});
+
+test("failRun ag DISI hatada eski davranisini korur", async () => {
+  const o = orkestra();
+  const mesajlar = [];
+  o.store = { addMessage: (_r, m) => mesajlar.push(m.content),
+    updateRun: (r, ek) => Object.assign(r, ek || {}) };
+  o.exportArtifacts = () => {}; o.notify = () => {};
+  const run = { stopRequested: false, kind: "chat" };
+  await o.failRun(run, new Error("Koordinatör geçerli JSON üretemedi"));
+  assert.ok(mesajlar.some((m) => /hatayla sonlandı/.test(m)));
+});
+
+test("koordinator dayanikli gonderim dongusu kullanir", async () => {
+  const fs = await import("node:fs");
+  const kaynak = fs.readFileSync(new URL("../src/coordinator.js", import.meta.url), "utf8");
+  assert.match(kaynak, /const gonder = async/, "tek deneme yetmez — döngü olmalı");
+  assert.match(kaynak, /agDeneme <= 5/, "DNS dalgasında da yinelemeli");
+});

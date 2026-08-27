@@ -1201,6 +1201,26 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   }
 
   failRun(run, err) {
+    // SON EMNIYET KATMANI: pipeline'in HERHANGI bir yerinden ag hatasiyla
+    // dusen tur "hatayla bitti" diye gomulmez — ag beklenir ve tur kaldigi
+    // yerden surdurulur. Koordinator ve gorev dongusundeki beklemeler cogu
+    // vakayi yakalar; bu, gozden kacan yollarin (inceleme, tartisma, oylama,
+    // sentez) sigortasidir. Ust sinir 20: agBekle zaten baglanti donene
+    // kadar bloklar, sinir yalniz mantik hatasina karsi fren.
+    if (this.agHatasiMi(String(err?.message || err)) && !run.stopRequested) {
+      run._agKurtarma = (run._agKurtarma || 0) + 1;
+      if (run._agKurtarma <= 20) {
+        this.store.addMessage(run, { from: "sistem", kind: "info",
+          content: `🌐 Tur ağ hatasına takıldı (${truncate(String(err.message || err), 120)}); bağlantı bekleniyor, dönünce kaldığı yerden sürecek.` });
+        return this.agBekle(run, {}).then((b) => {
+          if (b.durduruldu) return;
+          this.store.updateRun(run, { status: "running" });
+          return this.runPipeline(run, true)
+            .catch((e) => this.failRun(run, e))
+            .finally(() => this.persistSessions(run));
+        });
+      }
+    }
     this.store.addMessage(run, {
       from: "sistem", kind: "error",
       content: "Koşu hatayla sonlandı: " + String(err.message || err),
