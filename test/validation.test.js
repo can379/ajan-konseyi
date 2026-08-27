@@ -19,7 +19,9 @@ test("plan görevlerini ve bağımlılıklarını güvenli biçimde normalleşti
 
 test("bozuk yönlendirme güvenli council varsayılanına döner", () => {
   assert.deepEqual(normalizeRoute({}, ["m1"]), {
-    approach: "council", member_id: "m1", reviewer_id: null, mode: "discussion", reason: "",
+    // tier: router acikken koordinatorun sectigi model kademesi; belirtilmemisse dengeli.
+    approach: "council", member_id: "m1", reviewer_id: null, mode: "discussion",
+    tier: "balanced", reason: "",
   });
 });
 

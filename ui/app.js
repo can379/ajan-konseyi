@@ -675,8 +675,34 @@ function renderHealth() {
     .join(" · ");
 }
 
+// Router durumu tek kaynaktan: config.smartModels. Ust seritteki dugme ve
+// ayarlardaki anahtar ayni degeri gosterir.
+function routerCiz() {
+  const acik = !!state.config.smartModels;
+  const dugme = $("btn-router");
+  if (dugme) {
+    dugme.setAttribute("aria-pressed", acik ? "true" : "false");
+    dugme.title = acik
+      ? "Router AÇIK — işin ağırlığına göre üyeyi ve model kademesini sistem seçiyor. Kapatmak için tıklayın."
+      : "Router KAPALI — her üye kendi ayarlı modeliyle çalışıyor. Açmak için tıklayın.";
+  }
+  $("tb-agents")?.classList.toggle("router-acik", acik);
+}
+
+$("btn-router")?.addEventListener("click", async () => {
+  const yeni = !state.config.smartModels;
+  state.config.smartModels = yeni;      // anında geri bildirim
+  routerCiz();
+  try {
+    await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ smartModels: yeni }) });
+  } catch { state.config.smartModels = !yeni; routerCiz(); }
+  syncToggles();
+});
+
 function syncToggles() {
   if (document.activeElement?.closest?.("#advanced-row")) return;
+  routerCiz();
   $("f-smart").checked = !!state.config.smartModels;
   $("f-notify").checked = !!state.config.notifications;
   $("f-notify-done").checked = state.config.notificationEvents?.done !== false;
@@ -3390,9 +3416,15 @@ let pendingAttachments = []; // {path, url, name}
 function renderAttachChips() {
   const box = $("attach-chips");
   box.hidden = pendingAttachments.length === 0;
+  // Gorseller NUMARALI gosterilir: kullanici "2. gorsel" diye atif yapinca
+  // ekranda gordugu numara uyeye giden numarayla ayni olsun.
+  let gorselSayaci = 0;
   box.innerHTML = pendingAttachments.map((a, i) => {
     const src = a.previewUrl || (a.kind === "image" ? a.url : "");
-    if (src) return `<span class="attach-chip attach-image ${a.uploading ? "uploading" : a.error ? "upload-error" : ""}" title="${esc(a.name)}"><img src="${esc(src)}" alt="${esc(a.name)}"><button data-rm-attach="${i}" title="Görseli kaldır" aria-label="Görseli kaldır">×</button>${a.uploading ? `<em>${a.progress || 0}%</em>` : a.error ? `<button class="attach-retry" data-retry-attach="${i}">Tekrar</button>` : ""}</span>`;
+    if (src) {
+      const no = ++gorselSayaci;
+      return `<span class="attach-chip attach-image ${a.uploading ? "uploading" : a.error ? "upload-error" : ""}" title="${no}. görsel · ${esc(a.name)}"><img src="${esc(src)}" alt="${no}. görsel: ${esc(a.name)}"><span class="attach-no">${no}</span><button data-rm-attach="${i}" title="Görseli kaldır" aria-label="Görseli kaldır">×</button>${a.uploading ? `<em>${a.progress || 0}%</em>` : a.error ? `<button class="attach-retry" data-retry-attach="${i}">Tekrar</button>` : ""}</span>`;
+    }
     return `<span class="attach-chip ${a.uploading ? "uploading" : a.error ? "upload-error" : ""}"><b>${a.uploading ? "…" : a.error ? "!" : "📄"}</b> ${esc(a.name)} ${a.uploading ? `<em>${a.progress || 0}%</em>` : a.error ? `<button data-retry-attach="${i}">Tekrar</button>` : ""}<button data-rm-attach="${i}" title="Kaldır">✕</button></span>`;
   }).join("");
   box.querySelectorAll("[data-rm-attach]").forEach((b) =>

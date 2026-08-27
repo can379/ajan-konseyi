@@ -54,6 +54,8 @@ export function normalizeRoute(route, validMemberIds) {
     member_id,
     reviewer_id,
     mode: ["discussion", "split", "code"].includes(route?.mode) ? route.mode : "discussion",
+    // Router acikken koordinator isin agirligina gore model kademesi de secer.
+    tier: ["fast", "balanced", "strong"].includes(route?.tier) ? route.tier : "balanced",
     reason: String(route?.reason || ""),
   };
 }

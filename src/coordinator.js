@@ -123,8 +123,14 @@ ${modeNote}${intensityNote}Üç seviyeden BİRİNİ seç (gereğinden ağır sev
 
 "pair" seçersen member_id üretici, reviewer_id denetçi olsun ve ikisi FARKLI üye olsun.
 
+MODEL KADEMESİ ("tier") — işin ağırlığına göre seç, gereğinden güçlüsünü seçme:
+- "fast": kısa soru, açıklama, sohbet, tek satırlık düzeltme, biçim/yazım işi.
+- "balanced": normal geliştirme, tek dosyalık analiz, hata teşhisi, orta refactor.
+- "strong": mimari karar, karmaşık hata avı, geniş kapsamlı kod değişikliği,
+  güvenlik/para etkileyen iş, çok adımlı akıl yürütme.
+
 YALNIZCA şu şemada tek bir JSON nesnesi döndür:
-{"approach": "quick|pair|council", "member_id": "üye id'si", "reviewer_id": "pair icin denetci uye id'si", "mode": "discussion|split|code", "reason": "tek cümle (Türkçe)"}`;
+{"approach": "quick|pair|council", "member_id": "üye id'si", "reviewer_id": "pair icin denetci uye id'si", "mode": "discussion|split|code", "tier": "fast|balanced|strong", "reason": "tek cümle (Türkçe)"}`;
     return this.askJson(prompt, "yönlendirme", ctx);
   }
 

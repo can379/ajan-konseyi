@@ -93,11 +93,23 @@ export async function enrichAttachments(list) {
   return Promise.all((list || []).map(async (a) => ({ ...a, extractedText: a.extractedText || await extractMediaText(a) })));
 }
 
+// Ekler NUMARALANIR: kullanici "2. gorsel" diyerek atif yapabilmeli
+// (kullanici istegi: "sistem gonderdigim gorselin kacinci gorsel oldugunu
+// bilsin"). Gorseller kendi icinde ayri sayilir — "3. gorsel" derken
+// aradaki PDF'i saymaz. Genel sira da ayrica verilir.
 export function attachmentPrompt(list) {
   if (!list?.length) return "";
-  return "\n\n--- EK DOSYALAR ---\n" + list.map((a) =>
-    `- ${a.name} | tür=${a.kind}/${a.mime} | boyut=${a.size} | yol=${a.path}` + (a.extractedText ? `\n  Çıkarılan içerik:\n${a.extractedText.slice(0,12000)}` : "")
-  ).join("\n");
+  let gorselNo = 0;
+  const satirlar = (list || []).map((a, i) => {
+    const gorselMi = a.kind === "image" || /^image\//.test(String(a.mime || ""));
+    const etiket = gorselMi ? `${++gorselNo}. görsel` : `${i + 1}. dosya`;
+    return `- [${etiket}] ${a.name} | tür=${a.kind}/${a.mime} | boyut=${a.size} | yol=${a.path}`
+      + (a.extractedText ? `\n  Çıkarılan içerik:\n${a.extractedText.slice(0, 12000)}` : "");
+  });
+  const not = gorselNo > 1
+    ? `\nKullanıcı "1. görsel", "2. görsel" diye atıf yapabilir; yukarıdaki sıra geçerlidir (toplam ${gorselNo} görsel).`
+    : "";
+  return "\n\n--- EK DOSYALAR ---\n" + satirlar.join("\n") + not;
 }
 
 // Uretilen dosyanin KANONIK yeri bagli projenin icidir: kullanicinin

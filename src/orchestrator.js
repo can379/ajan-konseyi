@@ -147,8 +147,8 @@ export const CODEX_STYLE_CONTRACT = `\n\n--- YANIT BİÇİMİ ---\nNihai yanıt�
 
 export function resolveTurnRoute({ mode = "auto", forced = null, requestedMemberId = null, routed = null } = {}) {
   const explicitMode = ["discussion", "split", "code"].includes(mode) ? mode : null;
-  if (forced === "quick") return { approach: "quick", member_id: requestedMemberId || routed?.member_id || null, explicit: true };
-  if (forced === "pair") return { approach: "pair", member_id: routed?.member_id || null, reviewer_id: routed?.reviewer_id || null, explicit: true };
+  if (forced === "quick") return { approach: "quick", member_id: requestedMemberId || routed?.member_id || null, tier: routed?.tier || null, explicit: true };
+  if (forced === "pair") return { approach: "pair", member_id: routed?.member_id || null, reviewer_id: routed?.reviewer_id || null, tier: routed?.tier || null, explicit: true };
   if (forced === "council") return { approach: "council", mode: explicitMode || routed?.mode || "discussion", explicit: true };
   if (requestedMemberId) return { approach: "quick", member_id: requestedMemberId, explicit: true };
   if (!routed) return { approach: "council", mode: explicitMode || "discussion" };
@@ -1511,6 +1511,15 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         S.addMessage(run, { from: "sistem", kind: "info",
           content: `⚡ ${route.approach === "quick" ? "Hızlı yol" : "İkili yol"}: ${routed?.reason || "iş küçük değerlendirildi"} — tam konsey için mesajı /konsey ile başlatın.` });
       }
+      // ROUTER SEFFAFLIGI: acikken hangi uyeyi neden ve hangi model kademesiyle
+      // sectigi yazilir. Kullanici kararin keyfi olmadigini gorsun.
+      if (this.config?.data?.smartModels && routed && !forced) {
+        const secilen = avail.find((m) => m.id === route.member_id);
+        const kademeAdi = { fast: "hızlı model", balanced: "dengeli model", strong: "güçlü model" }[routed.tier] || "dengeli model";
+        const model = secilen ? this.pickTierModel(secilen.provider, routed.tier) : null;
+        S.addMessage(run, { from: "sistem", kind: "info",
+          content: `🔀 Router: ${secilen ? secilen.name : "konsey"} · ${kademeAdi}${model ? ` (${model})` : ""} — ${routed.reason || "işin ağırlığına göre seçildi"}` });
+      }
       // Zorlanan kademede uye secilmemisse: kod isinde kod yazabilen uye,
       // degilse ilk uygun uye.
       if (forced && route.approach !== "council" && !route.member_id) {
@@ -1537,7 +1546,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       const responseStyle = mode === "code" ? "codex" : null;
       if (route.approach === "quick") {
         const member = avail.find((m) => m.id === route.member_id) || avail[0];
-        await this.quickReply(run, member, text, attachments, { allowFallback: !route.explicit, style: responseStyle });
+        await this.quickReply(run, member, text, attachments,
+          { allowFallback: !route.explicit, style: responseStyle,
+            tierModel: this.pickTierModel(member.provider, route.tier) });
         // Tur ici tirmanma: uye isi uygulayamadan bloke bildirdiyse tur
         // sessizce "bitti" sayilmaz; baska bir uye uretici olur, ikili yol
         // devreye girer.
@@ -1617,7 +1628,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
   }
 
-  async quickReply(run, member, text, attachments, { allowFallback = true, style = null } = {}) {
+  async quickReply(run, member, text, attachments, { allowFallback = true, style = null, tierModel = undefined } = {}) {
     const S = this.store;
     S.setPhase(run, "answering");
     const images = attachments.filter((a) => a.kind === "image").map((a) => a.path).filter((p) => fs.existsSync(p));
@@ -1649,6 +1660,9 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       label: generatingImage ? "görsel üretiyor" : "yanıtlıyor",
       images,
       media: attachments,
+      // Router acikken kademe modeli; kapaliyken undefined kalir ve uye
+      // kendi ayarli modeliyle calisir (pickTierModel smartModels'e bakar).
+      tierModel,
       cwd: run.projectDir || undefined,
       // Sohbette Antigravity'ye uzun süre takılı kalınmaz
       // Flash görsel üretimi dakikalarca yanıtsız kalırsa bu gerçek ilerleme
@@ -2383,6 +2397,19 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       return;
     }
 
+    // SALT-OKUNUR KOSUDA MERGE KAPISI CALISMAZ. Canli vaka (run-5949c862):
+    // "uctan uca ve SALT-OKUNUR analiz" istegi discussion modunda kosdu, alti
+    // gorev de bitti — ama uyeler rapor/not dosyasi yazdigi icin birlestirme
+    // adimina girildi ve merge kapisi kod katiliginda (4/5 puan, yuksek onem
+    // yok) degerlendirilip TURU OLDURDU. Analiz raporu hazirdi; kullanici
+    // "Tur hatayla bitti" gordu. Rapor kosusunda birlestirilecek bir sey
+    // yoktur: degisiklikler dallarda durur, kullanici isterse elle alir.
+    if (run.mode !== "code") {
+      S.addMessage(run, { from: "sistem", kind: "info",
+        content: `Salt-okunur koşu: ${diffs.length} üye dalında değişiklik var ama otomatik birleştirme yapılmadı. Değişiklikler dallarında duruyor; incelemek veya almak isterseniz farklar aşağıda.` });
+      this.exportArtifacts(run, "integration");
+      return;
+    }
     const mergeGate=this.enforceEvidenceGate(run,"merge",{requireTests:false});
     S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate merge için geçti · ${mergeGate.evidence.reviews.length} review kanıtı`});
 
