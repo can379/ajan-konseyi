@@ -73,3 +73,24 @@ test("sunucuda emniyet agi var — yakalanmamis hata gunluge yazilir, surec olme
   assert.match(kaynak, /run\.status==="interrupted"&&run\.autoResume\)/,
     "devam döngüsü autoResume ile kapılanmalı, tür kısıtı kalkmalı");
 });
+
+// ---- TUR SURESI: inceleme farki ve paralel revizyon ----
+test("inceleme farkinda --binary yok — APK/DMG blob'u farki bogmaz", () => {
+  const g = oku("src/gitops.js");
+  const blok = g.slice(g.indexOf("createImmutableSnapshot"));
+  const satir = blok.split("\n").find((l) => l.includes('"diff","--no-ext-diff"') || l.includes('"diff","--binary"'));
+  assert.ok(satir, "inceleme farkı komutu bulunmalı");
+  assert.ok(!satir.includes("--binary"),
+    "inceleme farkı yalnız okunmak için üretilir; --binary APK/DMG'yi base85 blob olarak farka sokuyor");
+});
+
+test("revizyonlar paralel kosar, ayni yazarin isleri sirayla", () => {
+  const ork = oku("src/orchestrator.js");
+  const blok = ork.slice(ork.indexOf("async reconcilePeerFeedback"), ork.indexOf("async assessConflict"));
+  // Onceden tek tek sirayla kosuyordu; 7 gorevlik tur bir saati asiyordu.
+  assert.match(blok, /await Promise\.all\(\[\.\.\.yazarBasina\.values\(\)\]/,
+    "revizyonlar üye bazında paralel olmalı");
+  assert.match(blok, /for\(const is of grup\)/,
+    "aynı üyenin işleri sırayla kalmalı — paralel çağrı sağlayıcı oturumunu bozar");
+  assert.match(blok, /if\(run\.stopRequested\) return/, "durdurma isteği paralel dalları da kesmeli");
+});

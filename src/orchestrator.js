@@ -2226,12 +2226,41 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
   // kendi çalışma kopyasında düzeltir ve görev çıktısını günceller.
   async reconcilePeerFeedback(run, worktrees) {
     const S=this.store;
+    // REVIZYONLAR PARALEL. Onceden tek tek sirayla kosuyordu: 7 gorevlik bir
+    // turda her revizyon 1.5-17 dakika surunce tur bir saati asiyordu (canli
+    // olcum). Revizyonlar birbirinden BAGIMSIZ — her yazar kendi gorevini
+    // kendi calisma kopyasinda duzeltir.
+    // AMA ayni yazarin birden fazla gorevi varsa onlar SIRAYLA kosar: ayni
+    // uyeyi paralel cagirmak saglayici oturumunu bozar.
+    const isler=[];
     for (const task of run.tasks.filter((t)=>t.status==="done")) {
       const feedback=run.reviews.filter((r)=>r.taskId===task.id && (r.agreement<=3 || r.severity==="yuksek"));
       if(!feedback.length) continue;
       let author=this.memberById(task.assignee);
       if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers(run));
       if(!author) continue;
+      isler.push({ task, feedback, author });
+    }
+    if(!isler.length) return;
+    const yazarBasina=new Map();
+    for(const is of isler){
+      if(!yazarBasina.has(is.author.id)) yazarBasina.set(is.author.id,[]);
+      yazarBasina.get(is.author.id).push(is);
+    }
+    if(isler.length>1){
+      S.addMessage(run,{from:"sistem",kind:"info",
+        content:`İstişare turu: ${isler.length} görev, ${yazarBasina.size} üye paralel çalışıyor.`});
+    }
+    await Promise.all([...yazarBasina.values()].map(async (grup)=>{
+      for(const is of grup){
+        if(run.stopRequested) return;
+        await this._revizyonYap(run,is,worktrees);
+      }
+    }));
+  }
+
+  async _revizyonYap(run,{task,feedback,author},worktrees){
+    const S=this.store;
       const peerText=feedback.map((r)=>`### ${r.reviewerName} (${r.agreement}/5, ${r.severity})\n${r.points.map((p)=>`- ${p}`).join("\n")}`).join("\n\n");
       const prompt=this.roleHeader(author,run)+
         `İSTİŞARE / REVİZYON TURU. Diğer konsey üyeleri [${task.id}] ${task.title} çıktına aşağıdaki itirazları verdi:\n\n${peerText}\n\n`+
@@ -2242,11 +2271,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
         cwd:worktrees?.[author.id]?.wtDir || run.projectDir || undefined,
         shouldStop:()=>run.stopRequested,
       });
-      if(res.ok) {
-        task.result += `\n\n--- İSTİŞARE SONRASI REVİZYON ---\n${truncate(res.text,6000)}`;
-        this.memberMsg(run,author,"debate",`İstişare sonrası revizyon [${task.id}]:\n${res.text}`,task.id);
-        S.updateRun(run);
-      }
+    if(res.ok) {
+      task.result += `\n\n--- İSTİŞARE SONRASI REVİZYON ---\n${truncate(res.text,6000)}`;
+      this.memberMsg(run,author,"debate",`İstişare sonrası revizyon [${task.id}]:\n${res.text}`,task.id);
+      S.updateRun(run);
     }
   }
 

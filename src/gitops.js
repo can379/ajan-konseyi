@@ -152,17 +152,22 @@ export async function createImmutableSnapshot(wtDir, message="ajan: review snaps
     await run("git",["-C",wtDir,"add","-A"],{env});
     const {stdout:tree}=await run("git",["-C",wtDir,"write-tree"],{env});
     const {stdout:commit}=await run("git",["-C",wtDir,"commit-tree",tree.trim(),"-p",parent.trim(),"-m",message],{env});
-    // Buyuk diff SURECI OLDURMEMELI. Canli cokme: uye worktree'ye ikili
-    // dosyalar koyunca diff 52 MB oldu, maxBuffer (50 MB) asildi, hata
-    // yakalanmadigi icin SUNUCU COKTU ve kosu yarim kaldi (t2/t3 asili,
-    // paketleme hic kosmasdi — "yapamadi"). Inceleme kaniti icin 52 MB'lik
-    // ikili icerik zaten anlamsiz: tasarsa --stat ozetine dusulur.
+    // İnceleme farkında --binary YOK. Bu fark YALNIZ okunmak için üretilir
+    // (reviewIsolation 120k karaktere kırpıp üyeye gösterir); hiçbir yerde
+    // yeniden uygulanmaz. --binary ile APK/DMG gibi çıktılar base85 blob
+    // olarak farka giriyordu ve iki ayrı hasara yol açıyordu:
+    //   1) 52 MB'lık çıktı maxBuffer'ı aşıp SUNUCUYU ÇÖKERTTİ,
+    //   2) yedek --stat özetine düşülünce inceleyenler "commit diff'i boş"
+    //      deyip her görevi 1/5 puanladı ve HER GÖREV zorunlu revizyon
+    //      turuna girdi (canlı ölçüm: 38 incelemenin 25'i 1/5, tur 1+ saat).
+    // --binary olmadan git ikili dosya için tek satır "Binary files ...
+    // differ" yazar; inceleyenin ihtiyacı olan KAYNAK farkı tam kalır.
     let diff;
     try {
-      ({stdout:diff}=await run("git",["-C",wtDir,"diff","--binary","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:100*1024*1024}));
+      ({stdout:diff}=await run("git",["-C",wtDir,"diff","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:64*1024*1024}));
     } catch (hata) {
       const {stdout:ozet}=await run("git",["-C",wtDir,"diff","--stat","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:8*1024*1024});
-      diff=`# Tam fark alınamadı (${hata.code||"çıktı çok büyük"}); ikili/dev dosyalar dışarıda.
+      diff=`# Tam fark alınamadı (${hata.code||"çıktı çok büyük"}).
 # Değişiklik özeti:
 ${ozet}`;
     }
