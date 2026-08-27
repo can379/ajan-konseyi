@@ -2088,3 +2088,7 @@ button.ops-acil.etkin { background: rgba(255,90,90,.18); border-color: rgba(255,
 .attach-no{position:absolute;left:3px;bottom:3px;min-width:15px;height:15px;padding:0 4px;
   display:grid;place-items:center;border-radius:5px;background:rgba(0,0,0,.72);
   color:#fff;font-size:9.5px;font-weight:800;line-height:1;pointer-events:none}
+/* Router açıkken model seçiminin uygulanmadığını söyleyen not. */
+.router-not{display:block;margin-top:5px;font-size:11px;line-height:1.45;
+  color:#a5b4fc;background:rgba(99,102,241,.10);border:1px solid rgba(99,102,241,.28);
+  border-radius:8px;padding:6px 8px}

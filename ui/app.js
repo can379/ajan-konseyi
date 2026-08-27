@@ -687,6 +687,9 @@ function routerCiz() {
       : "Router KAPALI — her üye kendi ayarlı modeliyle çalışıyor. Açmak için tıklayın.";
   }
   $("tb-agents")?.classList.toggle("router-acik", acik);
+  // Acik olan uye paneli/ayar kartlari notu ANINDA gostersin.
+  if (!$("agent-pop")?.hidden) renderAgentPop();
+  if (!$("settings-screen")?.hidden) renderAgentConfig();
 }
 
 $("btn-router")?.addEventListener("click", async () => {
@@ -1065,6 +1068,7 @@ function memberCardHTML(m) {
       </div>
       <div class="a-field"><label>Model</label>
         <select data-mmodel>${modelOptsFor(m.provider, m.model)}</select>
+        ${routerNotuHTML()}
       </div>
       <div class="a-field"><label>Çaba</label>
         <select data-meffort>${effortOptsFor(m.effort)}</select>
@@ -1072,7 +1076,17 @@ function memberCardHTML(m) {
     </div>`;
 }
 
+// Router acikken model secimi UYGULANMAZ: kademe koordinator tarafindan
+// is basina secilir. Kullanici bunu secim kutusunun yaninda gormeli, yoksa
+// "modeli Opus yaptim ama Haiku calisti" diye hakli bir sasirma olur.
+function routerNotuHTML() {
+  if (!state.config?.smartModels) return "";
+  return `<small class="router-not">🔀 Router açık — model kademesini işin ağırlığına göre sistem seçiyor; buradaki seçim uygulanmaz.</small>`;
+}
+
 function coordinatorCardHTML() {
+  // Koordinatorun kendi modeli router'dan ETKILENMEZ: router kademeyi
+  // UYELER icin secer, koordinator her zaman kendi ayarli modeliyle calisir.
   const c = state.config.coordinator || { provider: "claude" };
   const st = state.agents.koordinator || { status: "idle" };
   return `

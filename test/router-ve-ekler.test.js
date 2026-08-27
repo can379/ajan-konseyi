@@ -76,3 +76,20 @@ test("salt-okunur kosu merge kapisinda olmez", () => {
     "rapor koşusu merge kapısına hiç girmemeli");
   assert.match(onceki, /otomatik birleştirme yapılmadı/);
 });
+
+test("router acikken model secim kutusunun yaninda uyari yazar", () => {
+  const app = oku("ui/app.js");
+  // Kullanici: "bu bolumlerde router bagli model secilemez yazisi olmali."
+  // Yoksa "modeli Opus yaptim ama Haiku calisti" diye hakli bir sasirma olur.
+  assert.match(app, /function routerNotuHTML/);
+  assert.match(app, /Router açık — model kademesini işin ağırlığına göre sistem seçiyor/);
+  // Not, model secim kutusunun HEMEN ardinda olmali.
+  const i = app.indexOf("<select data-mmodel>");
+  assert.match(app.slice(i, i + 200), /routerNotuHTML\(\)/);
+  // Router kapaliyken not gorunmez.
+  assert.match(app, /if \(!state\.config\?\.smartModels\) return "";/);
+  // Anahtar cevrilince acik kartlar aninda tazelenir.
+  assert.match(app, /if \(!\$\("agent-pop"\)\?\.hidden\) renderAgentPop\(\)/);
+  assert.match(app, /renderAgentConfig\(\)/);
+  assert.match(oku("ui/style.css"), /\.router-not\{/);
+});
