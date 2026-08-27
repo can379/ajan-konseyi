@@ -52,6 +52,15 @@ export class Coordinator {
     try {
       const agent = this.agentFor(ctx);
       let res = await agent.send(prompt, opts);
+      // AG KESINTISI koordinatoru de oldurmesin: gorev dongusundeki ag
+      // beklemesi buraya islemiyordu ve tur "Koordinatör çağrısı başarısız:
+      // ENOTFOUND" ile bitiyordu (canli goruldu — uc gorev bitmis, kapanis
+      // sentezi internet koptu diye copmus). Orkestradaki agBekle kancasi
+      // verilirse baglanti donene kadar beklenir ve AYNI cagri yinelenir.
+      if (!res.ok && this.agKanca?.hataMi?.(res.error)) {
+        const bekleme = await this.agKanca.bekle(ctx);
+        if (!bekleme?.durduruldu) res = await agent.send(prompt, opts);
+      }
       if (!res.ok) throw new Error(`Koordinatör çağrısı başarısız: ${res.error}`);
       let json = extractJson(res.text);
       if (!json) {

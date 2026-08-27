@@ -234,6 +234,15 @@ export class Orchestrator {
     };
     this.agents = this.providers; // geriye dönük uyumluluk
     this.coordinator = new Coordinator(store, this.providers, () => this.config.data.coordinator);
+    // Koordinator ag kesintisinde olmesin: hata tanima + bekleme kancasi.
+    // ctx.runId'den kosu bulunur ki "ag bekleniyor" fazi arayuzde gorunsun.
+    this.coordinator.agKanca = {
+      hataMi: (hata) => this.agHatasiMi(hata),
+      bekle: (ctx = {}) => {
+        const run = this.store.runs?.[ctx.runId] || { stopRequested: false };
+        return this.agBekle(run, {});
+      },
+    };
     this.providers.antigravity.onNeedsAttention = () => {
       this.notify("Ajan Konseyi 🔔", "Antigravity görev bekliyor — köprü çalışma alanındaki ajana inbox'u kontrol ettirin");
     };

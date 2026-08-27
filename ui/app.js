@@ -2685,7 +2685,10 @@ $("ops-komut-form")?.addEventListener("submit", async (e) => {
     kutu.innerHTML = `<div class="ops-komut-tamam">
       <b>${esc(r.ozet)}</b>
       ${r.yorumlayan && r.yorumNedeni ? `<div class="ops-yorum-not">${esc(r.yorumlayan)} yorumladı: ${esc(r.yorumNedeni)}</div>` : ""}
-      <div>${r.calistirildi ? "▶ Başlatıldı — aşağıdan izleyebilirsin."
+      <div>${r.gozlem
+        ? (r.calistirildi ? "🔎 Gözlem başlatıldı — sunucuya bağlanılıyor, sonucu aşağıdan izleyebilirsin."
+          : `⏸ ${esc(r.mesaj || "Şu an başka bir tur sürüyor.")}`)
+        : r.calistirildi ? "▶ Başlatıldı — aşağıdan izleyebilirsin."
         : r.yinelenen ? "↺ Bu iş zaten kuyrukta; ikinci kez açılmadı."
         : r.kapali ? `⏸ ${esc(r.kapaliMesaj)} İş kuyruğa alındı.`
         : "⏸ Şu an başka bir tur çalışıyor; iş kuyruğa alındı."}</div></div>`;

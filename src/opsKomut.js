@@ -62,9 +62,40 @@ const NIYETLER = [
   { isTuru: "oturum", desen: /oturum|giriş\s*(?:düşmüş|kontrol)|captcha|doğrulama\s*ekranı/iu },
 ];
 
+// Amac ayrimi: "iadeleri KONTROL ET / BAK / VAR MI" bir GOZLEM istegidir —
+// Faz 1'de serbesttir ve hemen calisir. "iadeleri AL / ISLE / BASLAT" ise
+// ISLEMdir; faz kapisina tabidir. Canli vaka: "ANNE magazasina gir iadeleri
+// kontrol et" komutu risk-3 islem sanilip kapali kuyruga atildi ve hicbir
+// sey olmadi — oysa kullanici yalniz bakilmasini istemisti.
+const ISLEM_FIILLERI = /(?:^|\s)(al|alın|başlat|işle|hallet|geç|geçin|gönder|yanıtla|cevap\s*ver|oluştur|iptal\s*et)(?:$|[\s,.!])/iu;
+const GOZLEM_FIILLERI = /kontrol\s*et|bak(?:ın)?\b|incele|göz\s*at|listele|var\s*mı|neler\s*var|durum(?:u|una)?\s*(?:nedir|bak|kontrol)|özet(?:le| geç)/iu;
+
+export function amacCoz(metin) {
+  const m = String(metin || "");
+  if (ISLEM_FIILLERI.test(m)) return "islem";      // islem fiili varsa o kazanir
+  if (GOZLEM_FIILLERI.test(m)) return "gozlem";
+  return "islem";                                   // belirsizde guvenli taraf: kuyruk
+}
+
 export function niyetCoz(metin) {
   const m = String(metin || "");
   for (const n of NIYETLER) if (n.desen.test(m)) return n.isTuru;
+  return null;
+}
+
+// GOZLEMDE konu yeterli: "iadeleri kontrol et" cumlesinde islem fiili yok,
+// ama neye bakilacagi acik. Islem tarafinda bu YAPILMAZ — belirsiz komuttan
+// risk-3 is uretmek tehlikelidir; gozlemde ise yalniz bakilir.
+const KONULAR = [
+  { isTuru: "amazon_iade", desen: /iade|return/iu },
+  { isTuru: "amazon_siparis", desen: /sipariş|order/iu },
+  { isTuru: "ebay_dava", desen: /dava|case|anlaşmazlık|itiraz/iu },
+  { isTuru: "ebay_mesaj", desen: /mesaj|message/iu },
+  { isTuru: "oturum", desen: /oturum|giriş|captcha/iu },
+];
+export function konuCoz(metin) {
+  const m = String(metin || "");
+  for (const k of KONULAR) if (k.desen.test(m)) return k.isTuru;
   return null;
 }
 
@@ -82,13 +113,15 @@ export function kimlikCoz(metin) {
 export function komutCoz(metin, { uyeler = [], cihazlar = [] } = {}) {
   const uye = uyeCoz(metin, uyeler);
   const magaza = magazaCoz(metin, cihazlar);
-  const isTuru = niyetCoz(metin);
+  const amac = amacCoz(metin);
+  const isTuru = niyetCoz(metin) || (amac === "gozlem" ? konuCoz(metin) : null);
   const kimlik = kimlikCoz(metin);
   const eksik = [];
   if (!magaza.ok) eksik.push(magaza.mesaj);
   if (!isTuru) eksik.push("Ne yapılacağı anlaşılmadı (iade / sipariş / dava / mesaj).");
   return {
     ok: Boolean(magaza.ok && isTuru),
+    amac,
     uye: uye ? { id: uye.id, name: uye.name } : null,
     magaza: magaza.ok ? magaza.magaza : null,
     isTuru,

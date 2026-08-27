@@ -895,6 +895,21 @@ const server = http.createServer(async (req, res) => {
         }
       }
       if (!cozum.ok) return json(res, 200, { ...cozum, calistirildi: false });
+      // GOZLEM AMACLI komut ("iadeleri kontrol et", "bak", "var mi") ISE
+      // DONUSMEZ: gozlem Faz 1'de serbesttir ve HEMEN calisir. Canli vaka:
+      // "ANNE magazasina gir iadeleri kontrol et" risk-3 islem sanilip
+      // kapali kuyruga atildi ve hicbir sey olmadi — kullanici yalniz
+      // bakilmasini istemisti.
+      if (cozum.amac === "gozlem") {
+        if (opsRun.aktif) {
+          return json(res, 200, { ...cozum, calistirildi: false, gozlem: true,
+            mesaj: `Şu an ${opsRun.aktif.target} üzerinde bir tur sürüyor; bitince tekrar deneyin.` });
+        }
+        opsRun.gozlemle(cozum.magaza, { memberId: cozum.uye?.id || body.memberId || null,
+          not: `${metin}${body.not ? `
+${body.not}` : ""}` }).catch(() => {});
+        return json(res, 200, { ...cozum, calistirildi: true, gozlem: true });
+      }
       // Cozulen komut ISE donusur; faz kapisi ve onay kurallari aynen gecerli.
       const varlik = cozum.kimlik || `komut-${Date.now()}`;
       const ekle = opsJobs.ekle({ isTuru: cozum.isTuru, hesap: cozum.magaza, varlikId: varlik,

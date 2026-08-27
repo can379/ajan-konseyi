@@ -58,3 +58,39 @@ test("komut yorumu kosusu kendiliginden yeniden baslatilmaz", async () => {
   const blok = server.slice(server.indexOf("Komut yorumu:"), server.indexOf("Komut yorumu:") + 700);
   assert.match(blok, /run\.autoResume = false/, "yorum koşusu autoResume kapalı olmalı");
 });
+
+// ---- Amac ayrimi: "kontrol et" gozlemdir, faz kapisina takilmaz ----
+test("gozlem amacli komut islem sanilmaz", async () => {
+  const { amacCoz, komutCoz } = await import("../src/opsKomut.js");
+  // Canli vaka: bu komut risk-3 islem sanilip kapali kuyruga atildi.
+  assert.equal(amacCoz("ANNE mağazasına gir iadeleri kontrol et"), "gozlem");
+  assert.equal(amacCoz("anneye bak iade var mı"), "gozlem");
+  assert.equal(amacCoz("iadeleri listele"), "gozlem");
+  // Islem fiili varsa ISLEM kazanir — "bak ve al" gozlem degildir.
+  assert.equal(amacCoz("ANNE iadelerini al"), "islem");
+  assert.equal(amacCoz("iadeleri incele ve al"), "islem");
+  // Belirsizde guvenli taraf: kuyruk.
+  assert.equal(amacCoz("ANNE iadeler"), "islem");
+
+  const cozum = komutCoz("ANNE mağazasına gir iadeleri kontrol et",
+    { uyeler: [], cihazlar: [{ name: "ANNE" }] });
+  assert.equal(cozum.ok, true);
+  assert.equal(cozum.amac, "gozlem");
+});
+
+test("sunucu gozlem komutunu kuyruga atmadan hemen calistirir", async () => {
+  const fs = await import("node:fs");
+  const kaynak = fs.readFileSync(new URL("../server.js", import.meta.url), "utf8");
+  const blok = kaynak.slice(kaynak.indexOf('cozum.amac === "gozlem"') - 200,
+    kaynak.indexOf('cozum.amac === "gozlem"') + 600);
+  assert.match(blok, /opsRun\.gozlemle/, "gözlem doğrudan tur başlatmalı");
+  assert.ok(!/opsJobs\.ekle/.test(blok), "gözlem iş kuyruğuna girmemeli");
+});
+
+test("koordinator ag kesintisinde beklemeye gecer", async () => {
+  const fs = await import("node:fs");
+  const koordinator = fs.readFileSync(new URL("../src/coordinator.js", import.meta.url), "utf8");
+  assert.match(koordinator, /agKanca\?\.hataMi/, "koordinatör ağ hatasını tanımalı");
+  const ork = fs.readFileSync(new URL("../src/orchestrator.js", import.meta.url), "utf8");
+  assert.match(ork, /this\.coordinator\.agKanca = \{/, "kanca orkestradan bağlanmalı");
+});
