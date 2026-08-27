@@ -252,6 +252,7 @@ const PHASE_TR = {
   running: "Çalışıyor", failed: "Hata", interrupted: "Kesildi",
   thinking: "Düşünüyor", answering: "Yanıtlıyor", verify: "Doğrulama", idle: "Hazır",
   stopping: "Durduruluyor",
+  ag_bekleniyor: "🌐 Ağ bekleniyor",
 };
 const KIND_TR = {
   message: "mesaj", task: "görev", result: "sonuç", review: "inceleme",

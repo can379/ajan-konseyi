@@ -1,4 +1,5 @@
 import path from "node:path";
+import dns from "node:dns/promises";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
@@ -1115,6 +1116,46 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     }
   }
 
+  // ---- AG KESINTISI ----
+  // Kullanici istegi: "internet kesildiginde durmali ve acildiginda kaldigi
+  // yerden devam etmeli; 'ag bekleniyor' durumuna gelmeli." Onceden ag
+  // hatasi siradan hata sayilip 3 deneme hakkini yakiyordu ve gorev
+  // "tamamlayamadi" diye dusuyordu (canli goruldu: ENOTFOUND).
+  static AG_HATASI = /ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|Can't reach|fetch failed|getaddrinfo|socket hang up|network (?:error|is unreachable)|Connection (?:error|refused|reset)/i;
+
+  agHatasiMi(hata) { return Orchestrator.AG_HATASI.test(String(hata || "")); }
+
+  // Internet var mi? DNS cozumu 3 sn icinde gelmezse yok sayilir.
+  async cevrimiciMi() {
+    const dene = (ad) => Promise.race([
+      dns.lookup(ad).then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 3000)),
+    ]).catch(() => false);
+    // Tek alan adina baglanma: biri araliksa digeri kurtarir.
+    return (await dene("one.one.one.one")) || (await dene("dns.google"));
+  }
+
+  // Ag donene kadar bekle. Donus: "offlineGoruldu" — gercekten kesinti
+  // yasandi mi? Ilk kontrolde ag zaten VARSA kesinti yok demektir; hata
+  // baska bir seydendir ve normal deneme hakki islemelidir.
+  async agBekle(run, { taskId = null, member = null } = {}) {
+    if (await this.cevrimiciMi()) return { offlineGoruldu: false };
+    this.store.addMessage(run, { from: "sistem", kind: "info", taskId,
+      content: "🌐 İnternet bağlantısı yok — ağ bekleniyor. Bağlantı gelince kaldığı yerden devam edilecek." });
+    if (member) this.store.setAgentStatus(member.id, "busy", "Ağ bekleniyor…");
+    this.store.updateRun(run, { phase: "ag_bekleniyor" });
+    while (!run.stopRequested) {
+      await new Promise((r) => setTimeout(r, 5000));
+      if (await this.cevrimiciMi()) {
+        this.store.addMessage(run, { from: "sistem", kind: "info", taskId,
+          content: "🌐 Bağlantı geri geldi; kaldığı yerden devam ediliyor." });
+        return { offlineGoruldu: true };
+      }
+      if (member) this.store.streamProgress(member.id, "Ağ bekleniyor…", "");
+    }
+    return { offlineGoruldu: true, durduruldu: true };
+  }
+
   startRun(run) {
     enrichAttachments(run.attachments || []).then((items) => { run.attachments = items; this.store.updateRun(run); return this.runPipeline(run, false); })
       .catch((err) => this.failRun(run, err))
@@ -1998,7 +2039,25 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Bir üyenin görevi hata verdiğinde başka sağlayıcıya geçirip sonucu o üye
     // üretmiş gibi göstermeyiz. Geçici köprü/sağlayıcı hatalarında aynı üyeyi,
     // temiz bir oturumla sınırlı sayıda yeniden deneriz.
-    for (let attempt = 2; !res.ok && !run.stopRequested && attempt <= 3; attempt++) {
+    let attempt = 1;
+    while (!res.ok && !run.stopRequested && attempt <= 3) {
+      // AG KESINTISI deneme hakki YAKMAZ: internet yokken 3 kez denemek
+      // hem anlamsiz hem gorevin olumu. Once beklenir, ag donunce ayni
+      // haktan devam edilir. (Kullanici istegi: "kesilince durmali,
+      // acilinca kaldigi yerden devam etmeli".)
+      if (this.agHatasiMi(res.error)) {
+        const bekleme = await this.agBekle(run, { taskId: task.id, member });
+        if (bekleme.durduruldu) return;
+        if (bekleme.offlineGoruldu) {
+          res = await invokeMember(header + prepared.prompt + summaryContract(), { ...opts, fresh:true });
+          if (res.cancelled) return;
+          if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
+          continue;   // hak yakilmadi
+        }
+        // Ag aslinda VAR: hata baska seyden — normal deneme islesin.
+      }
+      attempt++;
+      if (attempt > 3) break;
       S.addMessage(run, {
         from:"sistem", kind:"info", taskId:task.id,
         content:`${member.name} yanıtı alınamadı; aynı ajanla yeniden deneniyor (${attempt}/3).`,
