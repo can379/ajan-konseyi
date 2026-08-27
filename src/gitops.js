@@ -152,7 +152,20 @@ export async function createImmutableSnapshot(wtDir, message="ajan: review snaps
     await run("git",["-C",wtDir,"add","-A"],{env});
     const {stdout:tree}=await run("git",["-C",wtDir,"write-tree"],{env});
     const {stdout:commit}=await run("git",["-C",wtDir,"commit-tree",tree.trim(),"-p",parent.trim(),"-m",message],{env});
-    const {stdout:diff}=await run("git",["-C",wtDir,"diff","--binary","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:50*1024*1024});
+    // Buyuk diff SURECI OLDURMEMELI. Canli cokme: uye worktree'ye ikili
+    // dosyalar koyunca diff 52 MB oldu, maxBuffer (50 MB) asildi, hata
+    // yakalanmadigi icin SUNUCU COKTU ve kosu yarim kaldi (t2/t3 asili,
+    // paketleme hic kosmasdi — "yapamadi"). Inceleme kaniti icin 52 MB'lik
+    // ikili icerik zaten anlamsiz: tasarsa --stat ozetine dusulur.
+    let diff;
+    try {
+      ({stdout:diff}=await run("git",["-C",wtDir,"diff","--binary","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:100*1024*1024}));
+    } catch (hata) {
+      const {stdout:ozet}=await run("git",["-C",wtDir,"diff","--stat","--no-ext-diff",parent.trim(),commit.trim()],{maxBuffer:8*1024*1024});
+      diff=`# Tam fark alınamadı (${hata.code||"çıktı çok büyük"}); ikili/dev dosyalar dışarıda.
+# Değişiklik özeti:
+${ozet}`;
+    }
     return {commit:commit.trim(),parentCommit:parent.trim(),tree:tree.trim(),diff};
   } finally { fs.rmSync(indexFile,{force:true}); }
 }

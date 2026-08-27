@@ -1405,6 +1405,19 @@ function writeMcpEndpoint() {
 function removeMcpEndpoint() { try { fs.unlinkSync(MCP_ENDPOINT_FILE); } catch {} }
 for (const signal of ["exit", "SIGINT", "SIGTERM"]) {
   process.on(signal, () => { removeMcpEndpoint(); if (signal !== "exit") process.exit(0); });
+
+// EMNIYET AGI: tek bir gorevdeki yakalanmamis hata TUM konseyi oldurmesin.
+// Canli cokme: 52 MB'lik git diff maxBuffer asti, istisna yukari kacti ve
+// surec exit=1 ile oldu; calisan kosu yarim kaldi. Burada gunluge yazilir
+// ve surec YASAMAYA DEVAM eder — kosulari olduren sey hatanin kendisi
+// degil, surecin olmesiydi.
+process.on("uncaughtException", (hata) => {
+  console.error("[emniyet-agi] yakalanmamış hata:", hata?.stack || hata);
+});
+process.on("unhandledRejection", (hata) => {
+  console.error("[emniyet-agi] sahipsiz reddetme:", hata?.stack || hata);
+});
+
 }
 
 // ---- Zamanlanmis gorevler ----
@@ -1441,6 +1454,8 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`Antigravity köprü talimatı: bridge/antigravity/INSTRUCTIONS.md`);
   // Açılışta ve her 10 dakikada bir CLI sağlık kontrolü
   orch.checkHealth().catch(() => {});
-  setTimeout(()=>{for(const run of Object.values(store.runs)){if(run.status==="interrupted"&&run.autoResume&&run.kind!=="chat")orch.resumeRun(run);}},3500);
+  // autoResume kapisi yeter: sohbet kosulari varsayilan autoResume=false,
+  // yalniz GOREV ORTASINDA kesilenler store tarafindan acikca isaretlenir.
+  setTimeout(()=>{for(const run of Object.values(store.runs)){if(run.status==="interrupted"&&run.autoResume)orch.resumeRun(run);}},3500);
   setInterval(() => orch.checkHealth().catch(() => {}), 10 * 60 * 1000);
 });

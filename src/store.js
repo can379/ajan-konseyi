@@ -33,7 +33,8 @@ export class Store extends EventEmitter {
         }
         let recovered = false;
         if (run.status === "running") {
-          if (run.kind === "chat") {
+          const yarimGorev = (run.tasks || []).some((t) => ["active", "pending", "review"].includes(t.status));
+          if (run.kind === "chat" && !(run.turnActive && yarimGorev)) {
             // Sohbetler kesintiden etkilenmez; yarım kalan tur düşer, sohbet sürer.
             // Ama yarım kalan İŞ UNUTULMAZ: bir sonraki turda üyeye "şu istek
             // yarıda kesilmişti" notu gider ("kaldığın yerden devam et" gerçekten
@@ -45,6 +46,12 @@ export class Store extends EventEmitter {
             run.status = "idle";
             run.phase = "idle";
           } else {
+            // GOREV ORTASINDA kesilen kosu (sohbet dahil) sessizce "idle"a
+            // dusmez — kendiliginden surdurulur. Canli vaka: sunucu coktu,
+            // gorev dagitilmis kosu oylece kaldi; kullanici "yapamadi" gordu
+            // ve KIMSE haber vermedi. autoResume acikca isaretlenir ki
+            // yeniden baslatma dongusu bu kosuyu da alsin.
+            if (run.kind === "chat") run.autoResume = true;
             // Sunucu yeniden başladı; koşu kesildi ama kaldığı yerden devam ettirilebilir
             run.status = "interrupted";
             run.phase = "interrupted";
