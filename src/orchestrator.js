@@ -95,9 +95,26 @@ export function parseHostAction(text){const match=String(text||"").match(HOST_AC
 export function isExplicitPublishRequest(text){return/(?:github|git\b).{0,100}(?:yay[ıi](?:n|mla)\w*|push|gönder)|(?:yay[ıi]mla\w*|push et|gönder).{0,100}(?:github|repo|proje|sürüm)/i.test(String(text||""));}
 export function reportsBlockedResult(text){return /^\s*(?:#{1,3}\s*)?(?:durum\s*:\s*)?(?:bloke|blocked)\b|hiçbir değişiklik uygulanmadı|değişiklik uygulayamadım/i.test(String(text||""));}
 
+// Kimlik sorusu tespiti DAR olmali. Onceki kural cok genisti: gorev metninde
+// gecen siradan bir "kim yapti" ya da "hangi model" ifadesi cagriyi kimlik
+// sorusu saniyor, uye inceleme yerine "Ben Antigravity'yim..." diye kendini
+// tanitiyordu (canli goruldu: [t2] incelemesi kimlik beyanina donmustu).
+// Artik yalniz KULLANICININ DOGRUDAN sordugu kimlik sorusu sayilir:
+//  - metin kisa olmali (uzun gorev/inceleme istemi kimlik sorusu degildir),
+//  - kalip cumlenin BASINDA ya da sonunda, soru olarak gecmeli.
 export function isIdentityQuestion(text) {
-  return /(?:^|\s)(?:sen\s+)?kim(?:sin|dir)?(?:\s|[?.!,]|$)|kendini\s+tan[ıi]t|hangi\s+(?:yapay\s+zek[âa]|model|sağlayıcı)/i.test(String(text || ""));
+  const m = String(text || "").trim();
+  // 200 karakteri asan metin bir gorev/inceleme istemidir, kimlik sorusu degil.
+  if (m.length > 200) return false;
+  // "@Uye:" onekini at; kullanici sik sik boyle hitap ediyor.
+  const g = m.replace(/^@[\p{L}\p{N}_-]+\s*[:,]?\s*/u, "");
+  // Ayirt edici olcut: soru IKINCI SAHISA yoneltilmis mi? "hangi model
+  // kullaniyorsun" kimliktir; "hangi model kullanildigini dogrula" gorevdir.
+  return /(?:^|[?.!]\s*)(?:sen\s+)?kimsin\b/i.test(g)
+    || /(?:^|[?.!]\s*)kendini\s+tan[ıi]t/i.test(g)
+    || /(?:^|[?.!]\s*)(?:sen\s+)?hangi\s+(?:yapay\s+zek[âa]|model|sağlayıcı)\w*\s*(?:s[ıi]n\b|kullan[ıi]yorsun\b|kullan[ıi]rs[ıi]n\b|çalışıyorsun\b)/i.test(g);
 }
+
 
 // Uye cagrisinin calisma dizini. Cagri noktalarinin cogu (dogrudan mesaj,
 // ikili inceleme, tartisma, oylama) cwd gecirmiyordu; bu durumda ajan
@@ -483,7 +500,11 @@ export class Orchestrator {
     if (resolvedCwd !== opts.cwd) opts = { ...opts, cwd: resolvedCwd };
 
     const routeText = opts.routeText ?? prompt;
-    const identityQuestion = isIdentityQuestion(routeText);
+    // Kimlik modu YALNIZ kullanicinin dogrudan sorusu icin. Inceleme,
+    // tartisma, oylama, dogrulama gibi ic cagrilar hicbir kosulda kimlik
+    // beyanina donusmemeli — canli goruldu: [t2] incelemesi "Ben
+    // Antigravity'yim..." diye geldi ve inceleme yapilmadi.
+    const identityQuestion = !opts.noIdentityMode && isIdentityQuestion(routeText);
     // Kimlik soruları hiçbir bağlayıcıya veya ortak Codex köprüsüne devredilemez.
     const route = identityQuestion ? null : connectorRoute(member.provider, routeText);
     if (route?.mode === "shared") assertProviderAllowed(run, route.provider);
@@ -1736,7 +1757,7 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       `o zaman "issues" içinde neyin engellediğini somut yaz. Küçük eksikler, biçim kusurları ` +
       `veya "daha iyi olabilirdi" türü notlar için buyut KULLANMA — düzeltmeyi üretici kendi içinde yapar.`;
     const res = await this.callMember(run, reviewer, reviewPrompt, {
-      label: "ikili inceleme", shouldStop: () => run.stopRequested,
+      label: "ikili inceleme", noIdentityMode:true, shouldStop: () => run.stopRequested,
       // Denetci tek islik ve kendi basina yeterli bir cagridir: dar baglam +
       // taze oturum. Uzun sohbetlerde oturum devami her turda eski baglami
       // yeniden tasiyordu; inceleme icin buna gerek yok.
@@ -2207,7 +2228,7 @@ ${truncate(res.text, 800)}
       const prompt=isolatedReviewPrompt(packet,reviewer.name);
       const res = await this.callMember(run, reviewer, prompt, {
         label: `inceleme: ${task.id}`,
-        isolated:true, fresh:true,
+        isolated:true, fresh:true, noIdentityMode:true,
         sessionKey:`${run.id}#isolated-review#${task.id}#${reviewer.id}#${packet.fingerprint}`,
         shouldStop: () => run.stopRequested,
       });
@@ -2307,7 +2328,7 @@ ${truncate(res.text, 800)}
         `Her itirazı değerlendir. Katılıyorsan çözümü uygula; katılmıyorsan teknik kanıtla açıkla. Sonunda "Devir özeti" başlığıyla hangi görüşlerin kabul edildiğini ve nihai durumunu yaz.`+
         (requiresCodeAuthoring(task,run.mode)?" Gerekli kod değişikliklerini kendi çalışma kopyanda uygula ve ilgili testleri çalıştır.":"");
       const res=await this.callMember(run,author,prompt,{
-        label:`istişare: ${task.id}`, codeMode:requiresCodeAuthoring(task,run.mode),
+        label:`istişare: ${task.id}`, noIdentityMode:true, codeMode:requiresCodeAuthoring(task,run.mode),
         cwd:worktrees?.[author.id]?.wtDir || run.projectDir || undefined,
         shouldStop:()=>run.stopRequested,
       });
@@ -2371,7 +2392,7 @@ ${truncate(res.text, 800)}
         `OYLAMA. Anlaşmazlık: ${assess.summary}\n\nYaklaşımlar:\n${positions}\n\n` +
         `Bir üyeye (id ile) veya "karma"ya oy ver. YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
         `{"choice": "üye id'si veya karma", "scores": {"dogruluk": 1-5, "eksiksizlik": 1-5, "risk": 1-5}, "reason": "teknik gerekçe (Türkçe)"}`;
-      const res = await this.callMember(run, member, prompt, { label: "oylama", shouldStop: () => run.stopRequested });
+      const res = await this.callMember(run, member, prompt, { label: "oylama", noIdentityMode:true, shouldStop: () => run.stopRequested });
       if (res.ok) {
         const v = extractJson(res.text) || { choice: "?", reason: res.text };
         const choiceName = this.memberById(v.choice)?.name || v.choice;
