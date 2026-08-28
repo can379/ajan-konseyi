@@ -86,9 +86,16 @@ test("tum gorevler ayni dusuk puani alirsa revizyon acilmaz (olcum arizasi)", as
   // Hepsi 1/5 -> ayirt etme yok, kalibrasyon bozuk.
   assert.equal(o._kalibrasyonBozuk(kur([1, 1, 1, 1, 1, 1, 1])), true);
   assert.equal(o._kalibrasyonBozuk(kur([1, 2, 2])), true);
+  // COGUNLUK olcutu: onceki "HEPSI <=2" surumunde 17 incelemenin icindeki
+  // TEK bir 3/5 emniyeti devre disi birakiyordu ve 7 revizyon yine
+  // aciliyordu (canli olculdu). Gercek dagilim:
+  assert.equal(o._kalibrasyonBozuk(kur([1, 1, 1, 1, 1, 1, 1, 3])), true,
+    "tek istisna emniyeti devre dışı bırakmamalı");
+  assert.equal(o._kalibrasyonBozuk(kur([1, 2, 2, 1, 3])), true, "4/5 düşükse ayırt etme yok");
   // Gercek ayirt etme varsa revizyon MESRUDUR, engellenmemeli.
   assert.equal(o._kalibrasyonBozuk(kur([1, 4, 5])), false);
   assert.equal(o._kalibrasyonBozuk(kur([2, 2, 4])), false);
+  assert.equal(o._kalibrasyonBozuk(kur([2, 2, 4, 5])), false, "yarısı iyiyse kapı çalışsın");
   // Az gorevde tesaduf olabilir; emniyet devreye girmez.
   assert.equal(o._kalibrasyonBozuk(kur([1, 1])), false);
 });
@@ -96,5 +103,14 @@ test("tum gorevler ayni dusuk puani alirsa revizyon acilmaz (olcum arizasi)", as
 test("kalibrasyon bozuksa itirazlar rapora NOT edilir, sessizce atilmaz", () => {
   const ork = oku("src/orchestrator.js");
   assert.match(ork, /bu ölçüm arızası sayıldı, revizyon turu açılmadı/);
+  assert.match(ork, /İnceleyici itirazları rapora not edildi/);
+});
+
+test("kanit kapisi da kalibrasyona bakar — bilgi tasimayan red birlestirmeyi kilitlemez", () => {
+  // Uc tur ust uste is dallarda kaldi, kullaniciya HIC ulasmadi. Puanlama
+  // ayirt etmiyorsa kapinin reddi de bilgi tasimaz.
+  assert.match(ork, /KAPI DA KALIBRASYONA BAKAR/);
+  assert.match(ork, /if \(kapi\.reasons\?\.length && this\._kalibrasyonBozuk\(run\)\)/);
+  assert.match(ork, /kanıt kapısı ölçüm arızası sayıldı ve birleştirme yapıldı/);
   assert.match(ork, /İnceleyici itirazları rapora not edildi/);
 });

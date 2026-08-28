@@ -2345,8 +2345,13 @@ ${truncate(res.text, 800)}
       return r.length ? Math.max(...r.map((x) => Number(x.agreement) || 0)) : null;
     }).filter((x) => x !== null);
     if (enIyi.length < gorevler.length) return false;
-    // Hepsi <=2 ise ayirt etme yok demektir.
-    return enIyi.every((p) => p <= 2);
+    // COGUNLUK olcutu. Onceki surum "HEPSI <=2" ariyordu; olculdu ki 17
+    // incelemenin icindeki TEK bir 3/5 emniyeti devre disi birakiyor ve
+    // 7 revizyon turu yine aciliyor. Gercek dunyada bir istisna hep cikar.
+    // Olcut: gorevlerin en az %80'i ayirt edilemeyecek kadar dusuk puan
+    // aldiysa bu puanlama BILGI TASIMIYOR demektir.
+    const dusuk = enIyi.filter((p) => p <= 2).length;
+    return dusuk / enIyi.length >= 0.8;
   }
 
   async reconcilePeerFeedback(run, worktrees) {
@@ -2590,6 +2595,17 @@ ${truncate(res.text, 800)}
     // kalir ve sebebiyle raporlanir. Karar kullanicinindir, kapinin degil.
     const kapi = evaluateEvidenceGate(run, "merge", { requireTests: false });
     run.evidenceGate = kapi;
+    // KAPI DA KALIBRASYONA BAKAR. Puanlama bilgi tasimiyorsa (gorevlerin
+    // cogu ayni dusuk puani almissa) kapinin reddi de bilgi tasimaz —
+    // olculdu: uc tur ust uste is dallarda kaldi, kullaniciya HIC ulasmadi.
+    // Boyle bir durumda birlestirme yapilir ve itirazlar rapora not edilir;
+    // karar kullanicinindir. Gercek ayirt etme varsa kapi aynen calisir.
+    if (kapi.reasons?.length && this._kalibrasyonBozuk(run)) {
+      S.addMessage(run, { from: "sistem", kind: "info",
+        content: `ℹ İnceleme puanları ayırt etmiyor (görevlerin çoğu aynı düşük puanı aldı) — kanıt kapısı ölçüm arızası sayıldı ve birleştirme yapıldı.\n`
+          + `İnceleyici itirazları rapora not edildi; değişiklikleri kendiniz gözden geçirin.` });
+      kapi.reasons = [];
+    }
     const engelli = new Set();
     for (const sebep of kapi.reasons || []) {
       const m = String(sebep).match(/^\[(t\d+)\]/);
