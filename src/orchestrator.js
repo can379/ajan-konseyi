@@ -102,6 +102,30 @@ export function reportsBlockedResult(text){return /^\s*(?:#{1,3}\s*)?(?:durum\s*
 // Artik yalniz KULLANICININ DOGRUDAN sordugu kimlik sorusu sayilir:
 //  - metin kisa olmali (uzun gorev/inceleme istemi kimlik sorusu degildir),
 //  - kalip cumlenin BASINDA ya da sonunda, soru olarak gecmeli.
+// "devam et" TEK BASINA BIR GOREV DEGILDIR — son gercek istegin devamidir.
+// Canli vaka: kullanici uygulamada "devam et kaldigin yerden" yazdi;
+// koordinator bunu yeni bir istek sanip ONDAN ONCEKI (cok daha eski) ise
+// dondu ve o anki ozellik listesini cope atti. Kullanici hakli olarak
+// "devam et demek devam et demektir" dedi.
+const DEVAM_KALIBI = /^(?:hadi\s+)?(?:devam(?:\s*et(?:sin)?)?|sürdür|kaldığın\s+yerden(?:\s+devam(?:\s*et)?)?|devam\s+et\s+kaldığın\s+yerden|continue|go\s+on)\s*[.!]*$/i;
+
+export function isDevamIstegi(text) {
+  const m = String(text || "").trim();
+  // Kisa olmali: "devam et ama once sunu yap" yeni talimattir.
+  if (m.length > 60) return false;
+  return DEVAM_KALIBI.test(m);
+}
+
+// Sohbetteki SON GERCEK istek: devam ifadelerini atlayarak geriye bakar.
+export function sonGercekIstek(messages = []) {
+  const kul = (messages || []).filter((m) => m.from === "kullanici");
+  for (let i = kul.length - 1; i >= 0; i--) {
+    const metin = String(kul[i].content || "").trim();
+    if (metin && !isDevamIstegi(metin)) return metin;
+  }
+  return "";
+}
+
 export function isIdentityQuestion(text) {
   const m = String(text || "").trim();
   // 200 karakteri asan metin bir gorev/inceleme istemidir, kimlik sorusu degil.
@@ -1492,6 +1516,32 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Bilgisayar kullanma onayi tur basina gecerlidir; yeni turda yeniden sorulur.
     delete run._computerOnay;
     run.request = text;
+
+    // "DEVAM ET" = SON GERCEK ISTEGIN DEVAMI. Tek basina bir gorev degildir.
+    // Onceden koordinator bunu yeni bir istek sanip cok daha eski bir ise
+    // donebiliyordu (canli goruldu: o anki ozellik listesi cope gitti).
+    // Cozum: devam ifadesi geldiginde koordinatore ASIL istegi ve yarim
+    // kalan gorevlerin durumunu acikca veriyoruz.
+    if (isDevamIstegi(text)) {
+      const asil = sonGercekIstek(run.messages || []);
+      const yarim = (run.tasks || []).filter((t) => t.status !== "done");
+      const biten = (run.tasks || []).filter((t) => t.status === "done");
+      if (asil) {
+        run.request = [
+          `Kullanıcı "${text}" dedi — bu YENİ bir istek DEĞİL, aşağıdaki isteğin DEVAMIDIR.`,
+          ``,
+          `--- DEVAM EDİLECEK ASIL İSTEK ---`,
+          asil,
+          `--- ASIL İSTEK SONU ---`,
+          ``,
+          biten.length ? `TAMAMLANAN görevler (TEKRAR ETME): ${biten.map((t) => `${t.id} ${t.title || ""}`).join(" · ")}` : "",
+          yarim.length ? `YARIM KALAN görevler (BUNLARI BİTİR): ${yarim.map((t) => `${t.id} ${t.title || ""} [${t.status}]`).join(" · ")}` : "",
+          ``,
+          `Bu isteğin öncesindeki daha eski konulara DÖNME. Yarım kalanı tamamla.`,
+        ].filter(Boolean).join("\n");
+      }
+    }
+
     attachments = await enrichAttachments(attachments);
     run.attachments = attachments;
     run.reviews = [];
