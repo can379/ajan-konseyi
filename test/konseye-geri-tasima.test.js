@@ -60,3 +60,41 @@ test("yetenek sozlesmesi uyeye 'cozumu kendin bul' der", () => {
   // Gercek sinir korunur: geri donduruleme z islemde durmak serbest.
   assert.match(ork, /geri döndürülemez işlem\) dur ve sebebini kanıtıyla yaz/);
 });
+
+// ---- INCELEME KALIBRASYONU ----
+// Olculdu (7 gorevlik uygulama turu): incelemelerin 7'si de 1/5 + yuksek
+// onem verdi ve 7 revizyon turu acildi (11 dakika). Puan bilgi tasimiyordu.
+// Kok neden: inceleyiciye dosya/test/tarayici verilmeden "kabul kriterlerini
+// dogrula" deniyor; dogrulayamadigi her seye dusuk puan veriyor.
+test("inceleyiciye 'dogrulayamadim' ile 'kusur buldum' ayrimi ogretilir", () => {
+  const r = oku("src/reviewIsolation.js");
+  assert.match(r, /PUANLAMA — DİKKAT/);
+  assert.match(r, /Bu senin kısıtın, yazarın kusuru DEĞİL/);
+  assert.match(r, /TEK BAŞINA düşük puan ve yüksek önem sebebi SAYMA/);
+  assert.match(r, /Her incelemeye 1\/5 \+ yüksek vermek bilgi taşımaz/);
+  // Dogrulanamayan konular ayri alanda raporlanir, puani bogmaz.
+  assert.match(r, /"dogrulanamayan":\["paketten doğrulanamayan konular"\]/);
+});
+
+test("tum gorevler ayni dusuk puani alirsa revizyon acilmaz (olcum arizasi)", async () => {
+  const { Orchestrator } = await import("../src/orchestrator.js");
+  const o = Object.create(Orchestrator.prototype);
+  const kur = (puanlar) => ({
+    tasks: puanlar.map((_, i) => ({ id: `t${i + 1}`, status: "done" })),
+    reviews: puanlar.map((p, i) => ({ taskId: `t${i + 1}`, agreement: p, severity: "yuksek" })),
+  });
+  // Hepsi 1/5 -> ayirt etme yok, kalibrasyon bozuk.
+  assert.equal(o._kalibrasyonBozuk(kur([1, 1, 1, 1, 1, 1, 1])), true);
+  assert.equal(o._kalibrasyonBozuk(kur([1, 2, 2])), true);
+  // Gercek ayirt etme varsa revizyon MESRUDUR, engellenmemeli.
+  assert.equal(o._kalibrasyonBozuk(kur([1, 4, 5])), false);
+  assert.equal(o._kalibrasyonBozuk(kur([2, 2, 4])), false);
+  // Az gorevde tesaduf olabilir; emniyet devreye girmez.
+  assert.equal(o._kalibrasyonBozuk(kur([1, 1])), false);
+});
+
+test("kalibrasyon bozuksa itirazlar rapora NOT edilir, sessizce atilmaz", () => {
+  const ork = oku("src/orchestrator.js");
+  assert.match(ork, /bu ölçüm arızası sayıldı, revizyon turu açılmadı/);
+  assert.match(ork, /İnceleyici itirazları rapora not edildi/);
+});

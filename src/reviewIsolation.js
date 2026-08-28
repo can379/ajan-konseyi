@@ -63,8 +63,15 @@ export function isolatedReviewPrompt(packet, reviewerName="Reviewer") {
 Yalnız aşağıdaki immutable kanıt paketini kullan. Sohbet geçmişine, kullanıcının önceki mesajlarına, yazarın açıklamalarına, ortak hafızaya, proje dosyalarına, internete veya başka araçlara başvurma. Kod değiştirme. Pakette olmayan bilgi için varsayım üretme; "kanıt yok" de.
 
 TaskContract kabul kriterlerini tek tek commit diff'i ve test sonuçlarıyla karşılaştır.
-Paketteki "requiredTests" alanı, sözleşmenin zorunlu komutlarını sistemin kaydettiği GERÇEK çalıştırmalarla eşleştirir: ran=false ise o test hiç çalışmamıştır, yazarın metinde ne dediği önemsizdir. Sonucu YALNIZCA şu şemada tek JSON nesnesi olarak ver:
-{"agreement":1-5,"severity":"dusuk|orta|yuksek","points":["somut bulgu"],"evidence":["commit/diff/test kanıtı"],"suggestion":"tek cümlelik öneri"}
+Paketteki "requiredTests" alanı, sözleşmenin zorunlu komutlarını sistemin kaydettiği GERÇEK çalıştırmalarla eşleştirir: ran=false ise o test hiç çalışmamıştır, yazarın metinde ne dediği önemsizdir.
+
+PUANLAMA — DİKKAT. Elinde YALNIZ bu paket var: dosya sistemi, test çalıştırma ve tarayıcı YOK. Bu senin kısıtın, yazarın kusuru DEĞİL. İkisini karıştırma:
+- "Diff'te SOMUT bir kusur görüyorum" (yanlış mantık, eksik kod, kriterle çelişen değişiklik) → düşük puan, önem yüksek. Kusuru diff satırıyla göster.
+- "Bu paketten doğrulayamıyorum" (görsel değişiklik, çalışma zamanı davranışı, cihazda test gerektiren şey) → bunu points içinde AÇIKÇA yaz ama TEK BAŞINA düşük puan ve yüksek önem sebebi SAYMA. Diff kabul kriterine uygunsa 3-4 ver, doğrulanamayan kısmı not düş.
+Ölçüt şu: bulduğun şey işi DURDURMALI mı, yoksa sadece not mu? Yüksek önem = bu haliyle birleştirilirse zarar verir. Her incelemeye 1/5 + yüksek vermek bilgi taşımaz; gerçekten engelleyici olanı ayırt et.
+
+Sonucu YALNIZCA şu şemada tek JSON nesnesi olarak ver:
+{"agreement":1-5,"severity":"dusuk|orta|yuksek","points":["somut bulgu"],"evidence":["commit/diff/test kanıtı"],"dogrulanamayan":["paketten doğrulanamayan konular"],"suggestion":"tek cümlelik öneri"}
 
 --- IMMUTABLE REVIEW PACKET (${packet.fingerprint}) ---
 ${JSON.stringify(packet,null,2)}

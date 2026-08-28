@@ -2336,6 +2336,19 @@ ${truncate(res.text, 800)}
   // İnceleme yalnız raporda kalmaz: ciddi/somut itirazlar görev sahibine geri
   // döner. Yazar diğer ajanların görüşlerine tek tek cevap verir, gerekiyorsa
   // kendi çalışma kopyasında düzeltir ve görev çıktısını günceller.
+  // Puanlar bilgi tasiyor mu? Her gorev ayni dusuk puani aldiysa hayir.
+  _kalibrasyonBozuk(run) {
+    const gorevler = (run.tasks || []).filter((t) => t.status === "done").map((t) => t.id);
+    if (gorevler.length < 3) return false;   // az gorevde tesaduf olabilir
+    const enIyi = gorevler.map((id) => {
+      const r = (run.reviews || []).filter((x) => x.taskId === id && !x.invalidatedAt);
+      return r.length ? Math.max(...r.map((x) => Number(x.agreement) || 0)) : null;
+    }).filter((x) => x !== null);
+    if (enIyi.length < gorevler.length) return false;
+    // Hepsi <=2 ise ayirt etme yok demektir.
+    return enIyi.every((p) => p <= 2);
+  }
+
   async reconcilePeerFeedback(run, worktrees) {
     const S=this.store;
     // REVIZYONLAR PARALEL. Onceden tek tek sirayla kosuyordu: 7 gorevlik bir
@@ -2354,6 +2367,16 @@ ${truncate(res.text, 800)}
       // birlikte. Kalan itirazlar gorev ciktisina not olarak islenir; uye
       // cozumu kendi icinde arar.
       const feedback=run.reviews.filter((r)=>r.taskId===task.id && r.agreement<=2 && r.severity==="yuksek");
+      // KALIBRASYON EMNIYETI: TUM gorevler ayni dusuk puani aldiysa bu bir
+      // sinyal degil, olcum arizasidir — inceleyici paketten dogrulayamadigi
+      // her seye 1/5 veriyordur. Olculdu: 7 gorevin 7'si de 1/5+yuksek aldi
+      // ve 7 revizyon turu acildi (11 dakika). Boyle bir durumda revizyon
+      // acmak yerine itirazlar NOT olarak gecer; kullanici raporda gorur.
+      if (feedback.length && this._kalibrasyonBozuk(run)) {
+        S.addMessage(run, { from:"sistem", kind:"info", taskId:task.id,
+          content:`ℹ Tüm görevler aynı düşük puanı aldı — bu ölçüm arızası sayıldı, revizyon turu açılmadı. İnceleyici itirazları rapora not edildi.` });
+        continue;
+      }
       if(!feedback.length) continue;
       let author=this.memberById(task.assignee);
       if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers(run));
