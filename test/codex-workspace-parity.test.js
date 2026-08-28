@@ -53,7 +53,14 @@ test("git ve test merkezi dal durumu diff log commit ve test çalıştırmayı s
   assert.match(app,/renderGitCenter/);assert.match(html,/data-tool-tab="git"/);assert.match(html,/git-test-output/);
 });
 test("EvidenceGate review ve zorunlu kontroller geçmeden merge publish done işlemlerini engeller",()=>{
-  assert.match(orch,/enforceEvidenceGate\(run,"merge"/);assert.match(orch,/enforceEvidenceGate\(run,"publish"/);
+  // MERGE kapisi artik hep-ya-hic DEGIL: gorev bazinda degerlendirilir,
+  // kaniti gecen isler birlesir, gecmeyenler dalinda kalip raporlanir.
+  // Onceden tek gorev gecemese TUM birlestirme iptal oluyor ve 12 gorevlik
+  // emek kullaniciya hic ulasmiyordu (canli goruldu).
+  assert.match(orch,/evaluateEvidenceGate\(run, "merge"/);
+  assert.match(orch,/Kanıtı yeterli bulunmayan görevler birleştirilmedi/);
+  assert.match(orch,/Hiçbir dal kanıt kapısını geçemedi/);
+  assert.match(orch,/enforceEvidenceGate\(run,"publish"/);
   assert.match(orch,/enforceEvidenceGate\(run, "done"/);
   // Kapi artik kosuyu oldurmez: eksik adim onarilip yeniden denenir, onarim
   // mumkun degilse hata yine yukselir (kapi gevsetilmedi).

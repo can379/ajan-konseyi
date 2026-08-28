@@ -27,7 +27,7 @@ import { StepLog } from "./steps.js";
 import { numstatSnapshot, diffDelta } from "./diffSummary.js";
 import { normalizeTaskContract } from "./taskContract.js";
 import { createReviewPacket, isolatedReviewPrompt, invalidateStaleReviews } from "./reviewIsolation.js";
-import { assertEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
+import { assertEvidenceGate, evaluateEvidenceGate, EvidenceGateError } from "./evidenceGate.js";
 import { appendRunEvent, recordTestExecution, testEvidenceFromEvents } from "./runEvents.js";
 import { assertProviderAllowed, providerAllowed } from "./providerPolicy.js";
 
@@ -2526,7 +2526,7 @@ ${truncate(res.text, 800)}
   async codeIntegration(run, worktrees) {
     const S = this.store;
     S.setPhase(run, "integration");
-    const diffs = [];
+    let diffs = [];
     for (const [memberId, wt] of Object.entries(worktrees)) {
       const member = this.memberById(memberId);
       const { status, diff } = await gitops.collectDiff(wt.wtDir);
@@ -2559,8 +2559,42 @@ ${truncate(res.text, 800)}
       this.exportArtifacts(run, "integration");
       return;
     }
-    const mergeGate=this.enforceEvidenceGate(run,"merge",{requireTests:false});
-    S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate merge için geçti · ${mergeGate.evidence.reviews.length} review kanıtı`});
+    // KAPI TURU OLDURMEZ, AYIKLAR. Onceden tek gorev gecemese TUM birlestirme
+    // iptal oluyor ve tur "hatayla bitti" diyordu — 12 gorevlik emek uye
+    // dallarinda kalip kullaniciya HIC ulasmiyordu (canli goruldu, kullanici
+    // "is yapildi ama bana gelmiyor" dedi). Artik kapi gorev bazinda
+    // degerlendirilir: kaniti gecen isler BIRLESIR, gecmeyenler dalinda
+    // kalir ve sebebiyle raporlanir. Karar kullanicinindir, kapinin degil.
+    const kapi = evaluateEvidenceGate(run, "merge", { requireTests: false });
+    run.evidenceGate = kapi;
+    const engelli = new Set();
+    for (const sebep of kapi.reasons || []) {
+      const m = String(sebep).match(/^\[(t\d+)\]/);
+      if (m) engelli.add(m[1]);
+    }
+    const gecenDiffs = diffs.filter((d) => {
+      const gorev = (run.tasks || []).find((t) => t.assignee === d.memberId);
+      return !gorev || !engelli.has(gorev.id);
+    });
+    if (engelli.size) {
+      const adlar = [...engelli].map((id) => {
+        const t = (run.tasks || []).find((x) => x.id === id);
+        return `${id}${t?.title ? ` (${t.title})` : ""}`;
+      }).join(" · ");
+      S.addMessage(run, { from: "sistem", kind: "info",
+        content: `⚠ Kanıtı yeterli bulunmayan görevler birleştirilmedi: ${adlar}\n`
+          + `Bu görevlerin çalışması kendi dallarında duruyor; farkları aşağıda inceleyip elle alabilirsiniz.\n`
+          + `Diğer ${gecenDiffs.length} üye dalı birleştiriliyor.` });
+    } else {
+      S.addMessage(run,{from:"sistem",kind:"info",content:`✓ EvidenceGate merge için geçti · ${kapi.evidence.reviews.length} review kanıtı`});
+    }
+    if (!gecenDiffs.length) {
+      S.addMessage(run, { from: "sistem", kind: "info",
+        content: "Hiçbir dal kanıt kapısını geçemedi; otomatik birleştirme yapılmadı. Çalışmalar dallarında duruyor." });
+      this.exportArtifacts(run, "integration");
+      return;
+    }
+    diffs = gecenDiffs;
 
     const plan = await this.coordinator.mergePlan(run, diffs, this.coordCtx(run));
     S.addMessage(run, {
