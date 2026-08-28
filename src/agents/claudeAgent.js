@@ -5,6 +5,9 @@ import { cleanEnv } from "../util.js";
 import { CLAUDE_EFFORT, CLAUDE_EFFORT_TOKENS } from "../models.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// Cagri CALISIYORSA surekli cikti akar; 4 dakika hic satir gelmiyorsa
+// takilmistir. Toplam siniri beklemek yerine erken kesilir.
+export const SESSIZLIK_MS = 4 * 60 * 1000;
 
 // Claude Code CLI adaptörü.
 // Abonelik oturumu ile "claude -p --output-format json" çağırır;
@@ -142,14 +145,28 @@ export class ClaudeAgent extends BaseAgent {
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
       let forceKillTimer = null;
-      const timer = setTimeout(() => {
-        timedOut = true;
+      const oldur = (sebep) => {
+        timedOut = true; this.log(`claude ${sebep}`);
         try { child.kill("SIGTERM"); } catch {}
         // Claude CLI veya onun alt süreci SIGTERM'i yutarsa Promise ancak
         // süreç kapanınca çözüldüğü için tur sonsuza kadar active kalıyordu.
         forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
-      }, timeoutMs);
+      };
+      const timer = setTimeout(() => oldur("toplam süre aşıldı"), timeoutMs);
+
+      // SESSIZLIK ZAMAN ASIMI. Toplam sinir tek basina yetmiyor: takilmis
+      // cagri 15 dakika bos bekleniyor, sonra yeniden deneniyor — olculdu,
+      // tek turda 24 dakika bu sekilde kayboldu. Calisan cagri surekli
+      // stream-json satiri yayar; SUSAN cagri olmustur. Uzun ama CALISAN
+      // isler etkilenmez, cunku her satir sayaci sifirlar.
+      const sessizlikMs = Math.min(SESSIZLIK_MS, timeoutMs);
+      let sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      const canlilik = () => {
+        clearTimeout(sessizlikTimer);
+        sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      };
       child.stdout.on("data", (d) => {
+        canlilik();
         stdout += d;
         if (onLine) {
           lineBuf += d;
@@ -158,10 +175,11 @@ export class ClaudeAgent extends BaseAgent {
           for (const l of lines) if (l.trim()) onLine(l.trim());
         }
       });
-      child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
+      child.stderr.on("data", (d) => { canlilik(); stderr += d; });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(sessizlikTimer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
         clearTimeout(timer);
+        clearTimeout(sessizlikTimer);
         clearTimeout(forceKillTimer);
         this.children.delete(child);
         if (onLine && lineBuf.trim()) onLine(lineBuf.trim());

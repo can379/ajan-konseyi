@@ -8,6 +8,9 @@ import { CODEX_EFFORT } from "../models.js";
 import { kindForTool, stepFromCommand } from "../steps.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// Cagri CALISIYORSA surekli JSON olayi akar; 4 dakika hic satir gelmiyorsa
+// takilmistir. Toplam siniri beklemek bos gecen dakikalar demek (olculdu).
+const SESSIZLIK_MS = 4 * 60 * 1000;
 const run = promisify(execFile);
 
 // Codex'in workspace-write kum havuzu ".git" altina yazmayi varsayilan olarak
@@ -201,12 +204,20 @@ ${String(ev.item.aggregated_output || ev.item.output || "")}`,
       this.children.add(child);
       let stdout = "", stderr = "", timedOut = false, lineBuf = "";
       let forceKillTimer = null;
-      const timer = setTimeout(() => {
-        timedOut = true;
+      const oldur = (sebep) => {
+        timedOut = true; this.log?.(`codex ${sebep}`);
         try { child.kill("SIGTERM"); } catch {}
         forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
-      }, timeoutMs);
+      };
+      const timer = setTimeout(() => oldur("toplam süre aşıldı"), timeoutMs);
+      const sessizlikMs = Math.min(SESSIZLIK_MS, timeoutMs);
+      let sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      const canlilik = () => {
+        clearTimeout(sessizlikTimer);
+        sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      };
       child.stdout.on("data", (d) => {
+        canlilik();
         stdout += d;
         if (onLine) {
           lineBuf += d;
@@ -215,10 +226,11 @@ ${String(ev.item.aggregated_output || ev.item.output || "")}`,
           for (const l of lines) if (l.trim()) onLine(l.trim());
         }
       });
-      child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
+      child.stderr.on("data", (d) => { canlilik(); stderr += d; });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(sessizlikTimer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
         clearTimeout(timer);
+        clearTimeout(sessizlikTimer);
         clearTimeout(forceKillTimer);
         this.children.delete(child);
         if (onLine && lineBuf.trim()) onLine(lineBuf.trim());

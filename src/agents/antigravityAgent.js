@@ -7,6 +7,10 @@ import { cleanEnv } from "../util.js";
 import { ANTIGRAVITY_EFFORT } from "../models.js";
 
 const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
+// Cagri CALISIYORSA cikti akar; uzun sessizlik takilma demektir.
+// Antigravity arac turlari arasinda daha uzun sessiz kalabiliyor, bu
+// yuzden esik digerlerinden yuksek tutuldu.
+const SESSIZLIK_MS = 6 * 60 * 1000;
 const QUOTA_ERROR_RE = /(?:429|RESOURCE_EXHAUSTED|QUOTA_EXHAUSTED|exhausted your capacity|quota (?:will reset|exceeded))/i;
 const MODEL_ERROR_RE = /(?:unknown|invalid|unsupported|not found|unrecognized|not recogni[sz]ed).{0,80}\bmodel\b|\bmodel\b.{0,80}(?:unknown|invalid|unsupported|not found|unrecognized|not recogni[sz]ed)/i;
 
@@ -159,22 +163,30 @@ export class AntigravityAgent extends BaseAgent {
       this.children.add(child);
       let stdout = "", stderr = "", lineBuf = "", timedOut = false;
       let forceKillTimer = null;
-      const timer = setTimeout(() => {
-        timedOut = true;
+      const oldur = (sebep) => {
+        timedOut = true; this.log?.(`agy ${sebep}`);
         try { child.kill("SIGTERM"); } catch {}
         // agy'nin iç language-server süreci SIGTERM'i bazı araç turlarında
         // yutabiliyor. Kullanıcı arayüzü sonsuza dek "üretiyor" kalmasın.
         forceKillTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, 4_000);
-      }, timeoutMs);
+      };
+      const timer = setTimeout(() => oldur("toplam süre aşıldı"), timeoutMs);
+      const sessizlikMs = Math.min(SESSIZLIK_MS, timeoutMs);
+      let sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      const canlilik = () => {
+        clearTimeout(sessizlikTimer);
+        sessizlikTimer = setTimeout(() => oldur("yanıt akmıyor (sessizlik)"), sessizlikMs);
+      };
       child.stdout.on("data", (d) => {
+        canlilik();
         stdout += d; lineBuf += d;
         const lines = lineBuf.split("\n"); lineBuf = lines.pop();
         for (const line of lines) if (line.trim()) onLine(line.trim());
       });
-      child.stderr.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
+      child.stderr.on("data", (d) => { canlilik(); stderr += d; });
+      child.on("error", (err) => { clearTimeout(timer); clearTimeout(sessizlikTimer); clearTimeout(forceKillTimer); this.children.delete(child); reject(err); });
       child.on("close", (code) => {
-        clearTimeout(timer); clearTimeout(forceKillTimer); this.children.delete(child);
+        clearTimeout(timer); clearTimeout(sessizlikTimer); clearTimeout(forceKillTimer); this.children.delete(child);
         if (lineBuf.trim()) onLine(lineBuf.trim());
         this.log(`agy exit=${code} args=${args.slice(0, -1).join(" ")}\nstderr: ${stderr.slice(0, 2000)}`);
         resolve({ stdout, stderr, code, timedOut });

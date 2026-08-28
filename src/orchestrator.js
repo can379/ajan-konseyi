@@ -2206,10 +2206,18 @@ ${truncate(res.text, 800)}
         // Ag aslinda VAR: hata baska seyden — normal deneme islesin.
       }
       attempt++;
-      if (attempt > 3) break;
+      // TAKILMA (zaman asimi) uc kez tekrarlanmaz: her deneme dakikalar
+      // yiyor. Olculdu — tek turda iki takilma 24 dakika goturdu. Zaman
+      // asiminda TEK yeniden deneme yapilir, sonra gorev basarisiz sayilip
+      // digerleri surer.
+      const takilma = /zaman aşım|yanıt akmıyor/i.test(String(res.error || ""));
+      const ustSinir = takilma ? 2 : 3;
+      if (attempt > ustSinir) break;
       S.addMessage(run, {
         from:"sistem", kind:"info", taskId:task.id,
-        content:`${member.name} yanıtı alınamadı; aynı ajanla yeniden deneniyor (${attempt}/3).`,
+        content: takilma
+          ? `${member.name} yanıt vermedi (takıldı); temiz oturumla son kez deneniyor.`
+          : `${member.name} yanıtı alınamadı; aynı ajanla yeniden deneniyor (${attempt}/3).`,
       });
       await new Promise((resolve) => setTimeout(resolve, 350 * (attempt - 1)));
       res = await invokeMember(header + prepared.prompt + summaryContract(), { ...opts, fresh:true });
