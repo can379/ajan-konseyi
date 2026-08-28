@@ -135,8 +135,15 @@ export function applyIntensity(run) {
 
 // Ikili inceleme konseye tirmanmali mi? Denetci "buyut" bayragini yalniz is
 // ikili incelemenin tasiyabileceginden genis/riskli oldugunda doner.
+// Ikiliden konseye BUYUTME artik kolay bir kacis yolu degil. Kullanici:
+// "en ufak bir sey yapilamadiginda bile sistem tekrar konseye tasiyor, bu
+// gereksiz." Buyutme YALNIZ denetci hem buyut diyor HEM de engelleyici bir
+// sorun listeliyorsa gecerli; gerekcesiz "buyut" yok sayilir ve ikili kendi
+// icinde cozer.
 export function shouldEscalatePair(verdict) {
-  return verdict?.buyut === true;
+  if (verdict?.buyut !== true) return false;
+  const issues = Array.isArray(verdict.issues) ? verdict.issues.filter(Boolean) : [];
+  return issues.length > 0;
 }
 
 // Codex tarzi yanit sozlesmesi (ChatGPT icindeki Codex canli gozlemlenerek
@@ -510,6 +517,7 @@ export class Orchestrator {
     const effectiveOpts = { ...opts, images };
     const capabilityContract = `--- AJAN KONSEYİ ORTAK YETENEK SÖZLEŞMESİ ---
 Arka planda, kullanıcıdan rutin onay istemeden çalış. Sağlayıcında bulunan terminal, dosya düzenleme, web araştırma/tarayıcı, görsel okuma-üretme, MCP, eklenti, skill, alt ajan, plan ve görev araçlarını gerektiğinde doğrudan kullan. Yapabildiğin işi tarif etmekle yetinme; tamamla ve sonucu doğrula. Ürettiğin görsel, video, ses, PDF, belge, sunum, tablo veya diğer dosyaları proje bağlıysa PROJENİN İÇİNE (tercihen <proje>/cikti/ altına), proje yoksa ${this.rootDir}/generated dizinine gerçek dosya olarak kaydet ve yanıtta mutlak dosya yolunu ayrı satırda ver. Webden alınan güncel iddialarda kaynak bağlantılarını ekle. PAKET TESLİM DİSİPLİNİ (kullanıcı kuralı): uygulama paketlerken tek kanonik dosya bırak — Android'de <UygulamaAdı>.apk, macOS'ta <UygulamaAdı>.dmg. macOS uygulamasını ZIP olarak TESLİM ETME; üretilen .app paketini /Applications içine kur ve oradaki eski sürümü değiştir. Yeni paket üretince aynı uygulamanın eski paketlerini ve ara kalıntılarını (.zip, .blockmap, .bak, sürüm numaralı kopyalar, win-unpacked, builder-debug.yml) sil — kullanıcının klasöründe sürüm çöplüğü bırakma. Kullanıcı özellikle istemedikçe uygulama/GUI açma. Yalnız kullanıcı hesabı, ödeme, yayınlama, silme veya geri döndürülemez işlem gerçekten gerekiyorsa dur.
+ÇÖZÜMÜ KENDİ İÇİNDE ARA: bir engelle karşılaşınca işi geri devretme, "bloke" bildirme veya başka bir üyeye havale etme. Eksik dosyayı oluştur, bağımlılığı kur, alternatif yaklaşım dene, gerekirse kapsamı küçültüp çalışan en küçük parçayı bitir. Ancak gerçekten senin yetki alanının dışındaysa (kullanıcı parolası, ödeme, geri döndürülemez işlem) dur ve sebebini kanıtıyla yaz. Küçük eksikler için tur açtırma; düzeltmeyi kendin yap.
 Çalışırken yalnız anlamlı aşamalarda kısa durum bildir; her araç çağrısını, düşünceyi veya ham JSON'u kullanıcıya dökme. Nihai yanıtta sonuçla başla, yapılanları kısa ve doğal biçimde özetle, doğrulamayı belirt ve gereksiz başlık/listeler kullanma. Ajan Konseyi arayüzündeki üslup tüm sağlayıcılarda aynı, sade ve profesyonel olmalıdır.
 --- SÖZLEŞME SONU ---`;
     const browserToken=opts.isolated||opts.lean?null:this.browserBridge?.issueAgentToken({actor:member.name,provider:member.provider});
@@ -1723,7 +1731,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       `Üslup/biçim tercihi bildirme. Kod veya dosya hakkında iddia üretmeden önce güncel hâlini oku ve dosya:satır kanıtı ver.\n` +
       `İş ikili incelemenin taşıyabileceğinden GENİŞ veya RİSKLİYSE (çok yönlü analiz, mimari karar, geniş kod değişikliği) "buyut":true döndür; konsey devralır.\n` +
       `YALNIZCA şu şemada tek bir JSON nesnesi döndür:\n` +
-      `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme","buyut":false}`;
+      `{"verdict":"onay|duzeltme","issues":["engelleyici sorunlar"],"summary":"tek cümlelik değerlendirme","buyut":false}\n\n` +
+      `"buyut" YALNIZ iş gerçekten birden fazla uzmanlık alanına yayılıyorsa true olsun ve ` +
+      `o zaman "issues" içinde neyin engellediğini somut yaz. Küçük eksikler, biçim kusurları ` +
+      `veya "daha iyi olabilirdi" türü notlar için buyut KULLANMA — düzeltmeyi üretici kendi içinde yapar.`;
     const res = await this.callMember(run, reviewer, reviewPrompt, {
       label: "ikili inceleme", shouldStop: () => run.stopRequested,
       // Denetci tek islik ve kendi basina yeterli bir cagridir: dar baglam +
@@ -1922,7 +1933,10 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
       S.setPhase(run, "review");
       await Promise.all(reviewPromises);
       await this.reconcilePeerFeedback(run, worktrees);
-      await this.revalidateChangedReviews(run,worktrees);
+      // Revizyon sonrasi YENIDEN inceleme YOK. Onceden her revizyon yeni bir
+      // inceleme turu doguruyor, o da yeni revizyon... zinciri uzuyordu.
+      // Tek tur inceleme + gerekiyorsa tek revizyon yeter; kalan itiraz
+      // nihai rapora not olarak gecer.
     }
 
     // ---- 3. ÇELİŞKİ / TARTIŞMA / OYLAMA ----
@@ -1932,23 +1946,22 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Tek uye urettiyse gorus ayriligi olusamaz; koordinatore sormak bosuna
     // sure ve kota harcar.
     if (this.availableMembers(run).length > 1 && activeMembers.length > 1) {
-      let round = 0;
-      while (round < run.maxDebateRounds) {
-        this.checkStop(run);
-        const assess = await this.assessConflict(run, round + 1, ctx);
-        S.addMessage(run, {
-          from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "message",
-          content: (assess.conflict ? "Görüş ayrılığı tespit edildi: " : "Uzlaşma durumu: ") + assess.summary,
-        });
-        if (!assess.conflict) break;
-        round++;
-        if (round >= run.maxDebateRounds) {
-          S.setPhase(run, "vote");
-          voteInfo = await this.holdVote(run, assess);
-          break;
+      // TEK TUR: koordinator gorus ayriligi var mi diye bir kez bakar.
+      // Varsa TEK tartisma turu, sonra oylama ve karar. Onceden bu bir
+      // donguydu ve her turda is konseye geri tasiniyordu.
+      this.checkStop(run);
+      const assess = await this.assessConflict(run, 1, ctx);
+      S.addMessage(run, {
+        from: "koordinator", provider: this.config?.data?.coordinator?.provider || null, kind: "message",
+        content: (assess.conflict ? "Görüş ayrılığı tespit edildi: " : "Uzlaşma durumu: ") + assess.summary,
+      });
+      if (assess.conflict) {
+        if (run.maxDebateRounds > 1) {
+          S.setPhase(run, "debate");
+          await this.debateRound(run, assess.debate_prompt, 1);
         }
-        S.setPhase(run, "debate");
-        await this.debateRound(run, assess.debate_prompt, round);
+        S.setPhase(run, "vote");
+        voteInfo = await this.holdVote(run, assess);
       }
     }
 
@@ -2078,7 +2091,27 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // Durdurulmuş eski bir sağlayıcı çağrısı, aynı koşu yeniden başlatıldıktan
     // sonra yeni görevin durumunu veya atamasını ezmemeli.
     if (res.cancelled) return;
-    if(res.ok&&reportsBlockedResult(res.text))res={ok:false,error:`Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text,500)}`};
+    // BLOKE BILDIRIMI ONCE UYENIN KENDISINE DONER. Onceden bu dogrudan
+    // hataya cevriliyor, deneme haklarini yakip isi konseye geri tasiyordu
+    // (kullanici: "en ufak bir sey yapilamadiginda bile sistem tekrar
+    // konseye tasiyor"). Once uyeden cozumu KENDI icinde aramasi istenir;
+    // ancak yine de cozemezse hata sayilir.
+    if (res.ok && reportsBlockedResult(res.text) && !run.stopRequested) {
+      const israr = await invokeMember(
+        `Bir önceki yanıtında işi uygulamadan "bloke" bildirdin:
+
+${truncate(res.text, 800)}
+
+` +
+        `Bu bir çıkış yolu değil. Engeli KENDİN çöz: eksik dosyayı oluştur, bağımlılığı kur, ` +
+        `alternatif bir yaklaşım dene, gerekirse kapsamı küçültüp çalışan en küçük parçayı bitir. ` +
+        `Görevi tamamlayamıyorsan bile ELİNDEN GELENİ uygula ve tam olarak neyin, hangi teknik ` +
+        `sebeple yapılamadığını kanıtıyla yaz. Tekrar "bloke" deme.`,
+        { ...opts, label: "engeli çözüyor" });
+      if (israr.cancelled) return;
+      if (israr.ok && !reportsBlockedResult(israr.text)) res = israr;
+      else res = { ok: false, error: `Ajan işi uygulamadan bloke bildirdi: ${truncate(res.text, 500)}` };
+    }
     if(prepared.inputDir)fs.rmSync(prepared.inputDir,{recursive:true,force:true});
 
     // Bir üyenin görevi hata verdiğinde başka sağlayıcıya geçirip sonucu o üye
@@ -2234,7 +2267,14 @@ Tek bir yüksek kaliteli PNG/JPEG/WebP çıktı üret. Aynı görselin SVG kopya
     // uyeyi paralel cagirmak saglayici oturumunu bozar.
     const isler=[];
     for (const task of run.tasks.filter((t)=>t.status==="done")) {
-      const feedback=run.reviews.filter((r)=>r.taskId===task.id && (r.agreement<=3 || r.severity==="yuksek"));
+      // REVIZYON ESIGI YUKSELTILDI. Onceden "katilim <=3 VEYA onem yuksek"
+      // her gorevi revizyona sokuyordu; kucuk bir itiraz bile isi konseye
+      // geri tasiyordu (kullanici: "en ufak bir sey yapilamadiginda bile
+      // sistem tekrar konseye tasiyor, bu gereksiz"). Artik revizyon YALNIZ
+      // GERCEKTEN ENGELLEYICI bulguda acilir: dusuk katilim VE yuksek onem
+      // birlikte. Kalan itirazlar gorev ciktisina not olarak islenir; uye
+      // cozumu kendi icinde arar.
+      const feedback=run.reviews.filter((r)=>r.taskId===task.id && r.agreement<=2 && r.severity==="yuksek");
       if(!feedback.length) continue;
       let author=this.memberById(task.assignee);
       if(requiresCodeAuthoring(task,run.mode)&&!canAuthorCode(author)) author=preferredCoder(this.availableMembers(run));

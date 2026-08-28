@@ -33,7 +33,12 @@ test("profil adlari arayuzdeki secenklerle ayni", () => {
 // ---- 4) Ikili -> konsey tirmanmasi ----
 
 test("denetci buyut derse tirmanilir, demezse tirmanilmaz", () => {
-  assert.equal(shouldEscalatePair({ verdict: "duzeltme", buyut: true }), true);
+  // Buyutme artik GEREKCE ister: gerekcesiz "buyut" kolay bir kacis yoluydu
+  // ve en ufak eksikte is konseye geri tasiniyordu (kullanici sikayeti).
+  assert.equal(shouldEscalatePair({ verdict: "duzeltme", buyut: true, issues: ["iki uzmanlık gerekiyor"] }), true);
+  assert.equal(shouldEscalatePair({ verdict: "duzeltme", buyut: true }), false,
+    "gerekçesiz büyütme yok sayılır — ikili kendi içinde çözer");
+  assert.equal(shouldEscalatePair({ verdict: "duzeltme", buyut: true, issues: [] }), false);
   assert.equal(shouldEscalatePair({ verdict: "onay", buyut: false }), false);
   assert.equal(shouldEscalatePair({ verdict: "duzeltme", issues: ["x"] }), false,
     "duzeltme istemek tirmanma sebebi degildir");
